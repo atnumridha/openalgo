@@ -660,6 +660,168 @@ def test_broker_visible_exposure_reconciles_its_pending_reservation(monkeypatch)
     second_admission.release()
 
 
+def test_position_visibility_keeps_debit_reserved_until_funds_reflect_it(monkeypatch):
+    first_facts = facts(
+        estimated_debit=Decimal("60000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    position_visible_funds_stale = facts(
+        available_cash=Decimal("100000"),
+        open_cash_positions=1,
+        entry_cash_risk=Decimal("500"),
+        entry_risk=Decimal("500"),
+        estimated_debit=Decimal("25000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("50")),),
+    )
+    funds_visible = replace(position_visible_funds_stale, available_cash=Decimal("40000"))
+    attempts = iter([first_facts, position_visible_funds_stale, funds_visible])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "split-broker-facts-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(440, [{"leg_id": 1, "position_ref": "split-facts-entry"}])
+    admission.release()
+
+    stale, stale_admission = portfolio_governor.acquire_entry_admission(
+        "split-broker-facts-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert stale.allowed is False
+    assert stale.code == "cash_buffer"
+    assert stale.metrics["estimated_debit"] == Decimal("85000")
+    assert stale_admission is None
+
+    reflected, reflected_admission = portfolio_governor.acquire_entry_admission(
+        "split-broker-facts-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert reflected.allowed is True
+    assert reflected.metrics["estimated_debit"] == Decimal("25000")
+    assert reflected_admission is not None
+    reflected_admission.release()
+
+
+def test_terminal_rejection_releases_reserved_debit_with_stale_funds(monkeypatch):
+    attempts = iter(
+        [
+            facts(estimated_debit=Decimal("60000")),
+            facts(estimated_debit=Decimal("25000")),
+        ]
+    )
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "terminal-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(
+        441,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": "terminal-debit-entry",
+                "entry_order_id": 9441,
+            }
+        ],
+    )
+    admission.release()
+
+    portfolio_governor.release_terminal_entry_reservation(9441)
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "terminal-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second.metrics["estimated_debit"] == Decimal("25000")
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_multiple_debits_reconcile_once_each_as_funds_catch_up(monkeypatch):
+    permissive_positions = replace(DEFAULT_POLICY, max_cash_positions=10)
+    first_facts = facts(
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("30000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    second_facts = replace(
+        first_facts,
+        open_cash_positions=1,
+        broker_quantities=(("NSE", "RELIANCE", Decimal("50")),),
+    )
+    one_debit_visible = facts(
+        available_cash=Decimal("70000"),
+        open_cash_positions=2,
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("10000"),
+        broker_quantities=(
+            ("NSE", "RELIANCE", Decimal("50")),
+            ("NSE", "TCS", Decimal("50")),
+        ),
+    )
+    both_debits_visible = replace(one_debit_visible, available_cash=Decimal("40000"))
+    attempts = iter([first_facts, second_facts, one_debit_visible, both_debits_visible])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+
+    first, first_admission = portfolio_governor.acquire_entry_admission(
+        "multiple-debits-user", {}, [_cash_leg()], "key", "live", permissive_positions, NOW
+    )
+    assert first.allowed is True
+    first_admission.commit(442, [{"leg_id": 1, "position_ref": "first-debit"}])
+    first_admission.release()
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "multiple-debits-user",
+        {},
+        [_cash_leg(symbol="TCS")],
+        "key",
+        "live",
+        permissive_positions,
+        NOW,
+    )
+    assert second.allowed is True
+    assert second.metrics["estimated_debit"] == Decimal("60000")
+    second_admission.commit(443, [{"leg_id": 1, "position_ref": "second-debit"}])
+    second_admission.release()
+
+    partly_reflected, partly_reflected_admission = (
+        portfolio_governor.acquire_entry_admission(
+            "multiple-debits-user",
+            {},
+            [_cash_leg(symbol="INFY")],
+            "key",
+            "live",
+            permissive_positions,
+            NOW,
+        )
+    )
+    assert partly_reflected.allowed is True
+    assert partly_reflected.metrics["estimated_debit"] == Decimal("40000")
+    partly_reflected_admission.release()
+
+    fully_reflected, fully_reflected_admission = portfolio_governor.acquire_entry_admission(
+        "multiple-debits-user",
+        {},
+        [_cash_leg(symbol="INFY")],
+        "key",
+        "live",
+        permissive_positions,
+        NOW,
+    )
+    assert fully_reflected.allowed is True
+    assert fully_reflected.metrics["estimated_debit"] == Decimal("10000")
+    fully_reflected_admission.release()
+
+
 def test_terminal_rejection_reconciles_its_pending_reservation(monkeypatch):
     from services.strategy_module import state
 

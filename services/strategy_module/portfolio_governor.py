@@ -21,6 +21,7 @@ IST = pytz.timezone("Asia/Kolkata")
 _admission_registry_lock = RLock()
 _admission_locks: dict[str, Lock] = {}
 _entry_reservations: dict[str, list[_EntryReservation]] = {}
+_reservation_cash_baselines: dict[str, Decimal] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +114,7 @@ class ReservationComponent:
 class _EntryReservation:
     user_id: str
     components: list[ReservationComponent]
+    available_cash_at_admission: Decimal | None
     committed: bool = False
 
 
@@ -143,7 +145,16 @@ class EntryAdmission:
                 if str(component.leg_id) in accepted
             ]
             self._reservation.committed = bool(self._reservation.components)
-            if not self._reservation.committed:
+            if self._reservation.committed:
+                if any(
+                    component.estimated_debit > 0
+                    for component in self._reservation.components
+                ) and self._reservation.available_cash_at_admission is not None:
+                    _reservation_cash_baselines.setdefault(
+                        self._reservation.user_id,
+                        self._reservation.available_cash_at_admission,
+                    )
+            else:
                 _remove_reservation(self._reservation)
 
     def release(self) -> None:
@@ -171,12 +182,23 @@ def _remove_reservation(reservation: _EntryReservation) -> None:
             return
         if not reservations:
             _entry_reservations.pop(reservation.user_id, None)
+        _clear_unused_cash_baseline(reservation.user_id)
+
+
+def _clear_unused_cash_baseline(user_id: str) -> None:
+    if not any(
+        component.estimated_debit > 0
+        for reservation in _entry_reservations.get(str(user_id), ())
+        if reservation.committed
+        for component in reservation.components
+    ):
+        _reservation_cash_baselines.pop(str(user_id), None)
 
 
 def release_terminal_entry_reservation(entry_order_id: int) -> None:
     """Forget reservation components whose entry ended with no exposure."""
     with _admission_registry_lock:
-        for reservations in list(_entry_reservations.values()):
+        for user_id, reservations in list(_entry_reservations.items()):
             for reservation in list(reservations):
                 reservation.components = [
                     component
@@ -185,6 +207,7 @@ def release_terminal_entry_reservation(entry_order_id: int) -> None:
                 ]
                 if not reservation.components:
                     _remove_reservation(reservation)
+            _clear_unused_cash_baseline(user_id)
 
 
 def _broker_quantity_map(facts: EntryFacts) -> dict[tuple[str, str], Decimal]:
@@ -269,6 +292,47 @@ def _terminal_partial_component(
     )
 
 
+def _component_has_reserved_exposure(component: ReservationComponent) -> bool:
+    return bool(
+        component.cash_positions
+        or component.nifty_option_positions
+        or component.configured_risk > 0
+        or component.estimated_debit > 0
+    )
+
+
+def _reconcile_reserved_debit(user_id: str, available_cash: Decimal | None) -> None:
+    """Consume each observed cash decrease once, oldest reservation first."""
+    if available_cash is None:
+        return
+    baseline = _reservation_cash_baselines.get(user_id)
+    if baseline is None:
+        return
+    visible_debit = baseline - available_cash
+    if visible_debit <= 0:
+        return
+
+    remaining = visible_debit
+    for reservation in _entry_reservations.get(user_id, ()):
+        if not reservation.committed:
+            continue
+        reconciled: list[ReservationComponent] = []
+        for component in reservation.components:
+            if remaining > 0 and component.estimated_debit > 0:
+                consumed = min(remaining, component.estimated_debit)
+                component = replace(
+                    component,
+                    estimated_debit=component.estimated_debit - consumed,
+                )
+                remaining -= consumed
+            if _component_has_reserved_exposure(component):
+                reconciled.append(component)
+        reservation.components = reconciled
+
+    _reservation_cash_baselines[user_id] = available_cash
+    _clear_unused_cash_baseline(user_id)
+
+
 def _reconcile_reservations(user_id: str, facts: EntryFacts) -> list[ReservationComponent]:
     user_key = str(user_id)
     quantities = _broker_quantity_map(facts)
@@ -282,12 +346,28 @@ def _reconcile_reservations(user_id: str, facts: EntryFacts) -> list[Reservation
                 adjusted = _terminal_partial_component(component)
                 if adjusted is None:
                     continue
-                if _broker_reflects(adjusted, quantities):
-                    continue
                 if _terminal_without_exposure(adjusted):
                     continue
-                reconciled.append(adjusted)
+                if _broker_reflects(adjusted, quantities):
+                    adjusted = replace(
+                        adjusted,
+                        cash_positions=0,
+                        nifty_option_positions=0,
+                        configured_risk=Decimal("0"),
+                        quantity_delta=Decimal("0"),
+                    )
+                if _component_has_reserved_exposure(adjusted):
+                    reconciled.append(adjusted)
             reservation.components = reconciled
+            if not reservation.components:
+                _remove_reservation(reservation)
+        _reconcile_reserved_debit(user_key, facts.available_cash)
+        for reservation in list(_entry_reservations.get(user_key, ())):
+            reservation.components = [
+                component
+                for component in reservation.components
+                if _component_has_reserved_exposure(component)
+            ]
             if reservation.components:
                 active.extend(reservation.components)
             else:
@@ -601,7 +681,7 @@ def _reserved_position_refs(user_id: str) -> set[str]:
             for reservation in _entry_reservations.get(str(user_id), ())
             if reservation.committed
             for component in reservation.components
-            if component.position_ref
+            if component.position_ref and component.configured_risk > 0
         }
 
 
@@ -908,13 +988,16 @@ def acquire_entry_admission(
                     ),
                     None,
                 )
-        facts = build_entry_facts(user_id, strategy, resolved_legs, api_key, mode)
-        facts = _merge_reservations(user_id, facts)
+        raw_facts = build_entry_facts(user_id, strategy, resolved_legs, api_key, mode)
+        facts = _merge_reservations(user_id, raw_facts)
         decision = evaluate_entry(facts, policy, now)
         if decision.allowed:
             reservation = _EntryReservation(
                 user_id=str(user_id),
-                components=list(_fallback_reservation_components(facts, resolved_legs)),
+                components=list(
+                    _fallback_reservation_components(raw_facts, resolved_legs)
+                ),
+                available_cash_at_admission=raw_facts.available_cash,
             )
             with _admission_registry_lock:
                 _entry_reservations.setdefault(str(user_id), []).append(reservation)
