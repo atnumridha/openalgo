@@ -15,8 +15,10 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, order_events, state
+from services.strategy_module import engine, order_events, portfolio_governor, state
+from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 from services.strategy_module.symbol_resolver import ResolvedLeg
 
 USER = "engine_test_user"
@@ -209,6 +211,48 @@ def test_live_is_refused_unless_the_strategy_opted_in(api_key):
     assert store.get_strategy(sid, USER).status == "stopped"
 
 
+def test_live_governor_rejects_batch_before_the_strategy_is_claimed(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    try:
+        with (
+            patch.object(engine, "resolve_leg", return_value=_resolved()),
+            patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+            patch.object(engine, "_broker_for", return_value="broker"),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ) as build_facts,
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(
+                    False,
+                    "risk_missing",
+                    "Live funds, positions, quotes, and configured protective risk are required",
+                ),
+            ),
+        ):
+            result = engine.start_run(sid, USER, "live")
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    dispatch.assert_not_called()
+    resolved_for_governor = build_facts.call_args.args[2]
+    assert resolved_for_governor[0]["segment"] == "options"
+    assert resolved_for_governor[0]["lot_size"] == 75
+    assert resolved_for_governor[0]["underlying"] == "NIFTY"
+    assert store.get_strategy(sid, USER).status == "stopped"
+    assert store.list_runs(sid) == []
+    rejected = store.list_events(sid, kind="portfolio_governor_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["payload"]["code"] == "risk_missing"
+
+
 def test_an_unknown_mode_is_refused(api_key):
     sid = _make()
 
@@ -232,7 +276,7 @@ def test_entries_are_placed_longs_first(api_key):
     seen = []
 
     def record(**kwargs):
-        seen.append(kwargs["order"]["action"])
+        seen.append((kwargs["intent"], kwargs["order"]["action"]))
         return DispatchResult(ok=True, broker_order_id="SB", response={})
 
     _start(
@@ -241,8 +285,8 @@ def test_entries_are_placed_longs_first(api_key):
         resolved=[_resolved(leg_id=1, symbol="LEG1"), _resolved(leg_id=2, symbol="LEG2")],
     )
 
-    assert seen[0] == "BUY"
-    assert seen[1] == "SELL"
+    assert seen[0] == ("entry", "BUY")
+    assert seen[1] == ("entry", "SELL")
 
 
 def test_every_entry_rejected_finalises_the_run_rather_than_leaving_it_running(api_key):

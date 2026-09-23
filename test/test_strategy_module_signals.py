@@ -21,9 +21,17 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, order_events, signals, state, webhook
+from services.strategy_module import (
+    engine,
+    order_events,
+    portfolio_governor,
+    signals,
+    state,
+    webhook,
+)
 from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 
 USER = "signal_test_user"
 
@@ -191,7 +199,16 @@ def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(place
     strategy = _make()
     store.set_live_enabled(strategy.id, USER, True)
     authz.grant(USER)
-    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    with patch.object(
+        portfolio_governor,
+        "build_entry_facts",
+        return_value=EntryFacts(intent="entry", mode="live"),
+    ), patch.object(
+        portfolio_governor,
+        "evaluate_entry",
+        return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+    ):
+        assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
     _fill(strategy, 1)
 
     authz.revoke(USER)
@@ -202,6 +219,62 @@ def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(place
     exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
     assert exited.ok is True
     assert placed[-1]["action"] == "SELL"
+
+
+def test_live_governor_rejects_signal_before_the_entry_claim(placed):
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    try:
+        with patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ), patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(
+                False,
+                "risk_missing",
+                "Live funds, positions, quotes, and configured protective risk are required",
+            ),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    assert placed == []
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot is not None
+    assert snapshot["signal_entry_claims"] == {}
+    rejected = store.list_events(strategy.id, kind="portfolio_governor_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["payload"]["code"] == "risk_missing"
+
+
+def test_signal_dispatch_labels_entries_and_exits_by_intent():
+    strategy = _make()
+    intents = []
+
+    def record(**kwargs):
+        intents.append(kwargs["intent"])
+        return DispatchResult(ok=True, broker_order_id=f"SB-{len(intents)}", response={})
+
+    with (
+        patch.object(signals.order_dispatch, "dispatch_order", side_effect=record),
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(engine, "_subscribe_run"),
+    ):
+        entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+        assert entered.ok is True
+        _fill(strategy, 1)
+        exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert exited.ok is True
+    assert intents == ["entry", "exit"]
 
 
 # ---------------------------------------------------------------------------

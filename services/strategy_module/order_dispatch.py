@@ -182,12 +182,15 @@ def dispatch_order(
     mode: str,
     api_key: str,
     order: dict[str, Any],
+    intent: str,
 ) -> DispatchResult:
     """Place one order, live or sandbox, and normalise the answer.
 
     Both pipes return ``(success, response, status_code)``, so the caller gets
     one shape whichever ran.
     """
+    if intent not in {"entry", "exit"}:
+        return DispatchResult(ok=False, error=f"Unknown order intent: {intent!r}")
     if mode == "sandbox":
         return _dispatch_sandbox(api_key, order)
     if mode == "live":

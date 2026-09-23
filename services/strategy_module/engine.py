@@ -27,12 +27,14 @@ first can be rejected for margin it would have had once the long leg existed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from database import strategy_module_db as store
 from services.strategy_module import (
     live_authorization,
     order_dispatch,
+    portfolio_governor,
     risk_adapter,
     session,
     state,
@@ -300,6 +302,29 @@ def start_run(
         if not allowed:
             return StartResult(ok=False, error=error)
 
+    governor_facts = portfolio_governor.build_entry_facts(
+        user_id,
+        strategy,
+        resolved,
+        api_key,
+        mode,
+    )
+    governor_decision = portfolio_governor.evaluate_entry(
+        governor_facts,
+        portfolio_governor.GovernorPolicy(),
+        datetime.now(portfolio_governor.IST),
+    )
+    if not governor_decision.allowed:
+        _emit(
+            strategy_id,
+            user_id,
+            "portfolio_governor_rejected",
+            governor_decision.message,
+            severity="warn",
+            payload=governor_decision.as_payload(),
+        )
+        return StartResult(ok=False, error=governor_decision.message)
+
     # One conditional UPDATE, not a read then a write. The UI, the scheduler
     # and a webhook can all fire at the same instant.
     if not store.claim_strategy_for_run(strategy_id):
@@ -512,6 +537,9 @@ def _resolve_all_legs(
                 "position": position,
                 "symbol": outcome.symbol,
                 "exchange": outcome.exchange,
+                "segment": outcome.segment,
+                "lot_size": outcome.lotsize,
+                "underlying": outcome.underlying,
                 "lots": outcome.lots,
                 "quantity": outcome.quantity,
                 "expiry": outcome.expiry,
@@ -768,7 +796,9 @@ def _place_entries(
         # the failed-start path must retain it as possible exposure rather than
         # misclassifying it as an undispatched placeholder.
         dispatch_attempted.add(position_ref)
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, intent="entry"
+        )
 
         acknowledged = _record_acknowledgement(
             row_id, result, strategy["id"], user_id, run_id, leg["leg_id"]
@@ -1377,7 +1407,9 @@ def _exit_legs(
                 continue
             exit_claim_id = row_id
 
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, intent="exit"
+        )
 
         if row_id is not None:
             _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])

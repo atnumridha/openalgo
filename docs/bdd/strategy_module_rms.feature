@@ -33,7 +33,7 @@ Feature: Strategy module and risk management
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:143
+  # Source: test/test_strategy_module_engine.py:145
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
@@ -48,14 +48,14 @@ Feature: Strategy module and risk management
     And carry is NRML on derivatives and CNC on cash
     And the literal product sent is persisted with the order
 
-  # Source: test/test_strategy_module_order_dispatch.py:284
+  # Source: test/test_strategy_module_order_dispatch.py:294
   Scenario: A run mode cannot be diverted by the analyzer toggle
     Given a live run is holding broker positions
     When the platform analyzer toggle changes
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:524, test/test_strategy_module_engine.py:318, test/test_strategy_module_scheduler.py:730
+  # Source: services/strategy_module/engine.py:563, test/test_strategy_module_engine.py:362, test/test_strategy_module_scheduler.py:750
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -79,7 +79,7 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:717
+  # Source: test/test_strategy_module_engine.py:761
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns
@@ -125,14 +125,14 @@ Feature: Strategy module and risk management
     And run_stop_failed is recorded at critical severity
     And the pending run stays open for another exit attempt
 
-  # Source: test/test_strategy_module_signals.py:602
+  # Source: test/test_strategy_module_signals.py:701
   Scenario: A durable stop gates new signal entries but permits exit retries
     Given a signal run has stop_requested_reason populated
     When entry and exit alerts arrive
     Then a new entry claim is refused under the run lock
     And an alert targeting exposure still held can retry its exit
 
-  # Source: test/test_strategy_module_signals.py:1072
+  # Source: test/test_strategy_module_signals.py:1171
   Scenario: A normal signal round trip keeps one platform-session run
     Given a signal leg opens and exits for a risk reason
     When it becomes flat before the session ends
@@ -163,7 +163,7 @@ Feature: Strategy module and risk management
     Then it is stopped for daily_loss_limit
     And the boundary is the platform session reset rather than midnight
 
-  # Source: test/test_strategy_module_scheduler.py:281
+  # Source: test/test_strategy_module_scheduler.py:284
   Scenario: An intraday strategy always receives a square-off job
     Given an intraday strategy has an exit time and scheduling is disabled
     When jobs are synchronized
@@ -260,7 +260,7 @@ Feature: Strategy module and risk management
     And a prior-run live frame never values the current run's fallback
     And a broker contract shared with another source is not attributed to this strategy
 
-  # Source: test/test_strategy_module_lifecycle_api.py:232
+  # Source: test/test_strategy_module_lifecycle_api.py:275
   Scenario: Close all records an attempt rather than proof of flatness
     Given an operator calls close_all
     When its intent event is written before the stop and broker results

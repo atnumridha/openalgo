@@ -67,11 +67,21 @@ def test_a_sandbox_run_goes_to_the_sandbox_pipe():
     with patch("services.sandbox_service.sandbox_place_order") as sandbox:
         sandbox.return_value = (True, {"status": "success", "orderid": "SB-1"}, 200)
 
-        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is True
     assert result.broker_order_id == "SB-1"
     assert sandbox.call_count == 1
+
+
+def test_exit_intent_uses_the_execution_pipe_without_an_entry_gate():
+    with patch("services.sandbox_service.sandbox_place_order") as sandbox:
+        sandbox.return_value = (True, {"status": "success", "orderid": "SB-EXIT"}, 200)
+
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="exit")
+
+    assert result.ok is True
+    assert result.broker_order_id == "SB-EXIT"
 
 
 def test_a_sandbox_retry_cancel_uses_the_run_pipe_not_the_global_toggle():
@@ -96,7 +106,7 @@ def test_a_live_run_goes_to_the_broker_pipe_with_resolved_auth():
     ):
         live.return_value = (True, {"status": "success", "orderid": "250101000123"}, 200)
 
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is True
     assert result.broker_order_id == "250101000123"
@@ -176,7 +186,7 @@ def test_a_live_status_poll_uses_resolved_auth_and_the_shared_orderbook_path():
 def test_an_unknown_mode_is_refused_rather_than_defaulted():
     # Defaulting an unrecognised mode to live would place a real order for a
     # run the operator believed was on paper.
-    result = od.dispatch_order(mode="", api_key="k", order=_order())
+    result = od.dispatch_order(mode="", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is False
     assert "Unknown run mode" in result.error
@@ -189,7 +199,7 @@ def test_a_live_order_is_not_attempted_when_the_broker_session_is_gone():
         patch("database.auth_db.get_auth_token_broker", return_value=(None, None)),
         patch("services.place_order_service.place_order_with_auth") as live,
     ):
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is False
     assert "expired" in result.error or "not available" in result.error
@@ -207,7 +217,7 @@ def test_dispatch_does_not_go_through_the_semi_automatic_approval_queue():
     ):
         live.return_value = (True, {"status": "success", "orderid": "1"}, 200)
 
-        od.dispatch_order(mode="live", api_key="k", order=_order())
+        od.dispatch_order(mode="live", api_key="k", order=_order(), intent="entry")
 
     assert live.call_count == 1
     assert queued.call_count == 0
@@ -226,7 +236,7 @@ def test_a_rejection_is_reported_with_its_reason_and_any_reference():
             400,
         )
 
-        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is False
     assert result.error == "Insufficient margin"
@@ -239,7 +249,7 @@ def test_a_raising_pipe_becomes_a_failed_result_not_an_exception():
     # The engine places orders in a loop across legs. One raising placement
     # must not abort the others or unwind the run.
     with patch("services.sandbox_service.sandbox_place_order", side_effect=RuntimeError("boom")):
-        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is False
     assert result.error
@@ -247,7 +257,7 @@ def test_a_raising_pipe_becomes_a_failed_result_not_an_exception():
 
 def test_a_pipe_answering_with_something_other_than_a_dict_does_not_crash():
     with patch("services.sandbox_service.sandbox_place_order", return_value=(True, None, 200)):
-        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="entry")
 
     assert result.ok is True
     assert result.broker_order_id is None
@@ -311,7 +321,7 @@ def test_a_live_order_is_not_diverted_by_the_platform_analyzer_toggle():
             "BROKER-1",
         )
 
-        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+        result = od.dispatch_order(mode="live", api_key="k", order=_order(), intent="entry")
 
     # The broker was called and the sandbox was not, despite the toggle.
     assert sandbox.call_count == 0, "a live run must not be diverted into the sandbox"
@@ -331,7 +341,7 @@ def test_a_sandbox_order_still_goes_to_the_sandbox_with_the_toggle_off():
     ):
         sandbox.return_value = (True, {"status": "success", "orderid": "SB-1"}, 200)
 
-        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order(), intent="entry")
 
     assert sandbox.call_count == 1
     assert live.call_count == 0

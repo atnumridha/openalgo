@@ -42,7 +42,13 @@ from typing import Any
 import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import live_authorization, order_dispatch, session, state
+from services.strategy_module import (
+    live_authorization,
+    order_dispatch,
+    portfolio_governor,
+    session,
+    state,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -427,6 +433,70 @@ def _held_side(run_id: int, leg_id: Any) -> str | None:
 def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     """Open a leg on the requested side, flipping it if it is on the other."""
     leg_id = _leg_id_of(leg)
+
+    # Every refusal stays before both the durable entry claim and a flip's
+    # outgoing exit. An inadmissible replacement must not liquidate what the
+    # strategy already holds.
+    short_error = _reject_uncarryable_short(strategy, leg, side)
+    if short_error:
+        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {short_error}")
+
+    resolved, error = _resolve_signal_leg(leg, side)
+    if error:
+        from services.strategy_module import engine
+
+        engine.reconcile_pending_stop(run_id)
+        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
+
+    api_key = _api_key_for(str(strategy.user_id))
+    if not api_key:
+        from services.strategy_module import engine
+
+        engine.reconcile_pending_stop(run_id)
+        return SignalResult(
+            ok=False,
+            leg_id=leg_id,
+            run_id=run_id,
+            error="No API key is configured for this user",
+        )
+    run_row = store.get_run(run_id)
+    mode = str(run_row.mode) if run_row else "sandbox"
+    governor_facts = portfolio_governor.build_entry_facts(
+        str(strategy.user_id), strategy, [resolved], api_key, mode
+    )
+    governor_decision = portfolio_governor.evaluate_entry(
+        governor_facts,
+        portfolio_governor.GovernorPolicy(),
+        datetime.now(portfolio_governor.IST),
+    )
+    if not governor_decision.allowed:
+        event = store.record_event(
+            int(strategy.id),
+            str(strategy.user_id),
+            "portfolio_governor_rejected",
+            governor_decision.message,
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="warn",
+            payload=governor_decision.as_payload(),
+        )
+        try:
+            from services.strategy_module import broadcast
+
+            if event is not None:
+                broadcast.push_event(int(strategy.id), store.event_to_dict(event))
+        except Exception:
+            logger.exception("Could not broadcast portfolio governor rejection")
+        from services.strategy_module import engine
+
+        engine.reconcile_pending_stop(run_id)
+        return SignalResult(
+            ok=False,
+            leg_id=leg_id,
+            run_id=run_id,
+            error=governor_decision.message,
+        )
+
     claim = state.claim_signal_entry(run_id, leg_id, _POSITION_OF_SIDE[side])
     if claim is None:
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error="No active run")
@@ -443,21 +513,6 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         held_position = claim.get("held_position")
         held = _LONG if held_position == "B" else _SHORT if held_position == "S" else None
 
-        # A short that the product cannot carry, refused before anything is
-        # squared. The form refuses a leg configured short outright, but a leg
-        # that accepts both sides is a normal intraday configuration and only
-        # the signal says which way it is about to open. Cash sold short under
-        # a carry product is a naked short delivery: the broker refuses it, and
-        # until it did nothing here said so.
-        #
-        # Order matters more than it looks. Checked after the flip below, a
-        # short_entry on a leg held long squared that long and only then
-        # refused the short, so a signal that was never going to open anything
-        # liquidated a position instead. A refusal must cost nothing.
-        short_error = _reject_uncarryable_short(strategy, leg, side)
-        if short_error:
-            return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {short_error}")
-
         flipped = False
         if held is not None:
             # Opposite side: square first, then open. Reversing without closing
@@ -466,14 +521,6 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             if not closed.ok or closed.note is not None:
                 return closed
             flipped = True
-
-        # Resolves the quantity too, which in lots mode means multiplying by the
-        # lot size from the master contract. This is the authoritative pass: the
-        # form checks as well, but a strategy saved before the master contract was
-        # downloaded, or edited directly, reaches here unchecked.
-        resolved, error = _resolve_signal_leg(leg, side)
-        if error:
-            return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
 
         resolved["position_ref"] = claim["position_ref"]
         outcome = _place(
@@ -820,7 +867,12 @@ def _place(
             severity="critical",
         )
 
-    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+    result = order_dispatch.dispatch_order(
+        mode=mode,
+        api_key=api_key,
+        order=order,
+        intent="exit" if exiting else "entry",
+    )
 
     if row_id is not None:
         from services.strategy_module.engine import _record_acknowledgement
