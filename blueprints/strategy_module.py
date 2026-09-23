@@ -1414,7 +1414,8 @@ def grant_live_authorization():
     payload, error = _json_body()
     if error:
         return error
-    if payload != {"confirm": True}:
+    confirm = payload.get("confirm")
+    if set(payload) != {"confirm"} or type(confirm) is not bool or confirm is not True:
         return _error("confirm must be true", 400)
     live_authorization.grant(username)
     return _ok(_live_authorization_response(username))

@@ -132,6 +132,18 @@ def test_live_authorization_requires_confirmation_and_mirrors_only_safe_state(cl
         assert "live_authorization" not in flask_session
 
 
+@pytest.mark.parametrize("confirm", [1, 1.0])
+def test_live_authorization_rejects_numeric_confirmation_lookalikes(client, confirm):
+    """Python equality must not turn a numeric JSON value into confirmation."""
+    response = client.post(
+        "/strategy/api/automation/live-authorization",
+        json={"confirm": confirm},
+    )
+
+    assert response.status_code == 400
+    assert authz.status(USER).active is False
+
+
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
