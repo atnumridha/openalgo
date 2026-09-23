@@ -137,8 +137,17 @@ def _order_serializer_fields() -> set[str]:
 
 def test_strategy_api_documents_the_canonical_event_vocabulary() -> None:
     expected = tuple(store.EVENT_KINDS)
-    assert _category_vocabulary(_read(STRATEGY_API / "README.md")) == expected
-    assert _category_vocabulary(_read(STRATEGY_API / "events.md")) == expected
+    overview = _read(STRATEGY_API / "README.md")
+    events_endpoint = _read(STRATEGY_API / "events.md")
+    assert _category_vocabulary(overview) == expected
+    assert _category_vocabulary(events_endpoint) == expected
+    assert set(store.EVENT_KINDS).isdisjoint(store.AUTOMATION_EVENT_KINDS)
+    assert tuple(store.AUTOMATION_EVENT_KINDS) == (
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
+    )
+    assert all(kind not in events_endpoint for kind in store.AUTOMATION_EVENT_KINDS)
 
 
 def test_strategy_api_documents_the_canonical_order_kind_vocabulary() -> None:
@@ -437,6 +446,8 @@ def test_operator_docs_explain_automated_strategy_safety_workflow() -> None:
         "live authorization",
         "portfolio governor",
         "exits remain allowed after revocation",
+        "successful broker reauthentication or reconnection",
+        "username or account change",
         "kill switch",
         "09:20",
         "15:00",

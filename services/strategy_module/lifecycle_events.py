@@ -19,13 +19,10 @@ logger = get_logger(__name__)
 # These are state changes an operator needs promptly. Placement detail is
 # already delivered by the generic order alert, and high-frequency progress
 # events stay in the Events tab and live feed only.
-MATERIAL_EVENT_KINDS = frozenset(
+STRATEGY_MATERIAL_EVENT_KINDS = frozenset(
     {
         "run_started",
         "run_stopped",
-        "live_authorization_granted",
-        "live_authorization_revoked",
-        "live_authorization_expired",
         "live_authorization_required",
         "run_stop_failed",
         "portfolio_governor_rejected",
@@ -47,6 +44,8 @@ MATERIAL_EVENT_KINDS = frozenset(
         "recovery_failed",
     }
 )
+AUTOMATION_EVENT_KINDS = frozenset(store.AUTOMATION_EVENT_KINDS)
+AUTOMATION_MATERIAL_EVENT_KINDS = AUTOMATION_EVENT_KINDS
 
 _AUDIT_FIELDS = frozenset({"run_id", "leg_id", "severity", "payload"})
 _USER_AUDIT_FIELDS = frozenset({"severity", "payload"})
@@ -84,7 +83,7 @@ def record_and_notify(
     except Exception:
         logger.exception("Could not broadcast lifecycle event %s for strategy %s", kind, strategy_id)
 
-    if kind not in MATERIAL_EVENT_KINDS:
+    if kind not in STRATEGY_MATERIAL_EVENT_KINDS:
         return row
 
     try:
@@ -115,6 +114,9 @@ def record_user_and_notify(
     Keeping a separate persistence seam avoids a sentinel strategy id and
     preserves the foreign-key meaning of ``sm_strategy_event``.
     """
+    if kind not in AUTOMATION_EVENT_KINDS:
+        logger.warning("Refusing strategy event kind %r on the account event stream", kind)
+        return None
     try:
         audit_fields = {
             key: value for key, value in fields.items() if key in _USER_AUDIT_FIELDS
@@ -137,7 +139,7 @@ def record_user_and_notify(
     except Exception:
         logger.exception("Could not broadcast lifecycle event %s for user %s", kind, user_id)
 
-    if kind not in MATERIAL_EVENT_KINDS:
+    if kind not in AUTOMATION_MATERIAL_EVENT_KINDS:
         return row
 
     try:

@@ -529,6 +529,25 @@ def test_runs_orders_and_events_are_scoped_to_the_strategy(client):
     assert [e["message"] for e in events] == ["mine"]
 
 
+@pytest.mark.parametrize(
+    "account_kind",
+    (
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
+    ),
+)
+def test_strategy_events_filter_refuses_account_only_authorization_events(
+    client, account_kind
+):
+    sid, _token = _make()
+
+    response = post(client, "events", strategy_id=sid, kind=account_kind)
+
+    assert response.status_code == 400
+    assert response.get_json()["status"] == "error"
+
+
 def test_a_foreign_run_id_filter_leaks_nothing(client):
     """run_id needs no separate ownership check because the store joins through
     this strategy, but that only holds if it really does."""

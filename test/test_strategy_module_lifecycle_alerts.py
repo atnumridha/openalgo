@@ -31,9 +31,6 @@ class _CapturingExecutor:
     "kind",
     [
         "run_started",
-        "live_authorization_granted",
-        "live_authorization_revoked",
-        "live_authorization_expired",
         "live_authorization_required",
         "portfolio_governor_admitted",
         "portfolio_governor_rejected",
@@ -102,13 +99,14 @@ def test_a_routine_delta_is_audited_and_streamed_without_a_whatsapp_alert():
     notifier.send_strategy_lifecycle_alert.assert_not_called()
 
 
-def test_a_user_scoped_lifecycle_event_needs_no_fabricated_strategy_id():
+@pytest.mark.parametrize("kind", lifecycle_events.store.AUTOMATION_EVENT_KINDS)
+def test_a_user_scoped_lifecycle_event_needs_no_fabricated_strategy_id(kind):
     """Authorization belongs to the account even when it owns no strategy."""
     row = SimpleNamespace(id=19)
     event = {
         "id": 19,
         "user_id": "owner",
-        "kind": "live_authorization_granted",
+        "kind": kind,
         "message": "Authorized",
     }
     notifier = Mock()
@@ -123,7 +121,7 @@ def test_a_user_scoped_lifecycle_event_needs_no_fabricated_strategy_id():
         assert (
             lifecycle_events.record_user_and_notify(
                 "owner",
-                "live_authorization_granted",
+                kind,
                 "Authorized",
                 severity="info",
             )
@@ -132,13 +130,27 @@ def test_a_user_scoped_lifecycle_event_needs_no_fabricated_strategy_id():
 
     record.assert_called_once_with(
         "owner",
-        "live_authorization_granted",
+        kind,
         "Authorized",
         severity="info",
     )
     push.assert_called_once_with("owner", event)
     notifier.send_strategy_lifecycle_alert.assert_called_once_with("owner", event)
     assert "strategy_id" not in notifier.send_strategy_lifecycle_alert.call_args.args[1]
+
+
+def test_user_scope_rejects_a_strategy_event_before_persistence_or_delivery():
+    """The account stream must never become a second strategy event channel."""
+    with (
+        patch.object(lifecycle_events.store, "record_automation_event") as record,
+        patch.object(lifecycle_events.broadcast, "push_user_event") as push,
+        patch.object(lifecycle_events.alert_executor, "submit") as submit,
+    ):
+        assert lifecycle_events.record_user_and_notify("owner", "run_started", "Started") is None
+
+    record.assert_not_called()
+    push.assert_not_called()
+    submit.assert_not_called()
 
 
 def test_user_lifecycle_notification_failure_does_not_escape_the_producer():

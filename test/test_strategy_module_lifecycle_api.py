@@ -159,6 +159,11 @@ def test_live_authorization_requires_confirmation_and_mirrors_only_safe_state(cl
     assert all("strategy_id" not in event for event in events)
 
 
+def test_account_event_store_refuses_a_strategy_scoped_kind():
+    assert store.record_automation_event(USER, "run_started", "wrong owner") is None
+    assert store.list_automation_events(USER) == []
+
+
 @pytest.mark.parametrize("confirm", [1, 1.0])
 def test_live_authorization_rejects_numeric_confirmation_lookalikes(client, confirm):
     """Python equality must not turn a numeric JSON value into confirmation."""

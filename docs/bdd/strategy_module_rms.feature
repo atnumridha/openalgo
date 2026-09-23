@@ -3,7 +3,7 @@ Feature: Strategy module and risk management
   durable order ownership, confirmed-flat stopping and restart-safe risk
   management. Scenarios are grouped by the money or operator truth they protect.
 
-  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:335
+  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:344
   Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
     When an alert is admitted past route preflight on that token
@@ -260,7 +260,7 @@ Feature: Strategy module and risk management
     And a prior-run live frame never values the current run's fallback
     And a broker contract shared with another source is not attributed to this strategy
 
-  # Source: test/test_strategy_module_lifecycle_api.py:302
+  # Source: test/test_strategy_module_lifecycle_api.py:307
   Scenario: Close all records an attempt rather than proof of flatness
     Given an operator calls close_all
     When its intent event is written before the stop and broker results

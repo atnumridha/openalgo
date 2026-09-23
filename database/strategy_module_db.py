@@ -172,6 +172,15 @@ class OrderFactFold:
 
 EVENT_SEVERITIES = ("info", "warn", "critical")
 
+# Account lifecycle exists independently of any strategy row. These values are
+# deliberately absent from EVENT_KINDS, which is also the public
+# /api/v1/strategy/events filter vocabulary.
+AUTOMATION_EVENT_KINDS = (
+    "live_authorization_granted",
+    "live_authorization_revoked",
+    "live_authorization_expired",
+)
+
 EVENT_KINDS = (
     # Lifecycle
     "strategy_created",
@@ -187,9 +196,6 @@ EVENT_KINDS = (
     "run_stop_requested",
     "run_stopped",
     "run_stop_failed",
-    "live_authorization_granted",
-    "live_authorization_revoked",
-    "live_authorization_expired",
     "live_authorization_required",
     "portfolio_governor_admitted",
     "portfolio_governor_rejected",
@@ -2349,6 +2355,9 @@ def record_automation_event(
     payload: dict | None = None,
 ) -> SmAutomationEvent | None:
     """Append one user-scoped automation event, independent of strategies."""
+    if kind not in AUTOMATION_EVENT_KINDS:
+        logger.warning("Refusing non-account automation event kind %r for user %s", kind, user_id)
+        return None
     try:
         row = SmAutomationEvent(
             user_id=str(user_id),

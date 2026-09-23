@@ -154,8 +154,9 @@ Use this operator sequence for every new automation:
 
 Live authorization is short-lived and per session. It is held for the current
 trading-session day only and is reset on the next session/day boundary, logout,
-or process restart. It is not a replacement for the durable per-strategy
-`live_enabled` setting. Revocation blocks new live entries immediately;
+process restart, successful broker reauthentication or reconnection, or a
+username or account change. It is not a replacement for the durable
+per-strategy `live_enabled` setting. Revocation blocks new live entries immediately;
 **exits remain allowed after revocation**, including protective stops, targets,
 manual closes, and reconciliation.
 
@@ -292,7 +293,7 @@ Only. Neither a strategy nor a leg carries a price, so a `LIMIT`, `SL` or `SL-M`
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `live_authorization_granted`, `live_authorization_revoked`, `live_authorization_expired`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
 Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
 
