@@ -302,7 +302,7 @@ def _component_has_reserved_exposure(component: ReservationComponent) -> bool:
 
 
 def _reconcile_reserved_debit(user_id: str, available_cash: Decimal | None) -> None:
-    """Consume each observed cash decrease once, oldest reservation first."""
+    """Consume cash decreases for quantity-correlated reservations only."""
     if available_cash is None:
         return
     baseline = _reservation_cash_baselines.get(user_id)
@@ -318,7 +318,11 @@ def _reconcile_reserved_debit(user_id: str, available_cash: Decimal | None) -> N
             continue
         reconciled: list[ReservationComponent] = []
         for component in reservation.components:
-            if remaining > 0 and component.estimated_debit > 0:
+            if (
+                remaining > 0
+                and component.estimated_debit > 0
+                and component.quantity_delta == 0
+            ):
                 consumed = min(remaining, component.estimated_debit)
                 component = replace(
                     component,

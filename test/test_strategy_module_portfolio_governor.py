@@ -705,6 +705,131 @@ def test_position_visibility_keeps_debit_reserved_until_funds_reflect_it(monkeyp
     reflected_admission.release()
 
 
+def test_unrelated_cash_decrease_cannot_settle_unfilled_entry_debit(monkeypatch):
+    pending = facts(
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("30000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    unrelated_cash_decrease = facts(
+        available_cash=Decimal("70000"),
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("10000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    attempts = iter([pending, unrelated_cash_decrease])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "unrelated-cash-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(444, [{"leg_id": 1, "position_ref": "still-unfilled"}])
+    admission.release()
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "unrelated-cash-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second.metrics["estimated_debit"] == Decimal("40000")
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_partial_fill_cash_only_settles_after_broker_quantity_is_visible(monkeypatch):
+    from database import strategy_module_db
+    from services.strategy_module import state
+
+    pending = facts(
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("30000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    cash_moved_before_position = facts(
+        available_cash=Decimal("85000"),
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("10000"),
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    partial_position_visible = replace(
+        cash_moved_before_position,
+        open_cash_positions=1,
+        broker_quantities=(("NSE", "RELIANCE", Decimal("25")),),
+    )
+    partial_cash_settled = replace(
+        partial_position_visible,
+        available_cash=Decimal("70000"),
+    )
+    attempts = iter(
+        [
+            pending,
+            cash_moved_before_position,
+            partial_position_visible,
+            partial_cash_settled,
+        ]
+    )
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+    monkeypatch.setattr(state, "get_run_state", lambda _run_id: None)
+    monkeypatch.setattr(
+        strategy_module_db,
+        "get_order",
+        lambda order_id: (
+            SimpleNamespace(status="cancelled", filled_qty=25)
+            if order_id == 9444
+            else None
+        ),
+    )
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "partial-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(
+        445,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": "partial-debit-entry",
+                "entry_order_id": 9444,
+            }
+        ],
+    )
+    admission.release()
+
+    early, early_admission = portfolio_governor.acquire_entry_admission(
+        "partial-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert early.allowed is True
+    assert early.metrics["estimated_debit"] == Decimal("25000")
+    assert early_admission is not None
+    early_admission.release()
+
+    visible, visible_admission = portfolio_governor.acquire_entry_admission(
+        "partial-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert visible.allowed is True
+    assert visible.metrics["estimated_debit"] == Decimal("25000")
+    assert visible_admission is not None
+    visible_admission.release()
+
+    settled, settled_admission = portfolio_governor.acquire_entry_admission(
+        "partial-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert settled.allowed is True
+    assert settled.metrics["estimated_debit"] == Decimal("10000")
+    assert settled_admission is not None
+    settled_admission.release()
+
+
 def test_terminal_rejection_releases_reserved_debit_with_stale_funds(monkeypatch):
     attempts = iter(
         [
@@ -820,6 +945,76 @@ def test_multiple_debits_reconcile_once_each_as_funds_catch_up(monkeypatch):
     assert fully_reflected.allowed is True
     assert fully_reflected.metrics["estimated_debit"] == Decimal("10000")
     fully_reflected_admission.release()
+
+
+def test_multiple_debits_only_consume_cash_for_broker_visible_components(monkeypatch):
+    permissive_positions = replace(DEFAULT_POLICY, max_cash_positions=10)
+    first_facts = facts(
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("30000"),
+        broker_quantities=(
+            ("NSE", "RELIANCE", Decimal("0")),
+            ("NSE", "TCS", Decimal("0")),
+        ),
+    )
+    second_facts = replace(first_facts, estimated_debit=Decimal("20000"))
+    only_second_visible = facts(
+        available_cash=Decimal("75000"),
+        open_cash_positions=1,
+        entry_cash_risk=Decimal("100"),
+        entry_risk=Decimal("100"),
+        estimated_debit=Decimal("10000"),
+        broker_quantities=(
+            ("NSE", "RELIANCE", Decimal("0")),
+            ("NSE", "TCS", Decimal("50")),
+        ),
+    )
+    attempts = iter([first_facts, second_facts, only_second_visible])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+
+    first, first_admission = portfolio_governor.acquire_entry_admission(
+        "correlated-debits-user",
+        {},
+        [_cash_leg()],
+        "key",
+        "live",
+        permissive_positions,
+        NOW,
+    )
+    assert first.allowed is True
+    first_admission.commit(446, [{"leg_id": 1, "position_ref": "older-unfilled"}])
+    first_admission.release()
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "correlated-debits-user",
+        {},
+        [_cash_leg(symbol="TCS")],
+        "key",
+        "live",
+        permissive_positions,
+        NOW,
+    )
+    assert second.allowed is True
+    second_admission.commit(447, [{"leg_id": 1, "position_ref": "younger-visible"}])
+    second_admission.release()
+
+    third, third_admission = portfolio_governor.acquire_entry_admission(
+        "correlated-debits-user",
+        {},
+        [_cash_leg(symbol="INFY")],
+        "key",
+        "live",
+        permissive_positions,
+        NOW,
+    )
+
+    assert third.allowed is True
+    assert third.metrics["estimated_debit"] == Decimal("40000")
+    assert third_admission is not None
+    third_admission.release()
 
 
 def test_terminal_rejection_reconciles_its_pending_reservation(monkeypatch):
