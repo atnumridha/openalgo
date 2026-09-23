@@ -41,7 +41,31 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
-function formatExpiry(expiresAt: string) {
+function sessionExpiryTimestamp(sessionDay: string, expiresAt: string) {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(sessionDay)
+  const time = /^(\d{2}):(\d{2})$/.exec(expiresAt)
+  if (!day || !time) return Number.NaN
+
+  const year = Number(day[1])
+  const month = Number(day[2])
+  const date = Number(day[3])
+  const hour = Number(time[1])
+  const minute = Number(time[2])
+  const calendarDay = new Date(Date.UTC(year, month - 1, date))
+  if (
+    hour > 23 ||
+    minute > 59 ||
+    calendarDay.getUTCFullYear() !== year ||
+    calendarDay.getUTCMonth() !== month - 1 ||
+    calendarDay.getUTCDate() !== date
+  ) {
+    return Number.NaN
+  }
+
+  return Date.parse(`${sessionDay}T${expiresAt}:00+05:30`)
+}
+
+function formatExpiry(expiresAt: number) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Kolkata',
     day: '2-digit',
@@ -110,7 +134,9 @@ export default function AutomationSafetyCard() {
     staleTime: 30_000,
   })
   const authorization = authorizationQuery.data
-  const expiresAt = authorization ? Date.parse(authorization.expires_at) : Number.NaN
+  const expiresAt = authorization
+    ? sessionExpiryTimestamp(authorization.session_day, authorization.expires_at)
+    : Number.NaN
   const authorizationActive =
     authorization?.active === true && Number.isFinite(expiresAt) && expiresAt > now
   const authorizationExpired =
@@ -226,10 +252,12 @@ export default function AutomationSafetyCard() {
               <h3 id="live-authorization-heading" className="font-medium">
                 {authorizationHeading}
               </h3>
-              {authorization ? (
+              {authorization && Number.isFinite(expiresAt) ? (
                 <p className="text-sm text-muted-foreground">
-                  Expires: {formatExpiry(authorization.expires_at)}
+                  Expires: {formatExpiry(expiresAt)}
                 </p>
+              ) : authorization ? (
+                <p className="text-sm text-destructive">Authorization expiry is unavailable.</p>
               ) : authorizationQuery.error ? (
                 <p className="text-sm text-destructive">Could not load authorization status.</p>
               ) : null}
