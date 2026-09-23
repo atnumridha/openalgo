@@ -62,6 +62,7 @@ from typing import Any
 
 from database import strategy_module_db as store
 from services.strategy_module import state
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.db_sessions import remove_all_scoped_sessions
 from utils.logging import get_logger
 
@@ -1295,6 +1296,6 @@ def _record_event(
     try:
         row = store.get_strategy_unscoped(strategy_id)
         user_id = row.user_id if row else ""
-        store.record_event(strategy_id, user_id, kind, message, run_id=run_id, severity=severity)
+        record_and_notify(strategy_id, user_id, kind, message, run_id=run_id, severity=severity)
     except Exception:
         logger.exception("Could not record %s for strategy %s", kind, strategy_id)

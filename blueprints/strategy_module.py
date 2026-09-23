@@ -1539,7 +1539,9 @@ def engage_kill_switch(sid):
         flatten_message = "; flatten refused, stop remains pending and retryable"
     else:
         flatten_message = ""
-    store.record_event(
+    from services.strategy_module.lifecycle_events import record_and_notify
+
+    record_and_notify(
         sid,
         username,
         "webhook_locked",

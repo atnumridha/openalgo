@@ -111,20 +111,11 @@ def _emit(strategy_id: int, user_id: str, kind: str, message: str, **fields: Any
     a bookkeeping problem into an open position.
     """
     try:
-        row = store.record_event(strategy_id, user_id, kind, message, **fields)
-    except Exception:
-        logger.exception("Could not record event %s for strategy %s", kind, strategy_id)
-        return
+        from services.strategy_module.lifecycle_events import record_and_notify
 
-    # Push the row that was actually stored, so the live feed and the Events
-    # tab show the same thing with the same id rather than two near-copies.
-    try:
-        from services.strategy_module import broadcast
-
-        if row is not None:
-            broadcast.push_event(strategy_id, store.event_to_dict(row))
+        record_and_notify(strategy_id, user_id, kind, message, **fields)
     except Exception:
-        logger.exception("Could not push event %s for strategy %s", kind, strategy_id)
+        logger.exception("Could not emit event %s for strategy %s", kind, strategy_id)
 
 
 #: Runs whose risk has fired while no broker authorisation was available.
@@ -300,6 +291,14 @@ def start_run(
     if mode == "live":
         allowed, error = live_authorization.require_live_entry(user_id)
         if not allowed:
+            _emit(
+                strategy_id,
+                user_id,
+                "live_authorization_required",
+                f"Live entry refused: {error}",
+                severity="warn",
+                mode=mode,
+            )
             return StartResult(ok=False, error=error)
 
     governor_decision, admission = portfolio_governor.acquire_entry_admission(
@@ -318,6 +317,14 @@ def start_run(
     )
     if not governor_decision.allowed:
         if governor_decision.code == "live_authorization_required":
+            _emit(
+                strategy_id,
+                user_id,
+                "live_authorization_required",
+                f"Live entry refused: {governor_decision.message}",
+                severity="warn",
+                mode=mode,
+            )
             return StartResult(ok=False, error=governor_decision.message)
         _emit(
             strategy_id,

@@ -16,8 +16,9 @@ and asks the bot service to send it.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from database.auth_db import get_username_by_apikey
 from database.whatsapp_db import (
@@ -249,6 +250,37 @@ class WhatsAppAlertService:
             logger.exception("Error formatting WhatsApp order details")
             return f"Order Type: {order_type}\nStatus: {response.get('status', 'unknown')}"
 
+    def format_strategy_lifecycle_alert(self, event: dict[str, Any]) -> str:
+        """Format a compact strategy-state alert without repeating order data."""
+        strategy_id = event.get("strategy_id", "unknown")
+        strategy_name = event.get("strategy_name") or f"Strategy {strategy_id}"
+        mode = str(event.get("mode") or "").upper()
+        summary = str(event.get("message") or event.get("kind") or "Strategy lifecycle update")
+        timestamp = event.get("ts")
+        try:
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            if not isinstance(timestamp, datetime):
+                timestamp = datetime.now(UTC)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+            timestamp_text = timestamp.astimezone(ZoneInfo("Asia/Kolkata")).strftime(
+                "%d %b %Y, %H:%M:%S IST"
+            )
+        except Exception:
+            timestamp_text = datetime.now().strftime("%d %b %Y, %H:%M:%S IST")
+
+        lines = [
+            "Strategy lifecycle update",
+            f"Strategy: {strategy_name} (#{strategy_id})",
+        ]
+        if mode:
+            lines.append(f"Mode: {mode}")
+        lines.extend([f"Event: {summary}", f"Time: {timestamp_text}"])
+        if event.get("severity") == "critical":
+            lines.append("Action required: Review the strategy and broker state.")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------
     # Transmission — delegates to the bot service (which holds the wars
     # client). The bot service does its own input validation; if it's not
@@ -363,6 +395,26 @@ class WhatsAppAlertService:
         except Exception:
             # Never let a notification failure bubble back into order placement.
             logger.exception("Error queuing WhatsApp alert")
+
+    def send_strategy_lifecycle_alert(self, user_id: str, event: dict[str, Any]) -> None:
+        """Deliver one material strategy event to its paired owner, if available."""
+        try:
+            if not self.enabled:
+                return
+            message = self.format_strategy_lifecycle_alert(event)
+            cfg = get_bot_config()
+            owner_username = cfg.get("owner_username")
+            if cfg.get("is_paired") and owner_username and user_id == owner_username:
+                self.send_alert_sync("", message)
+
+            # Retain the legacy linked-user route for deployments that use it.
+            wa_user = get_whatsapp_user_by_username(user_id)
+            if wa_user and wa_user.get("notifications_enabled"):
+                self.send_alert_sync(wa_user["whatsapp_jid"], message)
+        except Exception:
+            # This method runs in the bounded alert pool. Never re-raise into
+            # a strategy lifecycle operation even if a lookup is unavailable.
+            logger.exception("Error sending WhatsApp strategy lifecycle alert")
 
     def send_broadcast_alert(
         self,

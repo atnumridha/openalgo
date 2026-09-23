@@ -60,6 +60,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from database import strategy_module_db as store
 from services.strategy_module import live_authorization
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -572,10 +573,10 @@ def run_scheduled_start(strategy_id: int) -> None:
             if not allowed:
                 message = f"Scheduled live start refused: {error}"
                 logger.warning("%s (strategy %s)", message, strategy_id)
-                store.record_event(
+                record_and_notify(
                     strategy_id,
                     row.user_id,
-                    "live_disabled",
+                    "live_authorization_required",
                     message,
                     severity="warn",
                     payload={"trigger_source": "scheduler", "mode": mode},

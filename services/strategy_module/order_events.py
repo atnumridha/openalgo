@@ -36,6 +36,7 @@ from typing import Any
 from cachetools import TTLCache
 
 from database import strategy_module_db as store
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -198,7 +199,7 @@ def _report_stranded_exit(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "run_stop_failed",
@@ -229,7 +230,7 @@ def report_flip_outgoing_exit_rejected(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "flip_outgoing_exit_rejected",
@@ -262,7 +263,7 @@ def report_pending_stop_exit_failed(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "run_stop_failed",
@@ -446,7 +447,7 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
         return True
 
     try:
-        store.record_event(
+        record_and_notify(
             strategy_id,
             user_id,
             "run_stop_failed" if stop_pending else "leg_exit_rejected",

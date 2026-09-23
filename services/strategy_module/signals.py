@@ -49,6 +49,7 @@ from services.strategy_module import (
     session,
     state,
 )
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -285,7 +286,7 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
             )
         return None, "Could not link the new signal run; no order was placed"
     state.init_run_state(new_run_id, strategy_id, [])
-    store.record_event(
+    record_and_notify(
         strategy_id,
         user_id,
         "run_started",
@@ -409,6 +410,15 @@ def handle_signal(
         if strategy.live_enabled:
             allowed, error = live_authorization.require_live_entry(strategy.user_id)
             if not allowed:
+                record_and_notify(
+                    int(strategy.id),
+                    str(strategy.user_id),
+                    "live_authorization_required",
+                    f"Live signal entry refused: {error}",
+                    run_id=run_id,
+                    severity="warn",
+                    mode="live",
+                )
                 return SignalResult(
                     ok=False,
                     leg_id=resolved_leg_id,
@@ -477,6 +487,15 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     )
     if not governor_decision.allowed:
         if governor_decision.code == "live_authorization_required":
+            record_and_notify(
+                int(strategy.id),
+                str(strategy.user_id),
+                "live_authorization_required",
+                f"Live signal entry refused: {governor_decision.message}",
+                run_id=run_id,
+                severity="warn",
+                mode=mode,
+            )
             from services.strategy_module import engine
 
             engine.reconcile_pending_stop(run_id)
@@ -486,7 +505,7 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
                 run_id=run_id,
                 error=governor_decision.message,
             )
-        event = store.record_event(
+        record_and_notify(
             int(strategy.id),
             str(strategy.user_id),
             "portfolio_governor_rejected",
@@ -496,13 +515,6 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             severity="warn",
             payload=governor_decision.as_payload(),
         )
-        try:
-            from services.strategy_module import broadcast
-
-            if event is not None:
-                broadcast.push_event(int(strategy.id), store.event_to_dict(event))
-        except Exception:
-            logger.exception("Could not broadcast portfolio governor rejection")
         from services.strategy_module import engine
 
         engine.reconcile_pending_stop(run_id)
@@ -833,7 +845,7 @@ def _place(
     if row is None and not exiting:
         # An entry that cannot be recorded is one that cannot be managed, so it
         # is not placed. Exits take the opposite decision below, deliberately.
-        store.record_event(
+        record_and_notify(
             strategy_id,
             user_id,
             "leg_entry_rejected",
