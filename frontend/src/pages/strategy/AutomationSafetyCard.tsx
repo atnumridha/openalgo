@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import {
   getLiveAuthorization,
@@ -34,6 +34,8 @@ const GOVERNOR_LIMITS = [
   'Two stopped runs trigger a 30-minute entry cooldown',
   'Intraday entries: 09:20–15:00 IST; option entries stop at 14:45 IST',
 ]
+
+const MAX_TIMER_DELAY = 2_147_483_647
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
@@ -85,11 +87,22 @@ function StrategyLinks({
   )
 }
 
+function DialogError({ message }: { message: string }) {
+  if (!message) return null
+  return (
+    <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+      {message}
+    </p>
+  )
+}
+
 export default function AutomationSafetyCard() {
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState<'grant' | 'revoke' | 'install' | null>(null)
   const [result, setResult] = useState<StarterPackInstallResult | null>(null)
   const [statusMessage, setStatusMessage] = useState('')
+  const [dialogError, setDialogError] = useState('')
+  const [now, setNow] = useState(() => Date.now())
 
   const authorizationQuery = useQuery({
     queryKey: strategyQueryKeys.liveAuthorization(),
@@ -97,9 +110,46 @@ export default function AutomationSafetyCard() {
     staleTime: 30_000,
   })
   const authorization = authorizationQuery.data
+  const expiresAt = authorization ? Date.parse(authorization.expires_at) : Number.NaN
+  const authorizationActive =
+    authorization?.active === true && Number.isFinite(expiresAt) && expiresAt > now
+  const authorizationExpired =
+    authorization?.active === true && (!Number.isFinite(expiresAt) || expiresAt <= now)
+  const authorizationUnavailable = !authorization && authorizationQuery.isError
+
+  useEffect(() => {
+    if (!authorization?.active || !Number.isFinite(expiresAt)) return
+    const delay = expiresAt - now
+    if (delay <= 0) return
+    const timeout = window.setTimeout(() => {
+      setNow(Date.now())
+      void authorizationQuery.refetch()
+    }, Math.min(delay, MAX_TIMER_DELAY))
+    return () => window.clearTimeout(timeout)
+  }, [authorization?.active, authorizationQuery.refetch, expiresAt, now])
+
+  const openConfirmation = (action: 'grant' | 'revoke' | 'install') => {
+    setDialogError('')
+    setConfirming(action)
+  }
+
+  const closeConfirmation = (open: boolean) => {
+    if (!open) {
+      setDialogError('')
+      setConfirming(null)
+    }
+  }
+
+  const mutationError = (error: unknown, fallback: string) => {
+    const message = errorMessage(error, fallback)
+    setDialogError(message)
+    setStatusMessage(message)
+  }
 
   const applyAuthorization = (next: LiveAuthorizationStatus, message: string) => {
     queryClient.setQueryData(strategyQueryKeys.liveAuthorization(), next)
+    setNow(Date.now())
+    setDialogError('')
     setStatusMessage(message)
     setConfirming(null)
   }
@@ -107,13 +157,13 @@ export default function AutomationSafetyCard() {
   const grantMutation = useMutation({
     mutationFn: grantLiveAuthorization,
     onSuccess: (next) => applyAuthorization(next, 'Live authorization granted for this session.'),
-    onError: (error) => setStatusMessage(errorMessage(error, 'Could not authorize live automation.')),
+    onError: (error) => mutationError(error, 'Could not authorize live automation.'),
   })
 
   const revokeMutation = useMutation({
     mutationFn: revokeLiveAuthorization,
     onSuccess: (next) => applyAuthorization(next, 'Live authorization revoked.'),
-    onError: (error) => setStatusMessage(errorMessage(error, 'Could not revoke live authorization.')),
+    onError: (error) => mutationError(error, 'Could not revoke live authorization.'),
   })
 
   const installMutation = useMutation({
@@ -126,13 +176,29 @@ export default function AutomationSafetyCard() {
           : 'Recommended starter pack is already installed.'
       )
       queryClient.invalidateQueries({ queryKey: strategyQueryKeys.strategies() })
+      setDialogError('')
       setConfirming(null)
     },
-    onError: (error) => setStatusMessage(errorMessage(error, 'Could not install the starter pack.')),
+    onError: (error) => mutationError(error, 'Could not install the starter pack.'),
   })
 
   const isMutating = grantMutation.isPending || revokeMutation.isPending || installMutation.isPending
-  const authActive = authorization?.active === true
+  const authorizationBadge = authorizationUnavailable
+    ? 'Authorization unavailable'
+    : authorizationExpired
+      ? 'Authorization expired'
+      : authorizationActive
+        ? 'Session authorization active'
+        : 'Sandbox only'
+  const authorizationHeading = authorizationQuery.isLoading
+    ? 'Checking live automation authorization…'
+    : authorizationUnavailable
+      ? 'Live automation authorization status unavailable'
+      : authorizationExpired
+        ? 'Live automation authorization has expired'
+        : authorizationActive
+          ? 'Live automation authorized for this session'
+          : 'Live automation authorization is inactive'
 
   return (
     <Card>
@@ -145,8 +211,11 @@ export default function AutomationSafetyCard() {
               must pass every gate below.
             </CardDescription>
           </div>
-          <Badge variant={authActive ? 'default' : 'secondary'} className="w-fit">
-            {authActive ? 'Session authorization active' : 'Sandbox only'}
+          <Badge
+            variant={authorizationUnavailable || authorizationExpired ? 'destructive' : authorizationActive ? 'default' : 'secondary'}
+            className="w-fit"
+          >
+            {authorizationBadge}
           </Badge>
         </div>
       </CardHeader>
@@ -155,11 +224,7 @@ export default function AutomationSafetyCard() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
               <h3 id="live-authorization-heading" className="font-medium">
-                {authorizationQuery.isLoading
-                  ? 'Checking live automation authorization…'
-                  : authActive
-                    ? 'Live automation authorized for this session'
-                    : 'Live automation authorization is inactive'}
+                {authorizationHeading}
               </h3>
               {authorization ? (
                 <p className="text-sm text-muted-foreground">
@@ -179,13 +244,13 @@ export default function AutomationSafetyCard() {
               >
                 Refresh status
               </Button>
-              {authActive ? (
+              {authorizationActive ? (
                 <Button
                   type="button"
                   variant="destructive"
                   className="min-h-11"
                   disabled={isMutating}
-                  onClick={() => setConfirming('revoke')}
+                  onClick={() => openConfirmation('revoke')}
                 >
                   Revoke authorization
                 </Button>
@@ -194,7 +259,7 @@ export default function AutomationSafetyCard() {
                   type="button"
                   className="min-h-11"
                   disabled={!authorization || isMutating}
-                  onClick={() => setConfirming('grant')}
+                  onClick={() => openConfirmation('grant')}
                 >
                   Authorize live automation
                 </Button>
@@ -245,7 +310,7 @@ export default function AutomationSafetyCard() {
               variant="secondary"
               className="min-h-11"
               disabled={isMutating}
-              onClick={() => setConfirming('install')}
+              onClick={() => openConfirmation('install')}
             >
               Install recommended starter pack
             </Button>
@@ -296,7 +361,7 @@ export default function AutomationSafetyCard() {
         </output>
       </CardContent>
 
-      <AlertDialog open={confirming === 'grant'} onOpenChange={(open) => !open && setConfirming(null)}>
+      <AlertDialog open={confirming === 'grant'} onOpenChange={closeConfirmation}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Authorize live automation for this session?</AlertDialogTitle>
@@ -304,6 +369,7 @@ export default function AutomationSafetyCard() {
               This permits new automated live entries only for the current trading session. Every
               strategy still needs its own live-enabled setting and governor approval.
             </AlertDialogDescription>
+            <DialogError message={dialogError} />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="min-h-11" disabled={grantMutation.isPending}>
@@ -322,7 +388,7 @@ export default function AutomationSafetyCard() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={confirming === 'revoke'} onOpenChange={(open) => !open && setConfirming(null)}>
+      <AlertDialog open={confirming === 'revoke'} onOpenChange={closeConfirmation}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Revoke live automation authorization?</AlertDialogTitle>
@@ -330,6 +396,7 @@ export default function AutomationSafetyCard() {
               New automated live entries will be blocked for this session. Existing exits, stops,
               and protective behavior remain allowed.
             </AlertDialogDescription>
+            <DialogError message={dialogError} />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="min-h-11" disabled={revokeMutation.isPending}>
@@ -348,7 +415,7 @@ export default function AutomationSafetyCard() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={confirming === 'install'} onOpenChange={(open) => !open && setConfirming(null)}>
+      <AlertDialog open={confirming === 'install'} onOpenChange={closeConfirmation}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Review recommended starter pack</AlertDialogTitle>
@@ -365,6 +432,7 @@ export default function AutomationSafetyCard() {
                 </p>
               </div>
             </AlertDialogDescription>
+            <DialogError message={dialogError} />
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="min-h-11" disabled={installMutation.isPending}>

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const strategyApi = vi.hoisted(() => ({
   getLiveAuthorization: vi.fn(),
@@ -27,8 +27,8 @@ const inactiveAuthorization = {
 
 const activeAuthorization = {
   active: true,
-  session_day: '2026-09-23',
-  expires_at: '2026-09-23T15:30:00+05:30',
+  session_day: '2026-12-23',
+  expires_at: '2026-12-23T15:30:00+05:30',
 }
 
 const createdStrategy = {
@@ -80,6 +80,10 @@ beforeEach(() => {
   strategyApi.getLiveAuthorization.mockResolvedValue(inactiveAuthorization)
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('AutomationSafetyCard', () => {
   it('shows inactive authorization, independent live gates, policy limits, and safe next steps', async () => {
     renderCard()
@@ -121,6 +125,51 @@ describe('AutomationSafetyCard', () => {
       expect(screen.getByText('Live automation authorized for this session')).toBeInTheDocument()
     })
     expect(strategyApi.grantLiveAuthorization).toHaveBeenCalledTimes(1)
+  })
+
+  it('expires a displayed authorization at its expiry boundary and refetches the session state', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-23T09:59:00+05:30'))
+    const expiringAuthorization = {
+      ...activeAuthorization,
+      expires_at: '2026-09-23T10:00:00+05:30',
+    }
+    strategyApi.getLiveAuthorization.mockResolvedValue(expiringAuthorization)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(['strategy-module', 'automation', 'live-authorization'], expiringAuthorization)
+
+    renderCard(queryClient)
+
+    expect(screen.getByText('Live automation authorized for this session')).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+
+    expect(strategyApi.getLiveAuthorization).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Live automation authorization has expired')).toBeInTheDocument()
+    expect(screen.getByText('Authorization expired')).toBeInTheDocument()
+  })
+
+  it('renders the refetched inactive state after an authorization expires', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-23T09:59:00+05:30'))
+    const expiringAuthorization = {
+      ...activeAuthorization,
+      expires_at: '2026-09-23T10:00:00+05:30',
+    }
+    strategyApi.getLiveAuthorization.mockResolvedValue(inactiveAuthorization)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    queryClient.setQueryData(['strategy-module', 'automation', 'live-authorization'], expiringAuthorization)
+
+    renderCard(queryClient)
+
+    expect(screen.getByText('Live automation authorized for this session')).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+
+    expect(screen.getByText('Live automation authorization is inactive')).toBeInTheDocument()
+    expect(screen.getByText('Sandbox only')).toBeInTheDocument()
   })
 
   it('requires confirmation before revoking and announces the inactive result', async () => {
@@ -179,7 +228,7 @@ describe('AutomationSafetyCard', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['strategy-module', 'strategies'] })
   })
 
-  it('announces API errors without masking the current authorization state', async () => {
+  it('shows grant API errors in the still-open authorization dialog', async () => {
     strategyApi.grantLiveAuthorization.mockRejectedValue(new Error('Broker session must be reconnected'))
     const user = userEvent.setup()
     renderCard()
@@ -188,9 +237,55 @@ describe('AutomationSafetyCard', () => {
     await user.click(screen.getByRole('button', { name: 'Authorize live automation' }))
     await user.click(screen.getByRole('button', { name: 'Authorize for this session' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent(
       'Broker session must be reconnected'
     )
     expect(screen.getByText('Live automation authorization is inactive')).toBeInTheDocument()
+  })
+
+  it('shows revoke API errors in the still-open authorization dialog', async () => {
+    strategyApi.getLiveAuthorization.mockResolvedValue(activeAuthorization)
+    strategyApi.revokeLiveAuthorization.mockRejectedValue(new Error('Revocation could not be saved'))
+    const user = userEvent.setup()
+    renderCard()
+
+    await screen.findByText('Live automation authorized for this session')
+    await user.click(screen.getByRole('button', { name: 'Revoke authorization' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke authorization' })
+    )
+
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent(
+      'Revocation could not be saved'
+    )
+  })
+
+  it('shows starter-pack API errors in the still-open review dialog', async () => {
+    strategyApi.installStarterPack.mockRejectedValue(new Error('Starter pack is temporarily unavailable'))
+    const user = userEvent.setup()
+    renderCard()
+
+    await screen.findByText('Live automation authorization is inactive')
+    await user.click(screen.getByRole('button', { name: 'Install recommended starter pack' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Install sandbox starter pack' })
+    )
+
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent(
+      'Starter pack is temporarily unavailable'
+    )
+    expect(strategyApi.installStarterPack).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows unavailable authorization instead of treating an initial status failure as sandbox-only', async () => {
+    strategyApi.getLiveAuthorization.mockRejectedValue(new Error('Network unavailable'))
+    renderCard()
+
+    expect(
+      await screen.findByText('Live automation authorization status unavailable')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Authorization unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('Sandbox only')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Authorize live automation' })).toBeDisabled()
   })
 })
