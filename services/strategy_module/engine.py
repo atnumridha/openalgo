@@ -1371,7 +1371,7 @@ def _exit_legs(
             _emit(
                 strategy["id"],
                 user_id,
-                "leg_exit_placed",
+                "exit_order_unrecorded",
                 (
                     f"Exit for leg {leg['leg_id']} is being placed without an order row: "
                     "it could not be written"

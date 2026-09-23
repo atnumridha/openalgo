@@ -17,6 +17,16 @@ class _ImmediateExecutor:
         return func(*args, **kwargs)
 
 
+class _CapturingExecutor:
+    """Records scheduling without running notification work on the caller."""
+
+    def __init__(self):
+        self.submissions = []
+
+    def submit(self, func, *args, **kwargs):
+        self.submissions.append((func, args, kwargs))
+
+
 @pytest.mark.parametrize(
     "kind",
     [
@@ -26,6 +36,7 @@ class _ImmediateExecutor:
         "run_stopped",
         "overall_target_hit",
         "daily_loss_limit",
+        "exit_order_unrecorded",
         "webhook_locked",
         "recovery_failed",
     ],
@@ -64,8 +75,6 @@ def test_material_lifecycle_events_enqueue_a_whatsapp_alert(kind):
             "strategy_id": 7,
             "kind": kind,
             "message": row.message,
-            "strategy_name": "Trend",
-            "mode": "sandbox",
             "user_id": "owner",
         },
     )
@@ -87,6 +96,30 @@ def test_a_routine_delta_is_audited_and_streamed_without_a_whatsapp_alert():
         assert lifecycle_events.record_and_notify(7, "owner", "pnl_delta", "10.0") is row
 
     notifier.send_strategy_lifecycle_alert.assert_not_called()
+
+
+def test_recording_a_lifecycle_event_does_not_lookup_notification_context():
+    """A slow strategy/run lookup must stay in the alert worker, not the order path."""
+    row = SimpleNamespace(id=18)
+    executor = _CapturingExecutor()
+    event = {"id": 18, "strategy_id": 7, "kind": "run_started", "message": "Started"}
+
+    with (
+        patch.object(lifecycle_events.store, "record_event", return_value=row),
+        patch.object(lifecycle_events.store, "event_to_dict", return_value=event),
+        patch.object(lifecycle_events.store, "get_strategy_unscoped") as strategy_lookup,
+        patch.object(lifecycle_events.store, "get_run") as run_lookup,
+        patch.object(lifecycle_events.broadcast, "push_event"),
+        patch.object(lifecycle_events, "alert_executor", executor),
+    ):
+        assert lifecycle_events.record_and_notify(7, "owner", "run_started", "Started", run_id=3) is row
+
+    strategy_lookup.assert_not_called()
+    run_lookup.assert_not_called()
+    assert executor.submissions[0][1] == (
+        "owner",
+        {"id": 18, "strategy_id": 7, "kind": "run_started", "message": "Started", "user_id": "owner"},
+    )
 
 
 def test_a_whatsapp_failure_does_not_change_the_recorded_event_return_value():
@@ -144,8 +177,8 @@ def test_lifecycle_whatsapp_format_has_context_without_generic_order_fields():
             "strategy_id": 7,
             "strategy_name": "NIFTY trend",
             "mode": "live",
-            "kind": "recovery_failed",
-            "message": "Run needs reconciliation",
+            "kind": "exit_order_unrecorded",
+            "message": "Exit SELL 50 RELIANCE was sent as broker order B-12345",
             "severity": "critical",
             "ts": "2026-09-23T09:30:00+00:00",
         }
@@ -153,8 +186,12 @@ def test_lifecycle_whatsapp_format_has_context_without_generic_order_fields():
 
     assert "NIFTY trend (#7)" in message
     assert "Mode: LIVE" in message
-    assert "Run needs reconciliation" in message
+    assert "durable order record" in message
     assert "IST" in message
     assert "Action required:" in message
     assert "Symbol:" not in message
     assert "Order ID:" not in message
+    assert "RELIANCE" not in message
+    assert "B-12345" not in message
+    assert "SELL" not in message
+    assert "50" not in message

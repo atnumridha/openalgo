@@ -277,6 +277,20 @@ def test_signal_dispatch_labels_entries_and_exits_by_intent():
     assert intents == ["entry", "exit"]
 
 
+def test_an_unrecordable_signal_exit_emits_one_material_lifecycle_event(placed):
+    strategy = _make()
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    _fill(strategy, 1)
+
+    with patch.object(store, "record_order", return_value=None):
+        exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert exited.ok is True
+    events = store.list_events(strategy.id, kind="exit_order_unrecorded")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+
+
 # ---------------------------------------------------------------------------
 # Which actions belong to which kind
 # ---------------------------------------------------------------------------

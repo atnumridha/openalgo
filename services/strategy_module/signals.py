@@ -913,10 +913,10 @@ def _place(
         # An exit that cannot be recorded is placed anyway. Refusing would
         # leave the position open with a database outage between it and every
         # attempt to close it; getting flat wins, and the audit row is lost.
-        store.record_event(
+        record_and_notify(
             strategy_id,
             user_id,
-            "leg_exit_placed",
+            "exit_order_unrecorded",
             (
                 f"Signal exit for leg {leg['leg_id']} is being placed without an order row: "
                 "it could not be written"

@@ -31,6 +31,29 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+_LIFECYCLE_SUMMARIES = {
+    "run_started": "Run started.",
+    "run_stopped": "Run stopped.",
+    "live_authorization_required": "Live entry is not authorized for this session.",
+    "run_stop_failed": "Stop remains pending; broker reconciliation is required.",
+    "portfolio_governor_rejected": "New entry was rejected by the portfolio governor.",
+    "leg_entry_rejected": "Strategy entry was rejected.",
+    "leg_exit_rejected": "Strategy exit was rejected and remains managed.",
+    "order_ack_unrecorded": "Broker acknowledgement needs reconciliation.",
+    "exit_order_unrecorded": "Protective exit is being sent without a durable order record.",
+    "overall_sl_hit": "Strategy loss limit was reached.",
+    "overall_target_hit": "Strategy target was reached.",
+    "leg_sl_hit": "Protective stop was reached.",
+    "leg_target_hit": "Strategy target was reached.",
+    "daily_loss_limit": "Daily loss lock is active.",
+    "daily_loss_lock": "Daily loss lock is active.",
+    "webhook_locked": "Kill switch engaged.",
+    "kill_switch_engaged": "Kill switch engaged.",
+    "flip_outgoing_exit_rejected": "Outgoing position exit was rejected and remains managed.",
+    "stale_feed_stop": "Strategy stopped because market data is stale.",
+    "recovery_failed": "Recovery failed; manual reconciliation is required.",
+}
+
 # Non-blocking dispatch pool. Bounded so a flood of orders can't spawn
 # unbounded threads. Matches the size of the Telegram alert pool.
 alert_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="whatsapp_alert")
@@ -255,7 +278,11 @@ class WhatsAppAlertService:
         strategy_id = event.get("strategy_id", "unknown")
         strategy_name = event.get("strategy_name") or f"Strategy {strategy_id}"
         mode = str(event.get("mode") or "").upper()
-        summary = str(event.get("message") or event.get("kind") or "Strategy lifecycle update")
+        kind = str(event.get("kind") or "")
+        summary = _LIFECYCLE_SUMMARIES.get(
+            kind,
+            f"Strategy lifecycle event: {kind.replace('_', ' ') or 'update'}.",
+        )
         timestamp = event.get("ts")
         try:
             if isinstance(timestamp, str):
@@ -268,7 +295,9 @@ class WhatsAppAlertService:
                 "%d %b %Y, %H:%M:%S IST"
             )
         except Exception:
-            timestamp_text = datetime.now().strftime("%d %b %Y, %H:%M:%S IST")
+            timestamp_text = datetime.now(UTC).astimezone(ZoneInfo("Asia/Kolkata")).strftime(
+                "%d %b %Y, %H:%M:%S IST"
+            )
 
         lines = [
             "Strategy lifecycle update",
@@ -401,6 +430,7 @@ class WhatsAppAlertService:
         try:
             if not self.enabled:
                 return
+            event = self._enrich_strategy_lifecycle_event(event)
             message = self.format_strategy_lifecycle_alert(event)
             cfg = get_bot_config()
             owner_username = cfg.get("owner_username")
@@ -415,6 +445,26 @@ class WhatsAppAlertService:
             # This method runs in the bounded alert pool. Never re-raise into
             # a strategy lifecycle operation even if a lookup is unavailable.
             logger.exception("Error sending WhatsApp strategy lifecycle alert")
+
+    @staticmethod
+    def _enrich_strategy_lifecycle_event(event: dict[str, Any]) -> dict[str, Any]:
+        """Do database-only alert enrichment in the alert worker, never the caller."""
+        enriched = dict(event)
+        try:
+            from database import strategy_module_db as store
+
+            strategy_id = enriched.get("strategy_id")
+            if strategy_id is not None:
+                strategy = store.get_strategy_unscoped(int(strategy_id))
+                if strategy is not None:
+                    enriched["strategy_name"] = str(strategy.name)
+            if not enriched.get("mode") and enriched.get("run_id") is not None:
+                run = store.get_run(int(enriched["run_id"]))
+                if run is not None:
+                    enriched["mode"] = str(run.mode)
+        except Exception:
+            logger.exception("Could not enrich WhatsApp strategy lifecycle alert")
+        return enriched
 
     def send_broadcast_alert(
         self,

@@ -30,6 +30,7 @@ MATERIAL_EVENT_KINDS = frozenset(
         "leg_entry_rejected",
         "leg_exit_rejected",
         "order_ack_unrecorded",
+        "exit_order_unrecorded",
         "overall_sl_hit",
         "overall_target_hit",
         "leg_sl_hit",
@@ -45,37 +46,6 @@ MATERIAL_EVENT_KINDS = frozenset(
 )
 
 _AUDIT_FIELDS = frozenset({"run_id", "leg_id", "severity", "payload"})
-
-
-def _notification_event(
-    strategy_id: int,
-    user_id: str,
-    event: dict[str, Any],
-    fields: dict[str, Any],
-) -> dict[str, Any]:
-    """Add the small amount of context needed by the plain-text alert."""
-    notification = dict(event)
-    notification["strategy_id"] = strategy_id
-    notification["user_id"] = user_id
-
-    try:
-        strategy = store.get_strategy_unscoped(strategy_id)
-        if strategy is not None:
-            notification["strategy_name"] = str(strategy.name)
-    except Exception:
-        logger.exception("Could not look up strategy %s for lifecycle alert", strategy_id)
-
-    mode = fields.get("mode")
-    if mode is None and fields.get("run_id") is not None:
-        try:
-            run = store.get_run(int(fields["run_id"]))
-            if run is not None:
-                mode = run.mode
-        except Exception:
-            logger.exception("Could not look up mode for lifecycle event on strategy %s", strategy_id)
-    if mode:
-        notification["mode"] = str(mode)
-    return notification
 
 
 def record_and_notify(
@@ -114,10 +84,15 @@ def record_and_notify(
         return row
 
     try:
+        notification = dict(event)
+        notification["strategy_id"] = strategy_id
+        notification["user_id"] = user_id
+        if fields.get("mode"):
+            notification["mode"] = str(fields["mode"])
         alert_executor.submit(
             whatsapp_alert_service.send_strategy_lifecycle_alert,
             user_id,
-            _notification_event(strategy_id, user_id, event, fields),
+            notification,
         )
     except Exception:
         logger.exception("Could not queue WhatsApp lifecycle event %s for strategy %s", kind, strategy_id)

@@ -329,6 +329,23 @@ def test_every_unrecordable_entry_rejects_its_placeholder_and_cleans_up_the_run(
     unsubscribe.assert_called_once_with(durable["id"])
 
 
+def test_an_unrecordable_batch_exit_emits_one_material_lifecycle_event(api_key):
+    sid = _make()
+    started = _start(sid)
+    assert started.ok is True
+    engine.apply_fill(started.run_id, 1, 100.0, is_entry=True)
+    entry = store.list_orders(started.run_id)[0]
+    store.update_order(entry["id"], status="filled")
+
+    with patch.object(store, "record_order", return_value=None):
+        stopped = engine.stop_run(started.run_id, USER, reason="manual")
+
+    assert stopped["exits"]
+    events = store.list_events(sid, kind="exit_order_unrecorded")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+
+
 def test_failed_ack_persistence_records_exact_structured_repair_metadata(api_key):
     sid = _make()
 
