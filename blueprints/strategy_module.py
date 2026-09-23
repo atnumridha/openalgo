@@ -44,7 +44,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
-from services.strategy_module import live_authorization
+from services.strategy_module import live_authorization, starter_pack
 from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
@@ -1390,6 +1390,31 @@ def delete_strategy(sid):
 # ---------------------------------------------------------------------------
 # Webhook token, live mode, kill switch
 # ---------------------------------------------------------------------------
+
+
+@strategy_module_bp.route("/api/automation/starter-pack", methods=["POST"])
+@check_session_validity
+@_api_limit
+def install_starter_pack():
+    """Install missing sandbox-only starter strategies for the signed-in user."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    try:
+        result = starter_pack.install(username)
+    except RuntimeError:
+        logger.exception("Could not install starter pack for %s", username)
+        return _error("Could not install the starter pack", 500)
+
+    return _ok(
+        {
+            "created": list(result.created),
+            "existing": list(result.existing),
+            "webhook_tokens": result.webhook_tokens,
+        },
+        201 if result.created else 200,
+    )
 
 
 @strategy_module_bp.route("/api/automation/live-authorization", methods=["GET"])
