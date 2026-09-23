@@ -89,7 +89,7 @@ describe('AutomationSafetyCard', () => {
     renderCard()
 
     expect(await screen.findByText('Live automation authorization is inactive')).toBeInTheDocument()
-    expect(screen.getByText('Expires: 23 Sep 2026, 15:30 IST')).toBeInTheDocument()
+    expect(screen.getByText('Expires: 24 Sep 2026, 15:30 IST')).toBeInTheDocument()
     expect(screen.getByText('Installing does not start trading.')).toBeInTheDocument()
     expect(screen.getByText('Each strategy must also be individually live-enabled.')).toBeInTheDocument()
     expect(screen.getByText('Maximum two simultaneous cash positions')).toBeInTheDocument()
@@ -129,11 +129,11 @@ describe('AutomationSafetyCard', () => {
 
   it('expires a displayed authorization at its expiry boundary and refetches the session state', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-09-23T09:59:00+05:30'))
+    vi.setSystemTime(new Date('2026-09-24T02:59:00+05:30'))
     const expiringAuthorization = {
       ...activeAuthorization,
       session_day: '2026-09-23',
-      expires_at: '10:00',
+      expires_at: '03:00',
     }
     strategyApi.getLiveAuthorization.mockResolvedValue(expiringAuthorization)
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -153,11 +153,11 @@ describe('AutomationSafetyCard', () => {
 
   it('renders the refetched inactive state after an authorization expires', async () => {
     vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-09-23T09:59:00+05:30'))
+    vi.setSystemTime(new Date('2026-09-24T02:59:00+05:30'))
     const expiringAuthorization = {
       ...activeAuthorization,
       session_day: '2026-09-23',
-      expires_at: '10:00',
+      expires_at: '03:00',
     }
     strategyApi.getLiveAuthorization.mockResolvedValue(inactiveAuthorization)
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -288,6 +288,25 @@ describe('AutomationSafetyCard', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('Authorization unavailable')).toBeInTheDocument()
     expect(screen.queryByText('Sandbox only')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Authorize live automation' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Authorize live automation' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    { session_day: 'not-a-session-day', expires_at: '03:00' },
+    { session_day: '2026-09-23', expires_at: '25:00' },
+  ])('fails closed when a live authorization has malformed session timing', async (timing) => {
+    strategyApi.getLiveAuthorization.mockResolvedValue({
+      ...activeAuthorization,
+      ...timing,
+    })
+    renderCard()
+
+    expect(
+      await screen.findByText('Live automation authorization status unavailable')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Authorization unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Authorization expiry is unavailable.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Authorize live automation' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Revoke authorization' })).not.toBeInTheDocument()
   })
 })

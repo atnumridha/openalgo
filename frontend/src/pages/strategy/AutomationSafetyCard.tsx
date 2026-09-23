@@ -62,7 +62,11 @@ function sessionExpiryTimestamp(sessionDay: string, expiresAt: string) {
     return Number.NaN
   }
 
-  return Date.parse(`${sessionDay}T${expiresAt}:00+05:30`)
+  const resetDay = new Date(Date.UTC(year, month - 1, date + 1))
+  const resetDate = `${resetDay.getUTCFullYear()}-${String(resetDay.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    resetDay.getUTCDate()
+  ).padStart(2, '0')}`
+  return Date.parse(`${resetDate}T${expiresAt}:00+05:30`)
 }
 
 function formatExpiry(expiresAt: number) {
@@ -140,8 +144,9 @@ export default function AutomationSafetyCard() {
   const authorizationActive =
     authorization?.active === true && Number.isFinite(expiresAt) && expiresAt > now
   const authorizationExpired =
-    authorization?.active === true && (!Number.isFinite(expiresAt) || expiresAt <= now)
-  const authorizationUnavailable = !authorization && authorizationQuery.isError
+    authorization?.active === true && Number.isFinite(expiresAt) && expiresAt <= now
+  const authorizationTimingUnavailable = Boolean(authorization && !Number.isFinite(expiresAt))
+  const authorizationUnavailable = authorizationTimingUnavailable || (!authorization && authorizationQuery.isError)
 
   useEffect(() => {
     if (!authorization?.active || !Number.isFinite(expiresAt)) return
@@ -282,7 +287,7 @@ export default function AutomationSafetyCard() {
                 >
                   Revoke authorization
                 </Button>
-              ) : (
+              ) : authorizationUnavailable ? null : (
                 <Button
                   type="button"
                   className="min-h-11"
