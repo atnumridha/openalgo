@@ -24,6 +24,7 @@ def pieces():
     """Every background piece replaced, recording the order they are called."""
     order: list[str] = []
     feed = MagicMock()
+    feed.set_notify.side_effect = lambda _cb: order.append("source_hook")
     feed.set_on_price.side_effect = lambda _cb: order.append("price_hook")
     feed.add_run_subscriptions.side_effect = lambda *_a, **_k: order.append("subscribe")
 
@@ -52,6 +53,7 @@ def test_everything_starts_in_the_order_the_pieces_need(pieces):
     # The risk hook before any subscription: registering it after would leave a
     # window in which prices arrive and nothing judges them.
     assert order.index("price_hook") < order.index("subscribe")
+    assert order.index("source_hook") < order.index("subscribe")
     # The scheduler last: it can start new runs, and must not do that until
     # recovery has decided what is already running.
     assert order.index("recovery") < order.index("scheduler")
@@ -64,6 +66,7 @@ def test_the_risk_hook_is_the_engine_and_not_something_else(pieces):
     runtime.start_strategy_module()
 
     feed.set_on_price.assert_called_once_with(engine.process_tick)
+    feed.set_notify.assert_called_once_with(engine.handle_tick_source_event)
 
 
 def test_recovered_runs_get_their_instruments_back(pieces):

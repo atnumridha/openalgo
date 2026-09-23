@@ -110,7 +110,7 @@ Each object in `data`:
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `live_authorization_granted`, `live_authorization_revoked`, `live_authorization_expired`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
 `run_stop_requested` says the stop intent is durable and new signal entries are
 gated; it is not proof of flatness. `run_stopped` is the terminal transition

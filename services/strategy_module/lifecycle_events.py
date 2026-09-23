@@ -23,6 +23,9 @@ MATERIAL_EVENT_KINDS = frozenset(
     {
         "run_started",
         "run_stopped",
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
         "live_authorization_required",
         "run_stop_failed",
         "portfolio_governor_rejected",
@@ -46,6 +49,7 @@ MATERIAL_EVENT_KINDS = frozenset(
 )
 
 _AUDIT_FIELDS = frozenset({"run_id", "leg_id", "severity", "payload"})
+_USER_AUDIT_FIELDS = frozenset({"severity", "payload"})
 
 
 def record_and_notify(
@@ -96,4 +100,54 @@ def record_and_notify(
         )
     except Exception:
         logger.exception("Could not queue WhatsApp lifecycle event %s for strategy %s", kind, strategy_id)
+    return row
+
+
+def record_user_and_notify(
+    user_id: str,
+    kind: str,
+    message: str,
+    **fields: Any,
+) -> Any:
+    """Record, stream, and alert an account event with no strategy owner.
+
+    Authorization is user-scoped state and can precede every strategy row.
+    Keeping a separate persistence seam avoids a sentinel strategy id and
+    preserves the foreign-key meaning of ``sm_strategy_event``.
+    """
+    try:
+        audit_fields = {
+            key: value for key, value in fields.items() if key in _USER_AUDIT_FIELDS
+        }
+        row = store.record_automation_event(user_id, kind, message, **audit_fields)
+    except Exception:
+        logger.exception("Could not record lifecycle event %s for user %s", kind, user_id)
+        return None
+    if row is None:
+        return None
+
+    try:
+        event = store.automation_event_to_dict(row)
+    except Exception:
+        logger.exception("Could not serialise lifecycle event %s for user %s", kind, user_id)
+        event = {"user_id": str(user_id), "kind": kind, "message": message}
+
+    try:
+        broadcast.push_user_event(user_id, event)
+    except Exception:
+        logger.exception("Could not broadcast lifecycle event %s for user %s", kind, user_id)
+
+    if kind not in MATERIAL_EVENT_KINDS:
+        return row
+
+    try:
+        notification = dict(event)
+        notification["user_id"] = str(user_id)
+        alert_executor.submit(
+            whatsapp_alert_service.send_strategy_lifecycle_alert,
+            str(user_id),
+            notification,
+        )
+    except Exception:
+        logger.exception("Could not queue WhatsApp lifecycle event %s for user %s", kind, user_id)
     return row

@@ -2003,6 +2003,32 @@ def webhook(token):
 # ---------------------------------------------------------------------------
 
 
+@socketio.on("strategy_user_subscribe")
+def _strategy_user_subscribe(_data=None):
+    """Join the authenticated account room for strategy-independent events."""
+    username = _current_user()
+    if not username:
+        return {"status": "error", "message": "Not authenticated"}
+
+    from services.strategy_module import broadcast
+
+    join_room(broadcast.user_room_for(username))
+    return {"status": "success"}
+
+
+@socketio.on("strategy_user_unsubscribe")
+def _strategy_user_unsubscribe(_data=None):
+    """Leave only the authenticated account's automation lifecycle room."""
+    username = _current_user()
+    if not username:
+        return {"status": "error", "message": "Not authenticated"}
+
+    from services.strategy_module import broadcast
+
+    leave_room(broadcast.user_room_for(username))
+    return {"status": "success"}
+
+
 @socketio.on("strategy_subscribe")
 def _strategy_subscribe(data):
     """Join a strategy's live room, if the caller owns it."""

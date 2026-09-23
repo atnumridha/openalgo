@@ -442,8 +442,11 @@ def test_operator_docs_explain_automated_strategy_safety_workflow() -> None:
         "15:00",
         "3 max positions",
         "4% combined risk",
-        "30% debit",
+        "20% cash reserve",
         "long-option minimum-lot max 3%",
+        "4% daily-loss lock",
+        "3-stop session lock",
+        "2 stops => 30-minute cooldown",
     ):
         assert phrase in strategy_doc
 
@@ -451,6 +454,10 @@ def test_operator_docs_explain_automated_strategy_safety_workflow() -> None:
         "whatsapp lifecycle notices",
         "run started",
         "live authorization granted",
+        "live authorization revoked",
+        "live authorization expired",
+        "portfolio governor admitted",
+        "stale-feed stop",
         "kill switch",
         "notification failure never blocks trading",
     ):

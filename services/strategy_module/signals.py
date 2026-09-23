@@ -103,6 +103,20 @@ class SignalResult:
         return self.ok and self.note is None
 
 
+def _emit_lifecycle(
+    strategy_id: int,
+    user_id: str,
+    kind: str,
+    message: str,
+    **fields: Any,
+) -> None:
+    """Best-effort lifecycle delivery for a completed signal transition."""
+    try:
+        record_and_notify(strategy_id, user_id, kind, message, **fields)
+    except Exception:
+        logger.exception("Could not emit event %s for strategy %s", kind, strategy_id)
+
+
 @dataclass(frozen=True)
 class _StrategySnapshot:
     """Plain signal configuration safe across commits and session cleanup."""
@@ -541,6 +555,17 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
                         }
                     ],
                 )
+                if mode == "live":
+                    _emit_lifecycle(
+                        int(strategy.id),
+                        str(strategy.user_id),
+                        "portfolio_governor_admitted",
+                        governor_decision.message,
+                        run_id=run_id,
+                        leg_id=leg_id,
+                        payload=governor_decision.as_payload(),
+                        mode=mode,
+                    )
         return result
     finally:
         if admission is not None:

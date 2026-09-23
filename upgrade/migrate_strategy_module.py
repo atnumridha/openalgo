@@ -2,7 +2,7 @@
 """
 Migration: Strategy Module (multi-leg options strategies with risk management)
 
-Adds the six tables backing /strategy:
+Adds the seven tables backing /strategy:
 
 - sm_strategy             strategy config: legs, risk parameters, scheduler, webhook token hash
 - sm_strategy_run         one activation of a strategy, start to stop
@@ -10,8 +10,9 @@ Adds the six tables backing /strategy:
 - sm_strategy_checkpoint  periodic runtime snapshot, for crash recovery
 - sm_webhook_event        every inbound webhook, accepted or rejected
 - sm_strategy_event       risk-event audit trail
+- sm_automation_event     user-scoped automation lifecycle audit trail
 
-All six are new, so there is nothing to backfill and no existing value to
+All seven are new, so there is nothing to backfill and no existing value to
 preserve. init_db() in database/strategy_module_db.py creates them too, but
 that only helps an installation whose database is opened after this ships;
 this script is what reaches the ~290k deployments that upgrade with `git pull`.
@@ -56,6 +57,7 @@ TABLES = (
     "sm_strategy_checkpoint",
     "sm_webhook_event",
     "sm_strategy_event",
+    "sm_automation_event",
 )
 
 

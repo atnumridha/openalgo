@@ -169,8 +169,9 @@ and it never rejects an exit. The initial operator limits are:
   position.
 - **4% combined risk:** configured open risk across the portfolio may not
   exceed 4% of available cash.
-- **30% debit:** a proposed entry may use no more than 30% of available cash
-  as estimated debit.
+- **20% cash reserve:** a proposed entry must leave at least 20% of available
+  cash uncommitted. This makes the effective maximum estimated debit 80%,
+  subject to every other governor gate.
 - **Long-option minimum-lot max 3%:** configured risk for a minimum long
   option lot may not exceed 3% of available cash; cash-trade risk is limited
   to 1.5%.
@@ -179,8 +180,8 @@ and it never rejects an exit. The initial operator limits are:
 
 The governor also requires protective risk and at least 1.5 reward-to-risk,
 fails closed when funds, positions, quotes, or risk facts are unavailable, and
-applies its daily-loss and stopped-run cooldown protections. Sandbox entries
-remain independent of these live-entry checks.
+applies a **4% daily-loss lock**, a **3-stop session lock**, and **2 stops => 30-minute cooldown** protections. Sandbox entries remain independent of these
+live-entry checks.
 
 ## Vocabularies
 
@@ -291,7 +292,7 @@ Only. Neither a strategy nor a leg carries a price, so a `LIMIT`, `SL` or `SL-M`
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `live_authorization_granted`, `live_authorization_revoked`, `live_authorization_expired`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
 Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
 

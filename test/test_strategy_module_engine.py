@@ -20,6 +20,7 @@ from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 from services.strategy_module.symbol_resolver import ResolvedLeg
+from services.strategy_module.tick_feed import STALE, TickSourceEvent
 
 USER = "engine_test_user"
 
@@ -1468,6 +1469,56 @@ def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key)
     assert admission.released is True
     snapshot = state.get_run_state(result.run_id)
     assert snapshot["legs"]["1"]["status"] == "open"
+    admitted = store.list_events(sid, kind="portfolio_governor_admitted")
+    assert len(admitted) == 1
+    assert admitted[0]["payload"]["code"] == "entry_allowed"
+
+
+def test_stale_feed_stops_each_affected_run_and_alerts_only_on_terminal_transition(api_key):
+    """A repeated stale callback cannot duplicate a terminal lifecycle event."""
+    sid = _make()
+    assert store.claim_strategy_for_run(sid)
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = int(run.id)
+    assert store.set_strategy_status(sid, "running", run_id)
+    state.init_run_state(
+        run_id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "B",
+                "symbol": "STALE-CONTRACT",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    # Model a run whose working entry was already proven dead. It remains
+    # subscribed until terminal cleanup, but carries no exposure that would
+    # make a stale-feed stop wait for broker reconciliation.
+    with state.run_state(run_id) as live:
+        live["legs"]["1"]["entry_status"] = "rejected"
+        live["legs"]["1"]["status"] = "rejected"
+    event = TickSourceEvent(
+        symbol="STALE-CONTRACT",
+        exchange="NFO",
+        source=STALE,
+        previous="polling",
+        degraded=False,
+        at=1.0,
+    )
+
+    engine.handle_tick_source_event(event)
+    engine.handle_tick_source_event(event)
+
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is not None
+    assert durable.stop_reason == "tick_stale"
+    stopped = store.list_events(sid, kind="stale_feed_stop")
+    assert len(stopped) == 1
+    assert stopped[0]["run_id"] == run_id
 
 
 def test_live_batch_releases_portfolio_admission_when_strategy_claim_is_refused(api_key):

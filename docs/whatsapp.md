@@ -186,11 +186,11 @@ Strategy Module automation. Pair the device from `/whatsapp` before relying on
 these notices. They are sent to the paired operator for material state changes,
 including:
 
-* **Live authorization granted, revoked, or expired** for automated live
+* **Live authorization granted, live authorization revoked, or live
+  authorization expired** for automated live entries.
+* **Run started** and stopped, plus **portfolio governor admitted** or rejected
   entries.
-* **Run started** and stopped, plus entry admission or rejection by the
-  portfolio governor.
-* Protective stops, targets, daily-loss locks, cooldowns, stale-feed stops,
+* Protective stops, targets, daily-loss locks, cooldowns, **stale-feed stop**,
   recovery failures, and the **kill switch**.
 * Broker or order acknowledgement failures that need operator attention.
 

@@ -92,6 +92,7 @@ def _start_tick_feed(symbols_by_run: dict) -> None:
     # This is the wire that makes the module react to the market. Both the
     # websocket and the REST fallback go through it, so a leg on the fallback
     # is evaluated on polled prices rather than merely displayed.
+    feed.set_notify(engine.handle_tick_source_event)
     feed.set_on_price(engine.process_tick)
 
     for run_id, symbols in (symbols_by_run or {}).items():

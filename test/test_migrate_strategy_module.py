@@ -137,6 +137,7 @@ def test_apply_upgrades_every_populated_old_stage_idempotently(tmp_path, stage):
         assert indexes["ix_sm_order_run_leg_position"]["unique"] == 0
         assert _original_row_snapshot(engine) == before
         assert _schema_snapshot(engine) == first_schema
+        assert "sm_automation_event" in inspect(engine).get_table_names()
 
         with engine.connect() as connection:
             migrated_order = connection.exec_driver_sql(

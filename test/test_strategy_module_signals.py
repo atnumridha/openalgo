@@ -1264,15 +1264,21 @@ def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
             ),
         ):
             result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+            repeated = signals.handle_signal(strategy, "long_entry", leg_id=1)
     finally:
         authz.revoke(USER)
 
     assert result.ok is True
-    acquire.assert_called_once()
+    assert repeated.ok is True
+    assert repeated.note == "already_long"
+    assert acquire.call_count == 2
     assert admission.committed is True
     assert admission.released is True
     snapshot = state.get_run_state(result.run_id)
     assert snapshot["legs"]["1"]["status"] == "open"
+    admitted = store.list_events(strategy.id, kind="portfolio_governor_admitted")
+    assert len(admitted) == 1
+    assert admitted[0]["payload"]["code"] == "entry_allowed"
 
 
 def test_live_signal_releases_portfolio_admission_when_entry_claim_is_refused():

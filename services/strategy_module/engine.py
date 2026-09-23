@@ -410,22 +410,33 @@ def start_run(
             resolved_by_id = {str(leg["leg_id"]): leg for leg in resolved}
             snapshot = state.get_run_state(run_id) or {}
             live_legs = snapshot.get("legs") or {}
+            accepted_exposures = [
+                {
+                    "leg_id": outcome["leg_id"],
+                    "position_ref": resolved_by_id[str(outcome["leg_id"])].get(
+                        "position_ref"
+                    ),
+                    "entry_order_id": outcome.get("entry_order_id"),
+                }
+                for outcome in placed
+                if outcome["ok"]
+                and str((live_legs.get(str(outcome["leg_id"])) or {}).get("status"))
+                not in {"rejected", "cancelled"}
+            ]
             admission.commit(
                 run_id,
-                [
-                    {
-                        "leg_id": outcome["leg_id"],
-                        "position_ref": resolved_by_id[str(outcome["leg_id"])].get(
-                            "position_ref"
-                        ),
-                        "entry_order_id": outcome.get("entry_order_id"),
-                    }
-                    for outcome in placed
-                    if outcome["ok"]
-                    and str((live_legs.get(str(outcome["leg_id"])) or {}).get("status"))
-                    not in {"rejected", "cancelled"}
-                ],
+                accepted_exposures,
             )
+            if mode == "live" and accepted_exposures:
+                _emit(
+                    strategy_id,
+                    user_id,
+                    "portfolio_governor_admitted",
+                    governor_decision.message,
+                    run_id=run_id,
+                    payload=governor_decision.as_payload(),
+                    mode=mode,
+                )
 
         # Every leg rejected means there is no position and nothing to manage.
         # Leaving the run open would show a running strategy holding nothing.
@@ -2029,6 +2040,15 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         return False
 
     try:
+        if reason == "tick_stale":
+            _emit(
+                strategy_id,
+                user_id,
+                "stale_feed_stop",
+                "Run stopped because a subscribed market-data feed became stale",
+                run_id=run_id,
+                severity="critical",
+            )
         _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
         # The final figures, forced past the throttle: without it the page is
         # left frozen one tick short of the truth for the rest of the day.
@@ -2062,6 +2082,50 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
 # ---------------------------------------------------------------------------
 # Tick path
 # ---------------------------------------------------------------------------
+
+
+def handle_tick_source_event(event: Any) -> None:
+    """Stop every run subscribed to a symbol that has become terminally stale.
+
+    The feed emits one source transition per symbol. The durable run-finalise
+    compare-and-set remains the exactly-once boundary, so duplicate callbacks
+    or multiple stale legs cannot create duplicate material stop events.
+    """
+    from services.strategy_module.tick_feed import STALE
+
+    symbol = str(getattr(event, "symbol", "") or "")
+    exchange = str(getattr(event, "exchange", "") or "").upper()
+    if getattr(event, "source", None) != STALE or not symbol or not exchange:
+        return
+
+    for run_id in state.active_run_ids():
+        try:
+            snapshot = state.get_run_state(run_id)
+            if snapshot is None:
+                continue
+            affected = any(
+                str(leg.get("symbol") or "") == symbol
+                and str(leg.get("exchange") or "").upper() == exchange
+                for leg in (snapshot.get("legs") or {}).values()
+            )
+            if not affected:
+                continue
+            run_row = store.get_run(run_id)
+            if run_row is None or run_row.stopped_at is not None:
+                continue
+            strategy = store.get_strategy_unscoped(int(run_row.strategy_id))
+            if strategy is None:
+                logger.error(
+                    "Could not stop stale run %s: strategy %s is unavailable",
+                    run_id,
+                    run_row.strategy_id,
+                )
+                continue
+            stop_run(run_id, str(strategy.user_id), reason="tick_stale")
+        except Exception:
+            # One affected run must not prevent every other run on the same
+            # stale symbol from being stopped.
+            logger.exception("Could not stop run %s after stale market data", run_id)
 
 
 def process_tick(symbol: str, exchange: str, ltp: float) -> None:

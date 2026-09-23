@@ -3,7 +3,7 @@
 Persistence for the /strategy module: multi-leg options strategies with
 end-to-end risk management.
 
-Six tables, all ``sm_`` prefixed. The prefix is not decoration: this codebase
+Seven tables, all ``sm_`` prefixed. The prefix is not decoration: this codebase
 already carries five unrelated things called "strategy" (the Strategy Builder's
 ``strategy_portfolio``, ``strategy_book``, ``strategy_order_tags``,
 ``strategy_pending_fills``, and the Python strategy host), and the retired
@@ -16,6 +16,7 @@ what keeps a future reader from wiring the wrong one.
 - ``sm_strategy_checkpoint`` periodic runtime snapshot, for crash recovery
 - ``sm_webhook_event``       every inbound webhook, accepted or rejected
 - ``sm_strategy_event``      risk-event audit trail (SL hit, lock profit, ...)
+- ``sm_automation_event``    user-scoped automation lifecycle audit trail
 
 Timestamps are stored naive UTC and rendered IST at the API boundary. SQLite
 does not preserve a timezone on a DateTime column whatever you pass it, so
@@ -186,6 +187,13 @@ EVENT_KINDS = (
     "run_stop_requested",
     "run_stopped",
     "run_stop_failed",
+    "live_authorization_granted",
+    "live_authorization_revoked",
+    "live_authorization_expired",
+    "live_authorization_required",
+    "portfolio_governor_admitted",
+    "portfolio_governor_rejected",
+    "stale_feed_stop",
     "flip_outgoing_exit_rejected",
     "close_all_manual",
     # Entry and exit
@@ -518,6 +526,26 @@ class SmStrategyEvent(Base):
     )
 
 
+class SmAutomationEvent(Base):
+    """Account-level automation lifecycle that does not belong to a strategy.
+
+    Live authorization exists before the first strategy is created, so using a
+    fake strategy id would corrupt both ownership and foreign-key meaning.
+    """
+
+    __tablename__ = "sm_automation_event"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(80), nullable=False, index=True)
+    ts = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    kind = Column(String(40), nullable=False)
+    severity = Column(String(10), nullable=False, default="info")
+    message = Column(Text, nullable=False)
+    payload = Column(JSON, nullable=True)
+
+    __table_args__ = (Index("ix_sm_automation_event_user_ts", "user_id", "ts"),)
+
+
 # ---------------------------------------------------------------------------
 # Init
 # ---------------------------------------------------------------------------
@@ -671,6 +699,19 @@ def event_to_dict(row: SmStrategyEvent) -> dict:
         "kind": row.kind,
         "severity": row.severity,
         "leg_id": row.leg_id,
+        "message": row.message,
+        "payload": row.payload,
+    }
+
+
+def automation_event_to_dict(row: SmAutomationEvent) -> dict:
+    """Serialize an account-level event without inventing strategy context."""
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "ts": _iso(row.ts),
+        "kind": row.kind,
+        "severity": row.severity,
         "message": row.message,
         "payload": row.payload,
     }
@@ -2297,6 +2338,47 @@ def list_events(
         return [event_to_dict(r) for r in rows]
     except Exception:
         logger.exception("Could not list events for strategy %s", strategy_id)
+        return []
+
+
+def record_automation_event(
+    user_id: str,
+    kind: str,
+    message: str,
+    severity: str = "info",
+    payload: dict | None = None,
+) -> SmAutomationEvent | None:
+    """Append one user-scoped automation event, independent of strategies."""
+    try:
+        row = SmAutomationEvent(
+            user_id=str(user_id),
+            kind=kind,
+            severity=severity,
+            message=message,
+            payload=payload,
+        )
+        db_session.add(row)
+        db_session.commit()
+        return row
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record automation event %s for user %s", kind, user_id)
+        return None
+
+
+def list_automation_events(user_id: str, limit: int = 200) -> list[dict]:
+    """Newest account-level automation events for one user."""
+    try:
+        rows = (
+            db_session.query(SmAutomationEvent)
+            .filter_by(user_id=str(user_id))
+            .order_by(SmAutomationEvent.ts.desc(), SmAutomationEvent.id.desc())
+            .limit(max(1, min(int(limit), 500)))
+            .all()
+        )
+        return [automation_event_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list automation events for user %s", user_id)
         return []
 
 

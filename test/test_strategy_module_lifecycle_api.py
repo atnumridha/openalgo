@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 import pytz
-from flask import Flask
+from flask import Flask, session
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
@@ -104,6 +104,26 @@ def _make(user=USER, name="Lifecycle", running_run_id=None):
     return created["id"]
 
 
+def test_account_lifecycle_socket_room_is_derived_only_from_authenticated_user(client):
+    """A caller cannot name another account when subscribing to auth events."""
+    with (
+        client.application.test_request_context("/socket.io"),
+        patch.object(strategy_module, "join_room") as join,
+        patch.object(strategy_module, "leave_room") as leave,
+    ):
+        session["user"] = USER
+
+        assert strategy_module._strategy_user_subscribe({"user_id": OTHER}) == {
+            "status": "success"
+        }
+        assert strategy_module._strategy_user_unsubscribe({"user_id": OTHER}) == {
+            "status": "success"
+        }
+
+    join.assert_called_once_with(f"strategy-user:{USER}")
+    leave.assert_called_once_with(f"strategy-user:{USER}")
+
+
 # ---------------------------------------------------------------------------
 # Live authorization
 # ---------------------------------------------------------------------------
@@ -130,6 +150,13 @@ def test_live_authorization_requires_confirmation_and_mirrors_only_safe_state(cl
     assert client.delete(url).get_json()["live_authorization"]["active"] is False
     with client.session_transaction() as flask_session:
         assert "live_authorization" not in flask_session
+
+    events = store.list_automation_events(USER)
+    assert [event["kind"] for event in events] == [
+        "live_authorization_revoked",
+        "live_authorization_granted",
+    ]
+    assert all("strategy_id" not in event for event in events)
 
 
 @pytest.mark.parametrize("confirm", [1, 1.0])

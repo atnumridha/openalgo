@@ -422,6 +422,26 @@ def test_the_event_payload_wraps_one_row(sio, run):
     assert payload["event"] == row
 
 
+def test_the_user_event_payload_uses_only_the_account_room(sio):
+    row = {
+        "id": 13,
+        "user_id": "owner",
+        "kind": "live_authorization_granted",
+        "message": "Authorized",
+    }
+
+    assert broadcast.push_user_event("owner", row) is True
+
+    event, payload, kwargs = sio.emits[-1]
+    assert event == broadcast.EVENT_USER_EVENT
+    assert payload["type"] == "user_event"
+    assert payload["user_id"] == "owner"
+    assert payload["event"] == row
+    assert "strategy_id" not in payload
+    assert kwargs["to"] == broadcast.user_room_for("owner")
+    assert kwargs["namespace"] == broadcast.NAMESPACE
+
+
 def test_the_order_update_payload_wraps_one_row(sio, run):
     row = {"id": 3, "run_id": RUN_ID, "leg_id": 1, "kind": "entry", "status": "complete"}
 
@@ -687,4 +707,5 @@ def test_the_map_is_not_swept_while_it_is_under_the_ceiling(sio, clock, run):
 
 def test_the_room_name_is_the_one_the_join_handler_must_use():
     assert broadcast.room_for(41) == "strategy:41"
+    assert broadcast.user_room_for("owner") == "strategy-user:owner"
     assert broadcast.NAMESPACE == "/"

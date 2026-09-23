@@ -34,8 +34,12 @@ logger = get_logger(__name__)
 _LIFECYCLE_SUMMARIES = {
     "run_started": "Run started.",
     "run_stopped": "Run stopped.",
+    "live_authorization_granted": "Live automation was authorized for this trading session.",
+    "live_authorization_revoked": "Live automation authorization was revoked.",
+    "live_authorization_expired": "Live automation authorization expired.",
     "live_authorization_required": "Live entry is not authorized for this session.",
     "run_stop_failed": "Stop remains pending; broker reconciliation is required.",
+    "portfolio_governor_admitted": "New automated exposure was admitted by the portfolio governor.",
     "portfolio_governor_rejected": "New entry was rejected by the portfolio governor.",
     "leg_entry_rejected": "Strategy entry was rejected.",
     "leg_exit_rejected": "Strategy exit was rejected and remains managed.",
@@ -275,8 +279,7 @@ class WhatsAppAlertService:
 
     def format_strategy_lifecycle_alert(self, event: dict[str, Any]) -> str:
         """Format a compact strategy-state alert without repeating order data."""
-        strategy_id = event.get("strategy_id", "unknown")
-        strategy_name = event.get("strategy_name") or f"Strategy {strategy_id}"
+        strategy_id = event.get("strategy_id")
         mode = str(event.get("mode") or "").upper()
         kind = str(event.get("kind") or "")
         summary = _LIFECYCLE_SUMMARIES.get(
@@ -299,10 +302,17 @@ class WhatsAppAlertService:
                 "%d %b %Y, %H:%M:%S IST"
             )
 
-        lines = [
-            "Strategy lifecycle update",
-            f"Strategy: {strategy_name} (#{strategy_id})",
-        ]
+        if strategy_id is None:
+            lines = [
+                "Automation lifecycle update",
+                f"Account: {event.get('user_id') or 'unknown'}",
+            ]
+        else:
+            strategy_name = event.get("strategy_name") or f"Strategy {strategy_id}"
+            lines = [
+                "Strategy lifecycle update",
+                f"Strategy: {strategy_name} (#{strategy_id})",
+            ]
         if mode:
             lines.append(f"Mode: {mode}")
         lines.extend([f"Event: {summary}", f"Time: {timestamp_text}"])

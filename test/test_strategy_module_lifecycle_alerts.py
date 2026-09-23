@@ -31,7 +31,11 @@ class _CapturingExecutor:
     "kind",
     [
         "run_started",
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
         "live_authorization_required",
+        "portfolio_governor_admitted",
         "portfolio_governor_rejected",
         "run_stopped",
         "overall_target_hit",
@@ -96,6 +100,72 @@ def test_a_routine_delta_is_audited_and_streamed_without_a_whatsapp_alert():
         assert lifecycle_events.record_and_notify(7, "owner", "pnl_delta", "10.0") is row
 
     notifier.send_strategy_lifecycle_alert.assert_not_called()
+
+
+def test_a_user_scoped_lifecycle_event_needs_no_fabricated_strategy_id():
+    """Authorization belongs to the account even when it owns no strategy."""
+    row = SimpleNamespace(id=19)
+    event = {
+        "id": 19,
+        "user_id": "owner",
+        "kind": "live_authorization_granted",
+        "message": "Authorized",
+    }
+    notifier = Mock()
+
+    with (
+        patch.object(lifecycle_events.store, "record_automation_event", return_value=row) as record,
+        patch.object(lifecycle_events.store, "automation_event_to_dict", return_value=event),
+        patch.object(lifecycle_events.broadcast, "push_user_event") as push,
+        patch.object(lifecycle_events, "alert_executor", _ImmediateExecutor()),
+        patch.object(lifecycle_events, "whatsapp_alert_service", notifier),
+    ):
+        assert (
+            lifecycle_events.record_user_and_notify(
+                "owner",
+                "live_authorization_granted",
+                "Authorized",
+                severity="info",
+            )
+            is row
+        )
+
+    record.assert_called_once_with(
+        "owner",
+        "live_authorization_granted",
+        "Authorized",
+        severity="info",
+    )
+    push.assert_called_once_with("owner", event)
+    notifier.send_strategy_lifecycle_alert.assert_called_once_with("owner", event)
+    assert "strategy_id" not in notifier.send_strategy_lifecycle_alert.call_args.args[1]
+
+
+def test_user_lifecycle_notification_failure_does_not_escape_the_producer():
+    """An alert outage cannot undo an account-level authorization transition."""
+    row = SimpleNamespace(id=20)
+    event = {
+        "id": 20,
+        "user_id": "owner",
+        "kind": "live_authorization_revoked",
+        "message": "Revoked",
+    }
+    notifier = Mock()
+    notifier.send_strategy_lifecycle_alert.side_effect = RuntimeError("WhatsApp unavailable")
+
+    with (
+        patch.object(lifecycle_events.store, "record_automation_event", return_value=row),
+        patch.object(lifecycle_events.store, "automation_event_to_dict", return_value=event),
+        patch.object(lifecycle_events.broadcast, "push_user_event", side_effect=RuntimeError("socket down")),
+        patch.object(lifecycle_events, "alert_executor", _ImmediateExecutor()),
+        patch.object(lifecycle_events, "whatsapp_alert_service", notifier),
+    ):
+        assert (
+            lifecycle_events.record_user_and_notify(
+                "owner", "live_authorization_revoked", "Revoked"
+            )
+            is row
+        )
 
 
 def test_recording_a_lifecycle_event_does_not_lookup_notification_context():
@@ -195,3 +265,22 @@ def test_lifecycle_whatsapp_format_has_context_without_generic_order_fields():
     assert "B-12345" not in message
     assert "SELL" not in message
     assert "50" not in message
+
+
+def test_user_lifecycle_whatsapp_format_uses_summary_and_never_raw_secrets():
+    """Account events must not need a strategy row or repeat producer detail."""
+    message = WhatsAppAlertService().format_strategy_lifecycle_alert(
+        {
+            "user_id": "owner",
+            "kind": "live_authorization_granted",
+            "message": "broker token super-secret-token was accepted",
+            "ts": "2026-09-23T09:30:00+00:00",
+        }
+    )
+
+    assert "Automation lifecycle update" in message
+    assert "Account: owner" in message
+    assert "Live automation was authorized" in message
+    assert "super-secret-token" not in message
+    assert "Strategy None" not in message
+    assert "#None" not in message
