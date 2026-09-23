@@ -23,6 +23,7 @@ from blueprints import strategy_module  # noqa: E402
 from database import strategy_module_db as store  # noqa: E402
 from database.engine_factory import create_db_engine  # noqa: E402
 from limiter import limiter  # noqa: E402
+from services.strategy_module import live_authorization as authz  # noqa: E402
 from services.strategy_module.engine import StartResult  # noqa: E402
 
 USER = "lifecycle-tester"
@@ -44,11 +45,13 @@ def isolated_store(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def empty_tables(isolated_store):
+    authz.revoke(USER)
     store.db_session.remove()
     with isolated_store.begin() as connection:
         for table in reversed(store.Base.metadata.sorted_tables):
             connection.execute(table.delete())
     yield
+    authz.revoke(USER)
     store.db_session.remove()
 
 
@@ -99,6 +102,34 @@ def _make(user=USER, name="Lifecycle", running_run_id=None):
     if running_run_id is not None:
         store.set_strategy_status(created["id"], "running", running_run_id)
     return created["id"]
+
+
+# ---------------------------------------------------------------------------
+# Live authorization
+# ---------------------------------------------------------------------------
+
+
+def test_live_authorization_requires_confirmation_and_mirrors_only_safe_state(client):
+    """The browser may display authorization state but never hold credentials."""
+    url = "/strategy/api/automation/live-authorization"
+
+    assert client.post(url, json={"confirm": False}).status_code == 400
+
+    granted = client.post(url, json={"confirm": True})
+    assert granted.status_code == 200
+    authorization = granted.get_json()["live_authorization"]
+    assert authorization["active"] is True
+    with client.session_transaction() as flask_session:
+        assert flask_session["live_authorization"] == {
+            "username": USER,
+            "session_day": authorization["session_day"],
+            "expires_at": authorization["expires_at"],
+        }
+
+    assert client.get(url).get_json()["live_authorization"]["active"] is True
+    assert client.delete(url).get_json()["live_authorization"]["active"] is False
+    with client.session_transaction() as flask_session:
+        assert "live_authorization" not in flask_session
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ import pytest
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
 from services.strategy_module import ack_reconciliation, engine, recovery, state
+from services.strategy_module import live_authorization as authz
 from services.strategy_module import scheduler as sched
 from services.strategy_module.engine import StartResult
 from services.strategy_module.order_dispatch import DispatchResult
@@ -83,6 +84,7 @@ def _purge():
 
 @pytest.fixture(autouse=True)
 def clean_slate():
+    authz.revoke(USER)
     store.init_db()
     _purge()
     # Paused: jobs are installed and dated exactly as in production, and none of
@@ -90,6 +92,7 @@ def clean_slate():
     sched.shutdown()
     sched.start(paused=True)
     yield
+    authz.revoke(USER)
     sched.shutdown()
     _purge()
 
@@ -452,7 +455,24 @@ def test_a_live_start_is_refused_and_recorded_when_live_is_not_enabled():
 def test_a_live_start_goes_ahead_once_live_is_enabled():
     sid = _make(_config(scheduler=_scheduler_config(default_mode="live")))
     store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
 
+    with patch.object(engine, "start_run", return_value=StartResult(ok=True, run_id=9)) as run:
+        sched.run_scheduled_start(sid)
+
+    run.assert_called_once_with(sid, USER, "live", trigger_source="scheduler")
+
+
+def test_a_live_start_requires_current_session_authorization():
+    sid = _make(_config(scheduler=_scheduler_config(default_mode="live")))
+    store.set_live_enabled(sid, USER, True)
+
+    with patch.object(engine, "start_run") as run:
+        sched.run_scheduled_start(sid)
+
+    run.assert_not_called()
+
+    authz.grant(USER)
     with patch.object(engine, "start_run", return_value=StartResult(ok=True, run_id=9)) as run:
         sched.run_scheduled_start(sid)
 

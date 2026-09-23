@@ -22,6 +22,7 @@ import pytest
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
 from services.strategy_module import engine, order_events, signals, state, webhook
+from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "signal_test_user"
@@ -105,6 +106,7 @@ def _legs():
 
 @pytest.fixture(autouse=True)
 def clean_slate():
+    authz.revoke(USER)
     store.db_session.remove()
     store.init_db()
 
@@ -118,6 +120,7 @@ def clean_slate():
 
     purge()
     yield
+    authz.revoke(USER)
     purge()
 
 
@@ -176,6 +179,29 @@ def _make(**overrides):
     created, error = store.create_strategy(USER, config)
     assert error is None, error
     return store.get_strategy(created["id"], USER)
+
+
+# ---------------------------------------------------------------------------
+# Live authorization
+# ---------------------------------------------------------------------------
+
+
+def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(placed):
+    """An expired live-entry gate must never strand an already open position."""
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    authz.grant(USER)
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    _fill(strategy, 1)
+
+    authz.revoke(USER)
+    blocked = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert blocked.error == "Live automation is not authorized for this trading session"
+    placed.clear()
+    exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert exited.ok is True
+    assert placed[-1]["action"] == "SELL"
 
 
 # ---------------------------------------------------------------------------

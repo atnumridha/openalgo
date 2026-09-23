@@ -59,6 +59,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from database import strategy_module_db as store
+from services.strategy_module import live_authorization
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -565,6 +566,21 @@ def run_scheduled_start(strategy_id: int) -> None:
                 payload={"trigger_source": "scheduler", "mode": mode},
             )
             return
+
+        if mode == "live":
+            allowed, error = live_authorization.require_live_entry(row.user_id)
+            if not allowed:
+                message = f"Scheduled live start refused: {error}"
+                logger.warning("%s (strategy %s)", message, strategy_id)
+                store.record_event(
+                    strategy_id,
+                    row.user_id,
+                    "live_disabled",
+                    message,
+                    severity="warn",
+                    payload={"trigger_source": "scheduler", "mode": mode},
+                )
+                return
 
         from services.strategy_module import engine
 

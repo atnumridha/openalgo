@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import blueprints.auth as auth_bp_module  # noqa: E402
 import database.auth_db as auth_db  # noqa: E402
+from services.strategy_module import live_authorization as authz  # noqa: E402
 
 
 def _app():
@@ -80,6 +81,29 @@ def test_logout_revokes_broker_token(monkeypatch):
         assert client.post("/auth/logout").status_code == 200
 
     assert revocations == [("rajandran", True)]
+
+
+def test_logout_revokes_live_automation_authorization(monkeypatch):
+    """Logout must block future automated entries before its session is cleared."""
+    username = "rajandran"
+    authz.grant(username)
+    monkeypatch.setattr(auth_bp_module, "upsert_auth", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auth_db, "clear_user_sessions", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auth_bp_module.socketio, "emit", lambda *args, **kwargs: None)
+
+    app = _app()
+    with app.test_client() as client:
+        with client.session_transaction() as session:
+            session["user"] = username
+            session["logged_in"] = True
+            session["broker"] = "dhan"
+
+        assert client.post("/auth/logout").status_code == 200
+
+    assert authz.require_live_entry(username) == (
+        False,
+        "Live automation is not authorized for this trading session",
+    )
 
 
 def test_half_logged_in_logout_leaves_the_shared_feed_alone(monkeypatch):

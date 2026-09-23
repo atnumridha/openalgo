@@ -44,6 +44,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
+from services.strategy_module import live_authorization
 from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
@@ -1109,6 +1110,26 @@ def _error(message: str, code: int, payload: dict | None = None):
     return jsonify(body), code
 
 
+def _live_authorization_response(username: str):
+    """Return current authorization and mirror only safe display data to Flask."""
+    current = live_authorization.status(username)
+    if current.active:
+        session["live_authorization"] = {
+            "username": username,
+            "session_day": current.session_day,
+            "expires_at": current.expires_at,
+        }
+    else:
+        session.pop("live_authorization", None)
+    return {
+        "live_authorization": {
+            "active": current.active,
+            "session_day": current.session_day,
+            "expires_at": current.expires_at,
+        }
+    }
+
+
 def _store_error(message: str | None):
     """Map a store message to a status code.
 
@@ -1369,6 +1390,46 @@ def delete_strategy(sid):
 # ---------------------------------------------------------------------------
 # Webhook token, live mode, kill switch
 # ---------------------------------------------------------------------------
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_live_authorization():
+    """Show whether the current browser user may open automated live entries."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    return _ok(_live_authorization_response(username))
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["POST"])
+@check_session_validity
+@_api_limit
+def grant_live_authorization():
+    """Grant current-session live-entry authorization after explicit confirmation."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    payload, error = _json_body()
+    if error:
+        return error
+    if payload != {"confirm": True}:
+        return _error("confirm must be true", 400)
+    live_authorization.grant(username)
+    return _ok(_live_authorization_response(username))
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def revoke_live_authorization():
+    """Revoke current-session live-entry authorization without affecting exits."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    live_authorization.revoke(username)
+    return _ok(_live_authorization_response(username))
 
 
 @strategy_module_bp.route("/api/strategies/<int:sid>/webhook/rotate", methods=["POST"])

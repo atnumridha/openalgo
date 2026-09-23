@@ -30,7 +30,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, risk_adapter, session, state
+from services.strategy_module import (
+    live_authorization,
+    order_dispatch,
+    risk_adapter,
+    session,
+    state,
+)
 from services.strategy_module.audit_messages import leg_close_requested_message
 from services.strategy_module.symbol_resolver import resolve_leg
 from utils.logging import get_logger
@@ -288,6 +294,11 @@ def start_run(
         return StartResult(ok=False, error=failures[0]["error"], legs=failures)
     for leg in resolved:
         leg["position_ref"] = state.new_position_ref()
+
+    if mode == "live":
+        allowed, error = live_authorization.require_live_entry(user_id)
+        if not allowed:
+            return StartResult(ok=False, error=error)
 
     # One conditional UPDATE, not a read then a write. The UI, the scheduler
     # and a webhook can all fire at the same instant.

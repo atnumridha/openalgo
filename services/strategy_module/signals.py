@@ -42,7 +42,7 @@ from typing import Any
 import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, session, state
+from services.strategy_module import live_authorization, order_dispatch, session, state
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -400,6 +400,15 @@ def handle_signal(
                 leg_id=resolved_leg_id,
                 run_id=run_id,
             )
+        if strategy.live_enabled:
+            allowed, error = live_authorization.require_live_entry(strategy.user_id)
+            if not allowed:
+                return SignalResult(
+                    ok=False,
+                    leg_id=resolved_leg_id,
+                    run_id=run_id,
+                    error=error,
+                )
         return _enter(strategy, run_id, leg, side)
     return _exit(strategy, run_id, leg, side)
 
