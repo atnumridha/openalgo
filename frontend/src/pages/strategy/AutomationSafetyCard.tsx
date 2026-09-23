@@ -1,0 +1,386 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { Link } from 'react-router'
+import {
+  getLiveAuthorization,
+  grantLiveAuthorization,
+  installStarterPack,
+  revokeLiveAuthorization,
+  strategyQueryKeys,
+} from '@/api/strategy_module'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
+import type { LiveAuthorizationStatus, StarterPackInstallResult, StrategySummary } from '@/types/strategy_module'
+
+const GOVERNOR_LIMITS = [
+  'Maximum two simultaneous cash positions',
+  'Maximum one simultaneous NIFTY options position',
+  'Maximum 4% combined configured open risk of available cash',
+  'Maximum 1.5% configured cash risk per trade',
+  'Maximum 3% configured long-option risk per minimum lot',
+  'At least 20% of available cash remains as a buffer',
+  'Protective risk and a reward-to-risk target of at least 1.5 are required',
+  '4% daily module loss or three stopped runs blocks new entries',
+  'Two stopped runs trigger a 30-minute entry cooldown',
+  'Intraday entries: 09:20–15:00 IST; option entries stop at 14:45 IST',
+]
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+function formatExpiry(expiresAt: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(expiresAt))
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? ''
+  return `${value('day')} ${value('month')} ${value('year')}, ${value('hour')}:${value('minute')} IST`
+}
+
+function StrategyLinks({
+  id,
+  title,
+  strategies,
+}: {
+  id: string
+  title: string
+  strategies: StrategySummary[]
+}) {
+  if (strategies.length === 0) return null
+  return (
+    <section aria-labelledby={id} className="space-y-2">
+      <h3 id={id} className="text-sm font-medium">
+        {title}
+      </h3>
+      <ul className="space-y-1 text-sm">
+        {strategies.map((strategy) => (
+          <li key={strategy.id}>
+            <Link
+              to={`/strategy/${strategy.id}`}
+              className="rounded-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {strategy.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+export default function AutomationSafetyCard() {
+  const queryClient = useQueryClient()
+  const [confirming, setConfirming] = useState<'grant' | 'revoke' | 'install' | null>(null)
+  const [result, setResult] = useState<StarterPackInstallResult | null>(null)
+  const [statusMessage, setStatusMessage] = useState('')
+
+  const authorizationQuery = useQuery({
+    queryKey: strategyQueryKeys.liveAuthorization(),
+    queryFn: getLiveAuthorization,
+    staleTime: 30_000,
+  })
+  const authorization = authorizationQuery.data
+
+  const applyAuthorization = (next: LiveAuthorizationStatus, message: string) => {
+    queryClient.setQueryData(strategyQueryKeys.liveAuthorization(), next)
+    setStatusMessage(message)
+    setConfirming(null)
+  }
+
+  const grantMutation = useMutation({
+    mutationFn: grantLiveAuthorization,
+    onSuccess: (next) => applyAuthorization(next, 'Live authorization granted for this session.'),
+    onError: (error) => setStatusMessage(errorMessage(error, 'Could not authorize live automation.')),
+  })
+
+  const revokeMutation = useMutation({
+    mutationFn: revokeLiveAuthorization,
+    onSuccess: (next) => applyAuthorization(next, 'Live authorization revoked.'),
+    onError: (error) => setStatusMessage(errorMessage(error, 'Could not revoke live authorization.')),
+  })
+
+  const installMutation = useMutation({
+    mutationFn: installStarterPack,
+    onSuccess: (next) => {
+      setResult(next)
+      setStatusMessage(
+        next.created.length > 0
+          ? 'Recommended starter pack installed. Review the created strategies below.'
+          : 'Recommended starter pack is already installed.'
+      )
+      queryClient.invalidateQueries({ queryKey: strategyQueryKeys.strategies() })
+      setConfirming(null)
+    },
+    onError: (error) => setStatusMessage(errorMessage(error, 'Could not install the starter pack.')),
+  })
+
+  const isMutating = grantMutation.isPending || revokeMutation.isPending || installMutation.isPending
+  const authActive = authorization?.active === true
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-lg leading-none font-semibold">Automation safety controls</h2>
+            <CardDescription>
+              Sandbox strategies can run without this authorization. New automated live entries
+              must pass every gate below.
+            </CardDescription>
+          </div>
+          <Badge variant={authActive ? 'default' : 'secondary'} className="w-fit">
+            {authActive ? 'Session authorization active' : 'Sandbox only'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <section aria-labelledby="live-authorization-heading" className="rounded-lg border bg-muted/30 p-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <h3 id="live-authorization-heading" className="font-medium">
+                {authorizationQuery.isLoading
+                  ? 'Checking live automation authorization…'
+                  : authActive
+                    ? 'Live automation authorized for this session'
+                    : 'Live automation authorization is inactive'}
+              </h3>
+              {authorization ? (
+                <p className="text-sm text-muted-foreground">
+                  Expires: {formatExpiry(authorization.expires_at)}
+                </p>
+              ) : authorizationQuery.error ? (
+                <p className="text-sm text-destructive">Could not load authorization status.</p>
+              ) : null}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11"
+                disabled={authorizationQuery.isFetching || isMutating}
+                onClick={() => void authorizationQuery.refetch()}
+              >
+                Refresh status
+              </Button>
+              {authActive ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="min-h-11"
+                  disabled={isMutating}
+                  onClick={() => setConfirming('revoke')}
+                >
+                  Revoke authorization
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  className="min-h-11"
+                  disabled={!authorization || isMutating}
+                  onClick={() => setConfirming('grant')}
+                >
+                  Authorize live automation
+                </Button>
+              )}
+            </div>
+          </div>
+          <p className="mt-3 text-sm text-muted-foreground">
+            Each strategy must also be individually live-enabled.
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Revoking authorization blocks new live entries; existing stops, targets, and exits
+            remain allowed.
+          </p>
+        </section>
+
+        <section aria-labelledby="governor-heading" className="space-y-3">
+          <div>
+            <h3 id="governor-heading" className="font-medium">
+              Portfolio governor defaults
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              These limits apply to Strategy Module live automation before a new entry is sent.
+              Sandbox runs are unaffected.
+            </p>
+          </div>
+          <ul className="grid gap-2 text-sm sm:grid-cols-2">
+            {GOVERNOR_LIMITS.map((limit) => (
+              <li key={limit} className="rounded-md border bg-background px-3 py-2">
+                {limit}
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        <section aria-labelledby="starter-pack-heading" className="rounded-lg border border-dashed p-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <h3 id="starter-pack-heading" className="font-medium">
+                Recommended sandbox starter pack
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Six stopped, sandbox-only templates for deterministic Flow or Agent signal producers.
+              </p>
+              <p className="text-sm font-medium">Installing does not start trading.</p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="min-h-11"
+              disabled={isMutating}
+              onClick={() => setConfirming('install')}
+            >
+              Install recommended starter pack
+            </Button>
+          </div>
+        </section>
+
+        <section aria-labelledby="next-steps-heading" className="space-y-2">
+          <h3 id="next-steps-heading" className="font-medium">
+            Safe next steps
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Use the Agent to draft a Flow, then review and activate that Flow separately after
+            testing your strategies in sandbox mode.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button asChild variant="outline" className="min-h-11">
+              <Link to="/agent">Open Agent</Link>
+            </Button>
+            <Button asChild variant="outline" className="min-h-11">
+              <Link to="/flow">Review Flows</Link>
+            </Button>
+          </div>
+        </section>
+
+        {result ? (
+          <section aria-labelledby="starter-pack-results-heading" className="space-y-4 rounded-lg bg-muted/30 p-4">
+            <h3 id="starter-pack-results-heading" className="font-medium">
+              Starter pack results
+            </h3>
+            <StrategyLinks id="created-strategies" title="Created strategies" strategies={result.created} />
+            <StrategyLinks id="existing-strategies" title="Existing strategies" strategies={result.existing} />
+            {Object.entries(result.webhook_tokens).length > 0 ? (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">New webhook tokens — copy now</h4>
+                {Object.entries(result.webhook_tokens).map(([name, token]) => (
+                  <p key={name} className="rounded-md border bg-background p-2 text-sm">
+                    <span className="font-medium">{name}: </span>
+                    <code className="break-all">{token}</code>
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        <output aria-live="polite" className="block min-h-5 text-sm text-muted-foreground">
+          {statusMessage}
+        </output>
+      </CardContent>
+
+      <AlertDialog open={confirming === 'grant'} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Authorize live automation for this session?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permits new automated live entries only for the current trading session. Every
+              strategy still needs its own live-enabled setting and governor approval.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="min-h-11" disabled={grantMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              className="min-h-11"
+              disabled={grantMutation.isPending}
+              onClick={() => grantMutation.mutate()}
+            >
+              {grantMutation.isPending ? 'Authorizing…' : 'Authorize for this session'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirming === 'revoke'} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Revoke live automation authorization?</AlertDialogTitle>
+            <AlertDialogDescription>
+              New automated live entries will be blocked for this session. Existing exits, stops,
+              and protective behavior remain allowed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="min-h-11" disabled={revokeMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              variant="destructive"
+              className="min-h-11"
+              disabled={revokeMutation.isPending}
+              onClick={() => revokeMutation.mutate()}
+            >
+              {revokeMutation.isPending ? 'Revoking…' : 'Revoke authorization'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirming === 'install'} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Review recommended starter pack</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Every installed strategy is stopped, sandbox-only, live-disabled, and
+                  unscheduled.
+                </p>
+                <p>Installing does not start trading.</p>
+                <p>
+                  You can delete these strategies later through the existing strategy controls.
+                  Their signal producers remain separately reviewed and activated.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="min-h-11" disabled={installMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              className="min-h-11"
+              disabled={installMutation.isPending}
+              onClick={() => installMutation.mutate()}
+            >
+              {installMutation.isPending ? 'Installing…' : 'Install sandbox starter pack'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
+  )
+}

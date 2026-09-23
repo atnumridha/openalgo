@@ -39,6 +39,7 @@ import {
   universeTabLabel,
 } from '@/types/strategy_module'
 import { showToast } from '@/utils/toast'
+import AutomationSafetyCard from './AutomationSafetyCard'
 
 function statusBadgeVariant(
   status: StrategyStatus
@@ -93,6 +94,8 @@ export default function StrategyList() {
         </div>
         <Button onClick={() => navigate('/strategy/new')}>+ New strategy</Button>
       </div>
+
+      <AutomationSafetyCard />
 
       <Card>
         <CardHeader>

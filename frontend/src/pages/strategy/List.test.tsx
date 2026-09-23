@@ -95,6 +95,34 @@ beforeEach(() => {
 })
 
 describe('strategy list P&L', () => {
+  it('places automation safety controls above saved strategies', async () => {
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies') {
+        return Promise.resolve({ data: { data: [] } })
+      }
+      if (url === '/strategy/api/automation/live-authorization') {
+        return Promise.resolve({
+          data: {
+            live_authorization: {
+              active: false,
+              session_day: '2026-09-23',
+              expires_at: '2026-09-23T15:30:00+05:30',
+            },
+          },
+        })
+      }
+      return Promise.reject(new Error(`Unexpected GET ${url}`))
+    })
+
+    renderList()
+
+    const safetyHeading = await screen.findByRole('heading', {
+      name: 'Automation safety controls',
+    })
+    const savedStrategies = screen.getByText('Saved strategies')
+    expect(safetyHeading.compareDocumentPosition(savedStrategies) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('uses a stopped run’s finalized P&L instead of its stale live checkpoint', async () => {
     rest.get.mockImplementation((url: string) => {
       if (url === '/strategy/api/strategies') {

@@ -207,6 +207,21 @@ export interface StrategySummary {
   last_finalized_run?: FinalizedRunSummary | null
 }
 
+/** Current-session gate for opening automated live entries. */
+export interface LiveAuthorizationStatus {
+  active: boolean
+  session_day: string
+  expires_at: string
+}
+
+/** Idempotent sandbox starter-pack installation response. */
+export interface StarterPackInstallResult {
+  created: StrategySummary[]
+  existing: StrategySummary[]
+  /** One-time tokens, present only for strategies created by this install. */
+  webhook_tokens: Record<string, string>
+}
+
 /** A strategy as the detail endpoint returns it. */
 export interface Strategy extends StrategySummary {
   legs: Leg[]

@@ -24,6 +24,7 @@ import type {
   Checkpoint,
   LegPosition,
   LegState,
+  LiveAuthorizationStatus,
   Order,
   ReconciledBrokerOrder,
   ReconciledBrokerTrade,
@@ -35,6 +36,7 @@ import type {
   StrategyStatus,
   StrategySummary,
   StrategyUpdatePayload,
+  StarterPackInstallResult,
   WebhookEvent,
 } from '@/types/strategy_module'
 import { derivativeExchangeFor, type ExpiryRank, resolveExpiryRank } from '@/types/strategy_module'
@@ -57,6 +59,7 @@ export const strategyQueryKeys = {
   events: (id: number) => [...strategyQueryKeys.strategy(id), 'events'] as const,
   webhookEvents: (id: number) => [...strategyQueryKeys.strategy(id), 'webhook-events'] as const,
   checkpoints: (id: number) => [...strategyQueryKeys.strategy(id), 'checkpoints'] as const,
+  liveAuthorization: () => [...strategyQueryKeys.all, 'automation', 'live-authorization'] as const,
   // The broker's own books, narrowed to this strategy. Keyed separately from
   // the local order rows because they answer a different question: what the
   // broker says happened, rather than what the engine asked for.
@@ -106,6 +109,33 @@ export async function listStrategies(
     params: filters,
   })
   return response.data.data ?? []
+}
+
+export async function getLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.get<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`
+  )
+  return response.data.live_authorization
+}
+
+export async function grantLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.post<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`,
+    { confirm: true }
+  )
+  return response.data.live_authorization
+}
+
+export async function revokeLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.delete<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`
+  )
+  return response.data.live_authorization
+}
+
+export async function installStarterPack(): Promise<StarterPackInstallResult> {
+  const response = await webClient.post<StarterPackInstallResult>(`${BASE}/automation/starter-pack`)
+  return response.data
 }
 
 export async function getStrategy(id: number): Promise<Strategy> {
