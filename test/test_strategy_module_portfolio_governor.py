@@ -257,6 +257,24 @@ def _cash_leg(**overrides):
     return value
 
 
+def _option_leg(**overrides):
+    value = {
+        "leg_id": 1,
+        "position": "B",
+        "symbol": "NIFTY28MAY2624000CE",
+        "exchange": "NFO",
+        "segment": "options",
+        "underlying": "NIFTY",
+        "quantity": 75,
+        "lot_size": 75,
+        "sl_pts": 10,
+        "target_pts": 20,
+        "risk_unit": "points",
+    }
+    value.update(overrides)
+    return value
+
+
 def _broker_facts(monkeypatch, *, funds, positions, quote=None, runs=None):
     from database import auth_db, strategy_module_db
     from services import funds_service, positionbook_service, quotes_service
@@ -534,3 +552,332 @@ def test_rejected_admission_releases_the_user_gate(monkeypatch):
     assert allowed.allowed is True
     assert admission is not None
     admission.release()
+
+
+def test_pending_accepted_entry_is_reserved_against_unchanged_broker_facts(monkeypatch):
+    unchanged = facts(
+        entry_cash_positions=0,
+        entry_nifty_option_positions=1,
+        entry_cash_risk=Decimal("0"),
+        entry_option_lot_risk=Decimal("750"),
+        entry_risk=Decimal("750"),
+        estimated_debit=Decimal("7500"),
+        has_option_entry=True,
+    )
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "pending-position-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(41, [{"leg_id": 1, "position_ref": "pending-option"}])
+    admission.release()
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "pending-position-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is False
+    assert second.code == "position_limit"
+    assert second_admission is None
+
+
+def test_pending_reservation_adds_configured_risk(monkeypatch):
+    unchanged = facts(
+        open_risk=Decimal("2000"),
+        entry_cash_risk=Decimal("1400"),
+        entry_risk=Decimal("1400"),
+        estimated_debit=Decimal("1000"),
+    )
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "pending-risk-user", {}, [_cash_leg(sl_pts=28)], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(42, [{"leg_id": 1, "position_ref": "pending-risk"}])
+    admission.release()
+
+    second, _ = portfolio_governor.acquire_entry_admission(
+        "pending-risk-user", {}, [_cash_leg(sl_pts=28)], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is False
+    assert second.code == "combined_open_risk"
+    assert second.metrics["open_risk"] == Decimal("3400")
+
+
+def test_pending_reservation_adds_estimated_debit(monkeypatch):
+    unchanged = facts(
+        entry_cash_risk=Decimal("500"),
+        entry_risk=Decimal("500"),
+        estimated_debit=Decimal("45000"),
+    )
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "pending-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(43, [{"leg_id": 1, "position_ref": "pending-debit"}])
+    admission.release()
+
+    second, _ = portfolio_governor.acquire_entry_admission(
+        "pending-debit-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is False
+    assert second.code == "cash_buffer"
+    assert second.metrics["estimated_debit"] == Decimal("90000")
+
+
+def test_broker_visible_exposure_reconciles_its_pending_reservation(monkeypatch):
+    first_facts = facts(
+        broker_quantities=(("NSE", "RELIANCE", Decimal("0")),),
+    )
+    visible_facts = facts(
+        open_cash_positions=1,
+        broker_quantities=(("NSE", "RELIANCE", Decimal("50")),),
+    )
+    attempts = iter([first_facts, visible_facts])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "visible-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(44, [{"leg_id": 1, "position_ref": "visible-entry"}])
+    admission.release()
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "visible-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_terminal_rejection_reconciles_its_pending_reservation(monkeypatch):
+    from services.strategy_module import state
+
+    unchanged = facts()
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "terminal-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(45, [{"leg_id": 1, "position_ref": "terminal-entry"}])
+    admission.release()
+    monkeypatch.setattr(
+        state,
+        "get_run_state",
+        lambda _run_id: {
+            "legs": {
+                "1": {
+                    "position_ref": "terminal-entry",
+                    "status": "rejected",
+                    "entry_status": "rejected",
+                }
+            }
+        },
+    )
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "terminal-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_terminal_cancellation_reconciles_after_run_state_is_gone(monkeypatch):
+    from database import strategy_module_db
+    from services.strategy_module import state
+
+    unchanged = facts(
+        entry_cash_positions=0,
+        entry_nifty_option_positions=1,
+        entry_cash_risk=Decimal("0"),
+        entry_option_lot_risk=Decimal("750"),
+        entry_risk=Decimal("750"),
+        estimated_debit=Decimal("7500"),
+        has_option_entry=True,
+    )
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "cancelled-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(
+        46,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": "cancelled-entry",
+                "entry_order_id": 9001,
+            }
+        ],
+    )
+    admission.release()
+    monkeypatch.setattr(state, "get_run_state", lambda _run_id: None)
+    monkeypatch.setattr(
+        strategy_module_db,
+        "get_order",
+        lambda order_id: SimpleNamespace(status="cancelled") if order_id == 9001 else None,
+    )
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "cancelled-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_terminal_entry_hook_releases_reservation_immediately(monkeypatch):
+    unchanged = facts(
+        entry_cash_positions=0,
+        entry_nifty_option_positions=1,
+        entry_cash_risk=Decimal("0"),
+        entry_option_lot_risk=Decimal("750"),
+        entry_risk=Decimal("750"),
+        estimated_debit=Decimal("7500"),
+        has_option_entry=True,
+    )
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *_a, **_k: unchanged)
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "terminal-hook-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(
+        47,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": "terminal-hook-entry",
+                "entry_order_id": 9002,
+            }
+        ],
+    )
+    admission.release()
+
+    portfolio_governor.release_terminal_entry_reservation(9002)
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "terminal-hook-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is True
+    assert second_admission is not None
+    second_admission.release()
+
+
+def test_partial_terminal_entry_keeps_reservation_until_exposure_is_visible(monkeypatch):
+    from database import strategy_module_db
+    from services.strategy_module import state
+
+    unchanged = facts(
+        entry_cash_positions=0,
+        entry_nifty_option_positions=1,
+        entry_cash_risk=Decimal("0"),
+        entry_option_lot_risk=Decimal("750"),
+        entry_risk=Decimal("750"),
+        estimated_debit=Decimal("7500"),
+        has_option_entry=True,
+    )
+    visible = replace(
+        unchanged,
+        open_nifty_option_positions=1,
+        broker_quantities=(("NFO", "NIFTY28MAY2624000CE", Decimal("25")),),
+    )
+    attempts = iter([unchanged, unchanged, visible])
+    monkeypatch.setattr(
+        portfolio_governor, "build_entry_facts", lambda *_a, **_k: next(attempts)
+    )
+    first, admission = portfolio_governor.acquire_entry_admission(
+        "partial-terminal-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    admission.commit(
+        48,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": "partial-terminal-entry",
+                "entry_order_id": 9003,
+            }
+        ],
+    )
+    admission.release()
+    monkeypatch.setattr(state, "get_run_state", lambda _run_id: None)
+    monkeypatch.setattr(
+        strategy_module_db,
+        "get_order",
+        lambda order_id: (
+            SimpleNamespace(status="cancelled", filled_qty=25)
+            if order_id == 9003
+            else None
+        ),
+    )
+
+    second, second_admission = portfolio_governor.acquire_entry_admission(
+        "partial-terminal-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert second.allowed is False
+    assert second.code == "position_limit"
+    assert second_admission is None
+
+    reflected, reflected_admission = portfolio_governor.acquire_entry_admission(
+        "partial-terminal-user", {}, [_option_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+
+    assert reflected.allowed is False
+    assert reflected.code == "position_limit"
+    assert reflected.metrics["open_nifty_option_positions"] == 1
+    assert reflected_admission is None
+
+
+def test_live_authorization_is_rechecked_after_waiting_for_user_admission(monkeypatch):
+    unchanged = facts()
+    builds = []
+    monkeypatch.setattr(
+        portfolio_governor,
+        "build_entry_facts",
+        lambda *_a, **_k: builds.append("built") or unchanged,
+    )
+    first, first_admission = portfolio_governor.acquire_entry_admission(
+        "revoked-user", {}, [_cash_leg()], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first.allowed is True
+    started = Event()
+
+    def wait_then_recheck():
+        started.set()
+        return portfolio_governor.acquire_entry_admission(
+            "revoked-user",
+            {},
+            [_cash_leg()],
+            "key",
+            "live",
+            DEFAULT_POLICY,
+            NOW,
+            authorization_check=lambda: (False, "Live authorization expired while waiting"),
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(wait_then_recheck)
+        assert started.wait(timeout=1)
+        first_admission.release()
+        decision, admission = pending.result(timeout=1)
+
+    assert decision.allowed is False
+    assert decision.code == "live_authorization_required"
+    assert decision.message == "Live authorization expired while waiting"
+    assert admission is None
+    assert builds == ["built"]

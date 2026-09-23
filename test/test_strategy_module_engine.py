@@ -1408,12 +1408,13 @@ def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key)
     sid = _make()
     store.set_live_enabled(sid, USER, True)
     authz.grant(USER)
-    admission = SimpleNamespace(released=False)
+    admission = SimpleNamespace(released=False, committed=False)
 
     def release():
         admission.released = True
 
     admission.release = release
+    admission.commit = lambda *_a, **_k: setattr(admission, "committed", True)
 
     def accept_while_admitted(**_kwargs):
         assert admission.released is False
@@ -1446,6 +1447,7 @@ def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key)
 
     assert result.ok is True
     acquire.assert_called_once()
+    assert admission.committed is True
     assert admission.released is True
     snapshot = state.get_run_state(result.run_id)
     assert snapshot["legs"]["1"]["status"] == "open"
@@ -1487,3 +1489,81 @@ def test_live_batch_releases_portfolio_admission_when_strategy_claim_is_refused(
     assert result.ok is False
     assert "already running" in result.error
     assert admission.released is True
+
+
+def test_live_batch_pending_entry_reserves_position_during_broker_lag(api_key, monkeypatch):
+    from database import auth_db
+    from services import funds_service, positionbook_service
+
+    configured_leg = dict(_config()["legs"][0], target_pts=40)
+    first = _make(_config(name="First", legs=[configured_leg]))
+    second = _make(_config(name="Second", legs=[configured_leg]))
+    for strategy_id in (first, second):
+        store.set_live_enabled(strategy_id, USER, True)
+    authz.grant(USER)
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "broker"))
+    monkeypatch.setattr(
+        funds_service,
+        "get_funds",
+        lambda **_kw: (True, {"data": {"availablecash": "100000"}}, 200),
+    )
+    monkeypatch.setattr(
+        positionbook_service,
+        "get_positionbook",
+        lambda **_kw: (True, {"data": []}, 200),
+    )
+
+    try:
+        fixed_now = portfolio_governor.IST.localize(
+            portfolio_governor.datetime(2026, 9, 23, 10, 0)
+        )
+        with (
+            patch.object(engine, "_subscribe_run"),
+            patch.object(engine, "datetime", SimpleNamespace(now=lambda _tz: fixed_now)),
+        ):
+            accepted = _start(first, mode="live")
+            refused = _start(second, mode="live")
+    finally:
+        authz.revoke(USER)
+
+    assert accepted.ok is True
+    assert refused.ok is False
+    assert refused.error == "The portfolio position limit is reached"
+    assert store.list_runs(second) == []
+
+
+def test_live_batch_rechecks_authorization_inside_portfolio_admission(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    dispatches = []
+    expired = "Live automation authorization expired while waiting"
+
+    with (
+        patch.object(
+            authz,
+            "require_live_entry",
+            side_effect=[(True, None), (False, expired)],
+        ) as authorize,
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
+    ):
+        result = _start(
+            sid,
+            mode="live",
+            dispatch=lambda **kw: dispatches.append(kw)
+            or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={}),
+        )
+
+    assert authorize.call_count == 2
+    assert result.ok is False
+    assert result.error == expired
+    assert dispatches == []
+    assert store.list_runs(sid) == []

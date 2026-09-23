@@ -626,6 +626,9 @@ def _apply_update(order_id: str, event: Any) -> None:
                     if owns_entry and leg.get("entry_status") != "complete":
                         leg["entry_status"] = ended
                         leg["status"] = "rejected"
+                from services.strategy_module import portfolio_governor
+
+                portfolio_governor.release_terminal_entry_reservation(row_id)
                 engine.reconcile_pending_stop(run_id)
             elif not is_entry:
                 if not should_apply:

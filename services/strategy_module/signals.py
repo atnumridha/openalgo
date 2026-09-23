@@ -469,8 +469,23 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         mode,
         portfolio_governor.GovernorPolicy(),
         datetime.now(portfolio_governor.IST),
+        authorization_check=(
+            (lambda: live_authorization.require_live_entry(str(strategy.user_id)))
+            if mode == "live"
+            else None
+        ),
     )
     if not governor_decision.allowed:
+        if governor_decision.code == "live_authorization_required":
+            from services.strategy_module import engine
+
+            engine.reconcile_pending_stop(run_id)
+            return SignalResult(
+                ok=False,
+                leg_id=leg_id,
+                run_id=run_id,
+                error=governor_decision.message,
+            )
         event = store.record_event(
             int(strategy.id),
             str(strategy.user_id),
@@ -499,7 +514,22 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         )
 
     try:
-        return _enter_admitted(strategy, run_id, leg, side, leg_id, resolved)
+        result = _enter_admitted(strategy, run_id, leg, side, leg_id, resolved)
+        if admission is not None and result.ok and result.note is None:
+            snapshot = state.get_run_state(run_id) or {}
+            live_leg = (snapshot.get("legs") or {}).get(str(leg_id)) or {}
+            if str(live_leg.get("status")) not in {"rejected", "cancelled"}:
+                admission.commit(
+                    run_id,
+                    [
+                        {
+                            "leg_id": leg_id,
+                            "position_ref": resolved.get("position_ref"),
+                            "entry_order_id": live_leg.get("entry_order_id"),
+                        }
+                    ],
+                )
+        return result
     finally:
         if admission is not None:
             admission.release()

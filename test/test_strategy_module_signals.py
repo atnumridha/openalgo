@@ -1217,8 +1217,9 @@ def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
     store.set_live_enabled(strategy.id, USER, True)
     strategy = store.get_strategy(strategy.id, USER)
     authz.grant(USER)
-    admission = SimpleNamespace(released=False)
+    admission = SimpleNamespace(released=False, committed=False)
     admission.release = lambda: setattr(admission, "released", True)
+    admission.commit = lambda *_a, **_k: setattr(admission, "committed", True)
 
     def accept_while_admitted(**_kwargs):
         assert admission.released is False
@@ -1254,6 +1255,7 @@ def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
 
     assert result.ok is True
     acquire.assert_called_once()
+    assert admission.committed is True
     assert admission.released is True
     snapshot = state.get_run_state(result.run_id)
     assert snapshot["legs"]["1"]["status"] == "open"
@@ -1298,3 +1300,97 @@ def test_live_signal_releases_portfolio_admission_when_entry_claim_is_refused():
     assert result.ok is False
     assert result.error == "No active run"
     assert admission.released is True
+
+
+def test_live_signal_pending_entries_reserve_positions_during_broker_lag(monkeypatch):
+    from database import auth_db
+    from services import funds_service, positionbook_service, quotes_service
+
+    strategies = [
+        _make(name=f"Signal reservation {index}", legs=[dict(_legs()[0], sl_pts=5, target_pts=10)])
+        for index in range(3)
+    ]
+    for strategy in strategies:
+        store.set_live_enabled(strategy.id, USER, True)
+    strategies = [store.get_strategy(strategy.id, USER) for strategy in strategies]
+    authz.grant(USER)
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "broker"))
+    monkeypatch.setattr(
+        funds_service,
+        "get_funds",
+        lambda **_kw: (True, {"data": {"availablecash": "100000"}}, 200),
+    )
+    monkeypatch.setattr(
+        positionbook_service,
+        "get_positionbook",
+        lambda **_kw: (True, {"data": []}, 200),
+    )
+    monkeypatch.setattr(
+        quotes_service,
+        "get_quotes",
+        lambda *_a, **_kw: (True, {"data": {"ask": "100", "ltp": "100"}}, 200),
+    )
+
+    placed = []
+
+    def accept(**kwargs):
+        placed.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id=f"LIVE-{len(placed)}", response={})
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(signals.order_dispatch, "dispatch_order", side_effect=accept),
+        ):
+            first = signals.handle_signal(strategies[0], "long_entry", leg_id=1)
+            second = signals.handle_signal(strategies[1], "long_entry", leg_id=1)
+            third = signals.handle_signal(strategies[2], "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert third.ok is False
+    assert third.error == "The portfolio position limit is reached"
+    assert len(placed) == 2
+
+
+def test_live_signal_rechecks_authorization_inside_portfolio_admission():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    expired = "Live automation authorization expired while waiting"
+    placed = []
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(
+            authz,
+            "require_live_entry",
+            side_effect=[(True, None), (False, expired)],
+        ) as authorize,
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            side_effect=lambda **kw: placed.append(kw)
+            or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={}),
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert authorize.call_count == 2
+    assert result.ok is False
+    assert result.error == expired
+    assert placed == []

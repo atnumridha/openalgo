@@ -310,8 +310,15 @@ def start_run(
         mode,
         portfolio_governor.GovernorPolicy(),
         datetime.now(portfolio_governor.IST),
+        authorization_check=(
+            (lambda: live_authorization.require_live_entry(user_id))
+            if mode == "live"
+            else None
+        ),
     )
     if not governor_decision.allowed:
+        if governor_decision.code == "live_authorization_required":
+            return StartResult(ok=False, error=governor_decision.message)
         _emit(
             strategy_id,
             user_id,
@@ -392,6 +399,26 @@ def start_run(
             user_id,
             placement_progress=placement_progress,
         )
+        if admission is not None:
+            resolved_by_id = {str(leg["leg_id"]): leg for leg in resolved}
+            snapshot = state.get_run_state(run_id) or {}
+            live_legs = snapshot.get("legs") or {}
+            admission.commit(
+                run_id,
+                [
+                    {
+                        "leg_id": outcome["leg_id"],
+                        "position_ref": resolved_by_id[str(outcome["leg_id"])].get(
+                            "position_ref"
+                        ),
+                        "entry_order_id": outcome.get("entry_order_id"),
+                    }
+                    for outcome in placed
+                    if outcome["ok"]
+                    and str((live_legs.get(str(outcome["leg_id"])) or {}).get("status"))
+                    not in {"rejected", "cancelled"}
+                ],
+            )
 
         # Every leg rejected means there is no position and nothing to manage.
         # Leaving the run open would show a running strategy holding nothing.
@@ -845,6 +872,7 @@ def _place_entries(
                 "leg_id": leg["leg_id"],
                 "ok": result.ok,
                 "symbol": leg["symbol"],
+                "entry_order_id": row_id,
                 "broker_order_id": result.broker_order_id,
                 "error": result.error,
                 # False when the broker accepted the order but its

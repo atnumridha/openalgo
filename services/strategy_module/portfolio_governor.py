@@ -7,18 +7,20 @@ payload, while exits and sandbox orders bypass live-entry policy entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta
 from decimal import Decimal
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
-_admission_registry_lock = Lock()
+_admission_registry_lock = RLock()
 _admission_locks: dict[str, Lock] = {}
+_entry_reservations: dict[str, list[_EntryReservation]] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +58,12 @@ class EntryFacts:
     last_stopped_at: datetime | None = None
     has_option_entry: bool = False
     intraday: bool = True
+    reservation_components: tuple[ReservationComponent, ...] = field(
+        default=(), repr=False, compare=False
+    )
+    broker_quantities: tuple[tuple[str, str, Decimal], ...] = field(
+        default=(), repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,18 +91,66 @@ class GovernorDecision:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ReservationComponent:
+    """One admitted leg's facts kept until broker/state reconciliation."""
+
+    leg_id: Any
+    cash_positions: int
+    nifty_option_positions: int
+    configured_risk: Decimal
+    estimated_debit: Decimal
+    exchange: str
+    symbol: str
+    quantity_delta: Decimal
+    baseline_quantity: Decimal
+    run_id: int | None = None
+    position_ref: str | None = None
+    entry_order_id: int | None = None
+
+
+@dataclass(slots=True)
+class _EntryReservation:
+    user_id: str
+    components: list[ReservationComponent]
+    committed: bool = False
+
+
 class EntryAdmission:
-    """One user-scoped entry lease held until exposure state is published."""
+    """A user gate plus provisional portfolio reservation for one entry."""
 
-    __slots__ = ("_lock", "_released")
+    __slots__ = ("_lock", "_released", "_reservation")
 
-    def __init__(self, lock: Lock) -> None:
+    def __init__(self, lock: Lock, reservation: _EntryReservation) -> None:
         self._lock = lock
         self._released = False
+        self._reservation = reservation
+
+    def commit(self, run_id: int, exposures: list[dict[str, Any]]) -> None:
+        """Keep only broker-accepted legs after releasing the admission gate."""
+        accepted = {str(item.get("leg_id")): item for item in exposures}
+        with _admission_registry_lock:
+            self._reservation.components = [
+                replace(
+                    component,
+                    run_id=run_id,
+                    position_ref=str(
+                        accepted[str(component.leg_id)].get("position_ref") or ""
+                    ),
+                    entry_order_id=accepted[str(component.leg_id)].get("entry_order_id"),
+                )
+                for component in self._reservation.components
+                if str(component.leg_id) in accepted
+            ]
+            self._reservation.committed = bool(self._reservation.components)
+            if not self._reservation.committed:
+                _remove_reservation(self._reservation)
 
     def release(self) -> None:
         if self._released:
             return
+        if not self._reservation.committed:
+            _remove_reservation(self._reservation)
         self._released = True
         self._lock.release()
 
@@ -102,6 +158,197 @@ class EntryAdmission:
 def _admission_lock(user_id: str) -> Lock:
     with _admission_registry_lock:
         return _admission_locks.setdefault(str(user_id), Lock())
+
+
+def _remove_reservation(reservation: _EntryReservation) -> None:
+    with _admission_registry_lock:
+        reservations = _entry_reservations.get(reservation.user_id)
+        if not reservations:
+            return
+        try:
+            reservations.remove(reservation)
+        except ValueError:
+            return
+        if not reservations:
+            _entry_reservations.pop(reservation.user_id, None)
+
+
+def release_terminal_entry_reservation(entry_order_id: int) -> None:
+    """Forget reservation components whose entry ended with no exposure."""
+    with _admission_registry_lock:
+        for reservations in list(_entry_reservations.values()):
+            for reservation in list(reservations):
+                reservation.components = [
+                    component
+                    for component in reservation.components
+                    if component.entry_order_id != entry_order_id
+                ]
+                if not reservation.components:
+                    _remove_reservation(reservation)
+
+
+def _broker_quantity_map(facts: EntryFacts) -> dict[tuple[str, str], Decimal]:
+    return {
+        (str(exchange).upper(), str(symbol).upper()): quantity
+        for exchange, symbol, quantity in facts.broker_quantities
+    }
+
+
+def _broker_reflects(
+    component: ReservationComponent,
+    quantities: dict[tuple[str, str], Decimal],
+) -> bool:
+    if not component.exchange or not component.symbol or component.quantity_delta == 0:
+        return False
+    current = quantities.get((component.exchange, component.symbol), Decimal("0"))
+    target = component.baseline_quantity + component.quantity_delta
+    if component.quantity_delta > 0:
+        return current >= target
+    return current <= target
+
+
+def _terminal_without_exposure(component: ReservationComponent) -> bool:
+    if component.run_id is None or component.position_ref is None:
+        return False
+    from database import strategy_module_db as store
+    from services.strategy_module import state
+
+    order = store.get_order(component.entry_order_id) if component.entry_order_id else None
+    order_filled = _decimal(getattr(order, "filled_qty", 0)) if order else None
+    if (
+        order
+        and str(order.status).lower() in {"rejected", "cancelled"}
+        and order_filled is not None
+        and order_filled <= 0
+    ):
+        return True
+    snapshot = state.get_run_state(component.run_id)
+    leg = (snapshot.get("legs") or {}).get(str(component.leg_id)) if snapshot else None
+    if not leg or str(leg.get("position_ref") or "") != component.position_ref:
+        return False
+    if str(leg.get("status") or "").lower() in {"closed", "rejected", "cancelled"}:
+        return True
+    if str(leg.get("entry_status") or "").lower() in {"rejected", "cancelled"}:
+        return True
+    order_id = leg.get("entry_order_id")
+    state_order = store.get_order(order_id) if order_id is not None else None
+    state_filled = _decimal(getattr(state_order, "filled_qty", 0)) if state_order else None
+    return bool(
+        state_order
+        and str(state_order.status).lower() in {"rejected", "cancelled"}
+        and state_filled is not None
+        and state_filled <= 0
+    )
+
+
+def _terminal_partial_component(
+    component: ReservationComponent,
+) -> ReservationComponent | None:
+    """Shrink a dead partial order to exposure the broker can still reveal."""
+    if component.entry_order_id is None:
+        return component
+    from database import strategy_module_db as store
+
+    order = store.get_order(component.entry_order_id)
+    if order is None or str(order.status).lower() not in {"rejected", "cancelled"}:
+        return component
+    filled = _decimal(getattr(order, "filled_qty", None))
+    if filled is None:
+        return component
+    if filled <= 0:
+        return None
+    admitted_quantity = abs(component.quantity_delta)
+    if admitted_quantity <= 0 or filled >= admitted_quantity:
+        return component
+    fraction = filled / admitted_quantity
+    return replace(
+        component,
+        configured_risk=component.configured_risk * fraction,
+        estimated_debit=component.estimated_debit * fraction,
+        quantity_delta=filled if component.quantity_delta > 0 else -filled,
+    )
+
+
+def _reconcile_reservations(user_id: str, facts: EntryFacts) -> list[ReservationComponent]:
+    user_key = str(user_id)
+    quantities = _broker_quantity_map(facts)
+    active: list[ReservationComponent] = []
+    with _admission_registry_lock:
+        for reservation in list(_entry_reservations.get(user_key, ())):
+            if not reservation.committed:
+                continue
+            reconciled: list[ReservationComponent] = []
+            for component in reservation.components:
+                adjusted = _terminal_partial_component(component)
+                if adjusted is None:
+                    continue
+                if _broker_reflects(adjusted, quantities):
+                    continue
+                if _terminal_without_exposure(adjusted):
+                    continue
+                reconciled.append(adjusted)
+            reservation.components = reconciled
+            if reservation.components:
+                active.extend(reservation.components)
+            else:
+                _remove_reservation(reservation)
+    return active
+
+
+def _merge_reservations(user_id: str, facts: EntryFacts) -> EntryFacts:
+    if facts.mode != "live":
+        return facts
+    active = _reconcile_reservations(user_id, facts)
+    if not active:
+        return facts
+    if (
+        facts.open_cash_positions is None
+        or facts.open_nifty_option_positions is None
+        or facts.open_risk is None
+        or facts.estimated_debit is None
+    ):
+        return facts
+    return replace(
+        facts,
+        open_cash_positions=facts.open_cash_positions
+        + sum(component.cash_positions for component in active),
+        open_nifty_option_positions=facts.open_nifty_option_positions
+        + sum(component.nifty_option_positions for component in active),
+        open_risk=facts.open_risk
+        + sum((component.configured_risk for component in active), Decimal("0")),
+        estimated_debit=facts.estimated_debit
+        + sum((component.estimated_debit for component in active), Decimal("0")),
+    )
+
+
+def _fallback_reservation_components(
+    facts: EntryFacts,
+    resolved_legs: list[dict[str, Any]],
+) -> tuple[ReservationComponent, ...]:
+    """Supply aggregate test/legacy facts when the adapter has no leg detail."""
+    if facts.reservation_components:
+        return facts.reservation_components
+    if not resolved_legs or facts.entry_risk is None or facts.estimated_debit is None:
+        return ()
+    leg = resolved_legs[0]
+    quantity = _decimal(leg.get("quantity") or leg.get("qty")) or Decimal("0")
+    position = str(leg.get("position") or "").upper()
+    exchange = str(leg.get("exchange") or "").upper()
+    symbol = str(leg.get("symbol") or "").upper()
+    baseline = _broker_quantity_map(facts).get((exchange, symbol), Decimal("0"))
+    return (
+        ReservationComponent(
+            leg_id=leg.get("leg_id") or leg.get("id"),
+            cash_positions=facts.entry_cash_positions,
+            nifty_option_positions=facts.entry_nifty_option_positions,
+            configured_risk=facts.entry_risk,
+            estimated_debit=facts.estimated_debit,
+            exchange=exchange,
+            symbol=symbol,
+            quantity_delta=quantity if position == "B" else -quantity,
+            baseline_quantity=baseline,
+        ),
+    )
 
 
 def _ist(now: datetime) -> datetime:
@@ -347,6 +594,17 @@ def _risk_distance(leg: dict[str, Any], price: Decimal | None, field: str) -> De
     return configured
 
 
+def _reserved_position_refs(user_id: str) -> set[str]:
+    with _admission_registry_lock:
+        return {
+            component.position_ref
+            for reservation in _entry_reservations.get(str(user_id), ())
+            if reservation.committed
+            for component in reservation.components
+            if component.position_ref
+        }
+
+
 def _open_configured_risk(user_id: str) -> Decimal | None:
     """Configured risk for Strategy Module positions held by this process."""
 
@@ -354,6 +612,7 @@ def _open_configured_risk(user_id: str) -> Decimal | None:
     from services.strategy_module import state
 
     total = Decimal("0")
+    reserved_refs = _reserved_position_refs(user_id)
     for run_id in state.active_run_ids():
         run_row = store.get_run(run_id)
         if run_row is None:
@@ -365,6 +624,8 @@ def _open_configured_risk(user_id: str) -> Decimal | None:
         if snapshot is None:
             return None
         for leg in state.open_legs(snapshot):
+            if str(leg.get("position_ref") or "") in reserved_refs:
+                continue
             quantity = _decimal(leg.get("entry_filled_qty") or leg.get("qty"))
             price = _decimal(leg.get("entry_avg"))
             distance = _risk_distance(leg, price, "sl_pts")
@@ -490,10 +751,15 @@ def build_entry_facts(
 
     open_cash_positions = 0
     open_nifty_option_positions = 0
+    broker_quantity_map: dict[tuple[str, str], Decimal] = {}
     for position in position_rows:
         quantity = _decimal(_value(position, "netqty", "net_qty", "quantity"))
         if quantity is None:
             return _unavailable_live_facts()
+        exchange = str(_value(position, "exchange") or "").upper()
+        symbol = str(_value(position, "symbol", "tradingsymbol") or "").upper()
+        if exchange and symbol:
+            broker_quantity_map[(exchange, symbol)] = quantity
         if quantity == 0:
             continue
         if _is_cash(position):
@@ -509,6 +775,7 @@ def build_entry_facts(
     estimated_debit = Decimal("0")
     reward_risks: list[Decimal] = []
     has_option_entry = False
+    reservation_components: list[ReservationComponent] = []
 
     for raw_leg in resolved_legs:
         leg = dict(raw_leg)
@@ -525,10 +792,12 @@ def build_entry_facts(
         position = str(leg.get("position") or "").upper()
         needs_quote = position == "B" or str(leg.get("risk_unit") or "points").lower() == "percent"
         price = _quote_price(leg, auth_token, broker) if needs_quote else None
+        leg_debit = Decimal("0")
         if needs_quote and price is None:
             estimated_debit = None
         elif position == "B" and estimated_debit is not None:
-            estimated_debit += price * quantity
+            leg_debit = price * quantity
+            estimated_debit += leg_debit
 
         stop_distance = _risk_distance(leg, price, "sl_pts")
         target_distance = _risk_distance(leg, price, "target_pts")
@@ -547,7 +816,30 @@ def build_entry_facts(
                 entry_risk = None
                 break
             maximum_option_lot_risk = max(maximum_option_lot_risk, stop_distance * lot_size)
+        exchange = str(leg.get("exchange") or "").upper()
+        symbol = str(leg.get("symbol") or "").upper()
+        reservation_components.append(
+            ReservationComponent(
+                leg_id=leg.get("leg_id") or leg.get("id"),
+                cash_positions=int(is_cash),
+                nifty_option_positions=int(is_nifty_option),
+                configured_risk=leg_risk,
+                estimated_debit=leg_debit,
+                exchange=exchange,
+                symbol=symbol,
+                quantity_delta=quantity if position == "B" else -quantity,
+                baseline_quantity=broker_quantity_map.get((exchange, symbol), Decimal("0")),
+            )
+        )
 
+    broker_quantities = tuple(
+        (exchange, symbol, quantity)
+        for (exchange, symbol), quantity in sorted(broker_quantity_map.items())
+    )
+    _reconcile_reservations(
+        user_id,
+        EntryFacts(mode="live", broker_quantities=broker_quantities),
+    )
     open_risk = _open_configured_risk(user_id)
     session_pnl, consecutive, last_stopped_at = _session_history(user_id)
     minimum_reward = min(reward_risks) if reward_risks else None
@@ -572,6 +864,8 @@ def build_entry_facts(
         has_option_entry=has_option_entry,
         intraday=str(_strategy_value(strategy, "strategy_type", "intraday")).lower()
         == "intraday",
+        reservation_components=tuple(reservation_components),
+        broker_quantities=broker_quantities,
     )
 
 
@@ -583,6 +877,7 @@ def acquire_entry_admission(
     mode: str,
     policy: GovernorPolicy,
     now: datetime,
+    authorization_check: Callable[[], tuple[bool, str | None]] | None = None,
 ) -> tuple[GovernorDecision, EntryAdmission | None]:
     """Atomically evaluate and lease one user's Strategy Module entry path.
 
@@ -600,10 +895,30 @@ def acquire_entry_admission(
     lock = _admission_lock(user_id)
     lock.acquire()
     try:
+        if authorization_check is not None:
+            authorized, error = authorization_check()
+            if not authorized:
+                lock.release()
+                return (
+                    GovernorDecision(
+                        allowed=False,
+                        code="live_authorization_required",
+                        message=error
+                        or "Live automation is not authorized for this trading session",
+                    ),
+                    None,
+                )
         facts = build_entry_facts(user_id, strategy, resolved_legs, api_key, mode)
+        facts = _merge_reservations(user_id, facts)
         decision = evaluate_entry(facts, policy, now)
         if decision.allowed:
-            return decision, EntryAdmission(lock)
+            reservation = _EntryReservation(
+                user_id=str(user_id),
+                components=list(_fallback_reservation_components(facts, resolved_legs)),
+            )
+            with _admission_registry_lock:
+                _entry_reservations.setdefault(str(user_id), []).append(reservation)
+            return decision, EntryAdmission(lock, reservation)
         lock.release()
         return decision, None
     except Exception:
