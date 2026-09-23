@@ -302,15 +302,12 @@ def start_run(
         if not allowed:
             return StartResult(ok=False, error=error)
 
-    governor_facts = portfolio_governor.build_entry_facts(
+    governor_decision, admission = portfolio_governor.acquire_entry_admission(
         user_id,
         strategy,
         resolved,
         api_key,
         mode,
-    )
-    governor_decision = portfolio_governor.evaluate_entry(
-        governor_facts,
         portfolio_governor.GovernorPolicy(),
         datetime.now(portfolio_governor.IST),
     )
@@ -328,6 +325,8 @@ def start_run(
     # One conditional UPDATE, not a read then a write. The UI, the scheduler
     # and a webhook can all fire at the same instant.
     if not store.claim_strategy_for_run(strategy_id):
+        if admission is not None:
+            admission.release()
         return StartResult(ok=False, error="This strategy is already running")
 
     run_id: int | None = None
@@ -442,6 +441,9 @@ def start_run(
         else:
             store.release_strategy(strategy_id)
         return StartResult(ok=False, error="Could not start the strategy")
+    finally:
+        if admission is not None:
+            admission.release()
 
 
 def _subscribe_run(run_id: int, resolved: list[dict[str, Any]]) -> None:

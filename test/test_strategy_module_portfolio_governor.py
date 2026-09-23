@@ -1,13 +1,16 @@
 """Deterministic entry decisions for the Strategy Module portfolio governor."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
 import pytz
 
+from services.strategy_module import portfolio_governor
 from services.strategy_module.portfolio_governor import (
     EntryFacts,
     GovernorPolicy,
@@ -451,3 +454,83 @@ def test_sandbox_fact_builder_never_reads_live_broker_state(monkeypatch):
     )
 
     assert evaluate_entry(result, DEFAULT_POLICY, NOW).code == "sandbox_allowed"
+
+
+def test_user_admission_serializes_evaluation_until_exposure_is_visible(monkeypatch):
+    """A second strategy cannot pass on the first strategy's stale facts."""
+    exposure = {"nifty_options": 0}
+    second_started = Event()
+    second_finished = Event()
+
+    def current_facts(*_args, **_kwargs):
+        return facts(
+            entry_cash_positions=0,
+            entry_nifty_option_positions=1,
+            open_nifty_option_positions=exposure["nifty_options"],
+            entry_cash_risk=Decimal("0"),
+            entry_option_lot_risk=Decimal("100"),
+            entry_risk=Decimal("100"),
+            estimated_debit=Decimal("1000"),
+            has_option_entry=True,
+        )
+
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", current_facts)
+    first_decision, first_admission = portfolio_governor.acquire_entry_admission(
+        "shared-user", {}, [], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert first_decision.allowed is True
+    assert first_admission is not None
+
+    def admit_second():
+        second_started.set()
+        result = portfolio_governor.acquire_entry_admission(
+            "shared-user", {}, [], "key", "live", DEFAULT_POLICY, NOW
+        )
+        second_finished.set()
+        return result
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(admit_second)
+        assert second_started.wait(timeout=1)
+        assert second_finished.wait(timeout=0.1) is False
+
+        # This is the ordering production must preserve: state becomes visible
+        # before the lease opens the admission gate for the next strategy.
+        exposure["nifty_options"] = 1
+        first_admission.release()
+        second_decision, second_admission = pending.result(timeout=1)
+
+    assert second_decision.allowed is False
+    assert second_decision.code == "position_limit"
+    assert second_admission is None
+
+
+def test_rejected_admission_releases_the_user_gate(monkeypatch):
+    attempts = iter([facts(available_cash=None), facts()])
+    monkeypatch.setattr(
+        portfolio_governor,
+        "build_entry_facts",
+        lambda *_args, **_kwargs: next(attempts),
+    )
+
+    rejected, rejected_admission = portfolio_governor.acquire_entry_admission(
+        "release-user", {}, [], "key", "live", DEFAULT_POLICY, NOW
+    )
+    assert rejected.allowed is False
+    assert rejected_admission is None
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        allowed, admission = pool.submit(
+            portfolio_governor.acquire_entry_admission,
+            "release-user",
+            {},
+            [],
+            "key",
+            "live",
+            DEFAULT_POLICY,
+            NOW,
+        ).result(timeout=1)
+
+    assert allowed.allowed is True
+    assert admission is not None
+    admission.release()

@@ -1402,3 +1402,88 @@ def test_synchronous_signal_risk_exit_fill_does_not_end_the_session_run(api_key)
     live = state.get_run_state(run_id)
     assert live is not None
     assert live["legs"]["1"]["status"] == "closed"
+
+
+def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+
+    def release():
+        admission.released = True
+
+    admission.release = release
+
+    def accept_while_admitted(**_kwargs):
+        assert admission.released is False
+        return DispatchResult(ok=True, broker_order_id="LIVE-ADMITTED", response={})
+
+    try:
+        with (
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ) as acquire,
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+        ):
+            result = _start(sid, mode="live", dispatch=accept_while_admitted)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is True
+    acquire.assert_called_once()
+    assert admission.released is True
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot["legs"]["1"]["status"] == "open"
+
+
+def test_live_batch_releases_portfolio_admission_when_strategy_claim_is_refused(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+    admission.release = lambda: setattr(admission, "released", True)
+
+    try:
+        with (
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+            patch.object(store, "claim_strategy_for_run", return_value=False),
+        ):
+            result = _start(sid, mode="live")
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert "already running" in result.error
+    assert admission.released is True

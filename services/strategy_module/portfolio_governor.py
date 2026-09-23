@@ -10,11 +10,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from threading import Lock
 from typing import Any
 
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+_admission_registry_lock = Lock()
+_admission_locks: dict[str, Lock] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +81,27 @@ class GovernorDecision:
             "message": self.message,
             "metrics": {key: serialise(value) for key, value in self.metrics.items()},
         }
+
+
+class EntryAdmission:
+    """One user-scoped entry lease held until exposure state is published."""
+
+    __slots__ = ("_lock", "_released")
+
+    def __init__(self, lock: Lock) -> None:
+        self._lock = lock
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._lock.release()
+
+
+def _admission_lock(user_id: str) -> Lock:
+    with _admission_registry_lock:
+        return _admission_locks.setdefault(str(user_id), Lock())
 
 
 def _ist(now: datetime) -> datetime:
@@ -548,3 +573,46 @@ def build_entry_facts(
         intraday=str(_strategy_value(strategy, "strategy_type", "intraday")).lower()
         == "intraday",
     )
+
+
+def acquire_entry_admission(
+    user_id: str,
+    strategy: Any,
+    resolved_legs: list[dict[str, Any]],
+    api_key: str,
+    mode: str,
+    policy: GovernorPolicy,
+    now: datetime,
+) -> tuple[GovernorDecision, EntryAdmission | None]:
+    """Atomically evaluate and lease one user's Strategy Module entry path.
+
+    A live lease deliberately remains locked after this function returns. The
+    caller releases it only after an accepted dispatch is represented in run
+    state, or after every refusal/failure path has finished. That makes a
+    subsequent strategy collect fresh facts after the earlier entry is visible
+    instead of evaluating concurrently against the same broker snapshot.
+    """
+
+    if mode == "sandbox":
+        facts = build_entry_facts(user_id, strategy, resolved_legs, api_key, mode)
+        return evaluate_entry(facts, policy, now), None
+
+    lock = _admission_lock(user_id)
+    lock.acquire()
+    try:
+        facts = build_entry_facts(user_id, strategy, resolved_legs, api_key, mode)
+        decision = evaluate_entry(facts, policy, now)
+        if decision.allowed:
+            return decision, EntryAdmission(lock)
+        lock.release()
+        return decision, None
+    except Exception:
+        lock.release()
+        return (
+            GovernorDecision(
+                allowed=False,
+                code="risk_missing",
+                message="Portfolio admission facts could not be evaluated",
+            ),
+            None,
+        )

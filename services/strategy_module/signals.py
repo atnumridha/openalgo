@@ -461,11 +461,12 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         )
     run_row = store.get_run(run_id)
     mode = str(run_row.mode) if run_row else "sandbox"
-    governor_facts = portfolio_governor.build_entry_facts(
-        str(strategy.user_id), strategy, [resolved], api_key, mode
-    )
-    governor_decision = portfolio_governor.evaluate_entry(
-        governor_facts,
+    governor_decision, admission = portfolio_governor.acquire_entry_admission(
+        str(strategy.user_id),
+        strategy,
+        [resolved],
+        api_key,
+        mode,
         portfolio_governor.GovernorPolicy(),
         datetime.now(portfolio_governor.IST),
     )
@@ -497,6 +498,22 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             error=governor_decision.message,
         )
 
+    try:
+        return _enter_admitted(strategy, run_id, leg, side, leg_id, resolved)
+    finally:
+        if admission is not None:
+            admission.release()
+
+
+def _enter_admitted(
+    strategy: Any,
+    run_id: int,
+    leg: dict,
+    side: str,
+    leg_id: Any,
+    resolved: dict,
+) -> SignalResult:
+    """Claim and publish one entry while its portfolio admission is held."""
     claim = state.claim_signal_entry(run_id, leg_id, _POSITION_OF_SIDE[side])
     if claim is None:
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error="No active run")

@@ -1210,3 +1210,91 @@ def test_a_batch_run_still_ends_when_it_goes_flat(placed):
     assert went_flat is True
     assert store.get_run(run.id).stopped_at is not None
     assert store.get_strategy(strategy.id, USER).status == "stopped"
+
+
+def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+    admission.release = lambda: setattr(admission, "released", True)
+
+    def accept_while_admitted(**_kwargs):
+        assert admission.released is False
+        return DispatchResult(ok=True, broker_order_id="LIVE-SIGNAL-ADMITTED", response={})
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(signals.order_dispatch, "dispatch_order", side_effect=accept_while_admitted),
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ) as acquire,
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is True
+    acquire.assert_called_once()
+    assert admission.released is True
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot["legs"]["1"]["status"] == "open"
+
+
+def test_live_signal_releases_portfolio_admission_when_entry_claim_is_refused():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+    admission.release = lambda: setattr(admission, "released", True)
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+            patch.object(state, "claim_signal_entry", return_value=None),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert result.error == "No active run"
+    assert admission.released is True
