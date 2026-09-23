@@ -974,16 +974,28 @@ def _place(
         )
         reconcile_rejected_entry_stop = not result.ok
 
-    store.record_event(
-        strategy_id,
-        user_id,
-        "leg_exit_placed" if exiting else "leg_entry_placed",
-        f"Signal {action} {leg.get('quantity') or leg.get('qty')} {leg['symbol']}"
-        + ("" if result.ok else f" rejected: {result.error}"),
-        run_id=run_id,
-        leg_id=leg["leg_id"],
-        severity="info" if result.ok else "warn",
-    )
+    message = f"Signal {action} {leg.get('quantity') or leg.get('qty')} {leg['symbol']}"
+    if result.ok:
+        store.record_event(
+            strategy_id,
+            user_id,
+            "leg_exit_placed" if exiting else "leg_entry_placed",
+            message,
+            run_id=run_id,
+            leg_id=leg["leg_id"],
+            severity="info",
+        )
+    else:
+        _emit_lifecycle(
+            strategy_id,
+            user_id,
+            "leg_exit_rejected" if exiting else "leg_entry_rejected",
+            f"{message} rejected: {result.error}",
+            run_id=run_id,
+            leg_id=leg["leg_id"],
+            severity="critical" if exiting else "warn",
+            mode=mode,
+        )
 
     if row_id is not None and result.ok:
         # After the leg bookkeeping and accepted-placement audit above, never

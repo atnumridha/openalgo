@@ -11,13 +11,23 @@ on the loop would test the sleep, not the write.
 """
 
 import time
+from datetime import datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import checkpoint, order_events, recovery, state
+from services.strategy_module import (
+    checkpoint,
+    order_events,
+    portfolio_governor,
+    recovery,
+    state,
+)
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorPolicy
 
 USER = "recovery_test_user"
 CE = "NIFTY28MAY2624000CE"
@@ -57,6 +67,8 @@ def clean_slate():
     store.init_db()
 
     def purge():
+        portfolio_governor._entry_reservations.clear()
+        portfolio_governor._reservation_cash_baselines.clear()
         for run_id in state.active_run_ids():
             state.clear_run_state(run_id)
         for row in store.list_strategies(USER):
@@ -86,8 +98,8 @@ def _strategy(name="Recovery test", legs=None, **overrides):
     return created["id"]
 
 
-def _run(strategy_id):
-    run = store.create_run(strategy_id, "sandbox", "sandbox")
+def _run(strategy_id, *, mode="sandbox"):
+    run = store.create_run(strategy_id, mode, mode)
     assert run is not None
     run_id = run.id
     store.set_strategy_status(strategy_id, "running", run_id)
@@ -320,6 +332,95 @@ def test_restart_binds_an_accepted_ack_event_to_its_exact_pending_entry_row():
     assert live["legs"]["1"]["entry_order_id"] == row_id
     assert live["legs"]["1"]["entry_status"] == "open"
     assert store.get_run(run_id).stopped_at is None
+
+
+def test_recovered_unfilled_entry_reserves_exposure_before_broker_state_catches_up(
+    monkeypatch,
+):
+    """A restart must not erase a working entry from the portfolio governor."""
+    from database import auth_db
+
+    sid = _strategy(legs=[_leg(position="B", sl_pts=10)])
+    run_id = _run(sid, mode="live")
+    entry_order_id = _order(
+        run_id,
+        1,
+        "entry",
+        action="BUY",
+        status="open",
+        position_ref="working-before-restart",
+    )
+
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok is True
+    assert state.get_run_state(run_id)["legs"]["1"]["entry_order_id"] == entry_order_id
+
+    # Model a fresh process: recovery restored the run, but the old in-memory
+    # admission lease no longer exists and broker funds/positions are still
+    # showing their pre-order values.
+    portfolio_governor._entry_reservations.clear()
+    portfolio_governor._reservation_cash_baselines.clear()
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "kotak"))
+    monkeypatch.setattr(
+        portfolio_governor,
+        "_quote_price",
+        lambda _leg, _token, _broker: Decimal("100"),
+    )
+    monkeypatch.setattr(
+        portfolio_governor,
+        "build_entry_facts",
+        lambda *_args, **_kwargs: EntryFacts(
+            intent="entry",
+            mode="live",
+            available_cash=Decimal("100000"),
+            open_cash_positions=0,
+            open_nifty_option_positions=0,
+            entry_cash_positions=0,
+            entry_nifty_option_positions=1,
+            entry_cash_risk=Decimal("0"),
+            entry_option_lot_risk=Decimal("750"),
+            entry_risk=Decimal("750"),
+            open_risk=Decimal("0"),
+            estimated_debit=Decimal("7500"),
+            minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"),
+            consecutive_stopped_runs=0,
+            has_option_entry=True,
+            broker_quantities=(("NFO", CE, Decimal("0")),),
+        ),
+    )
+    now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 23, 10, 0))
+
+    decision, admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [
+            {
+                "leg_id": 2,
+                "position": "B",
+                "symbol": PE,
+                "exchange": "NFO",
+                "segment": "options",
+                "underlying": "NIFTY",
+                "quantity": 75,
+                "lot_size": 75,
+                "sl_pts": 10,
+                "target_pts": 20,
+                "risk_unit": "points",
+            }
+        ],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "position_limit"
+    assert decision.metrics["open_nifty_option_positions"] == 1
+    assert decision.metrics["open_risk"] == Decimal("750")
+    assert decision.metrics["estimated_debit"] == Decimal("15000")
+    assert admission is None
 
 
 def test_legacy_unstructured_ack_event_keeps_possible_exposure_open_and_reserved():

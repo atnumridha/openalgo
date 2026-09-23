@@ -199,14 +199,17 @@ def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(place
     strategy = _make()
     store.set_live_enabled(strategy.id, USER, True)
     authz.grant(USER)
-    with patch.object(
-        portfolio_governor,
-        "build_entry_facts",
-        return_value=EntryFacts(intent="entry", mode="live"),
-    ), patch.object(
-        portfolio_governor,
-        "evaluate_entry",
-        return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+    with (
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
     ):
         assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
     _fill(strategy, 1)
@@ -227,17 +230,20 @@ def test_live_governor_rejects_signal_before_the_entry_claim(placed):
     strategy = store.get_strategy(strategy.id, USER)
     authz.grant(USER)
     try:
-        with patch.object(
-            portfolio_governor,
-            "build_entry_facts",
-            return_value=EntryFacts(intent="entry", mode="live"),
-        ), patch.object(
-            portfolio_governor,
-            "evaluate_entry",
-            return_value=GovernorDecision(
-                False,
-                "risk_missing",
-                "Live funds, positions, quotes, and configured protective risk are required",
+        with (
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(
+                    False,
+                    "risk_missing",
+                    "Live funds, positions, quotes, and configured protective risk are required",
+                ),
             ),
         ):
             result = signals.handle_signal(strategy, "long_entry", leg_id=1)
@@ -245,7 +251,9 @@ def test_live_governor_rejects_signal_before_the_entry_claim(placed):
         authz.revoke(USER)
 
     assert result.ok is False
-    assert result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    assert (
+        result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    )
     assert placed == []
     snapshot = state.get_run_state(result.run_id)
     assert snapshot is not None
@@ -289,6 +297,64 @@ def test_an_unrecordable_signal_exit_emits_one_material_lifecycle_event(placed):
     events = store.list_events(strategy.id, kind="exit_order_unrecorded")
     assert len(events) == 1
     assert events[0]["severity"] == "critical"
+
+
+def test_immediate_signal_entry_refusal_records_and_alerts_one_rejection():
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="venue refused entry"),
+        ),
+        patch("services.strategy_module.lifecycle_events.broadcast.push_event") as broadcast,
+        patch("services.strategy_module.lifecycle_events.alert_executor.submit") as submit,
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert result.run_id == run_id
+    assert store.list_events(strategy.id, kind="leg_entry_placed") == []
+    rejected = store.list_events(strategy.id, kind="leg_entry_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["severity"] == "warn"
+    assert broadcast.call_count == 1
+    assert broadcast.call_args.args[1]["kind"] == "leg_entry_rejected"
+    assert submit.call_count == 1
+    assert submit.call_args.args[2]["kind"] == "leg_entry_rejected"
+
+
+def test_immediate_signal_exit_refusal_records_and_alerts_one_critical_rejection(placed):
+    strategy = _make()
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    run_id = _fill(strategy, 1)
+
+    with (
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="venue refused exit"),
+        ),
+        patch("services.strategy_module.lifecycle_events.broadcast.push_event") as broadcast,
+        patch("services.strategy_module.lifecycle_events.alert_executor.submit") as submit,
+    ):
+        result = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert result.ok is False
+    assert result.run_id == run_id
+    assert store.list_events(strategy.id, kind="leg_exit_placed") == []
+    rejected = store.list_events(strategy.id, kind="leg_exit_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["severity"] == "critical"
+    assert broadcast.call_count == 1
+    assert broadcast.call_args.args[1]["kind"] == "leg_exit_rejected"
+    assert submit.call_count == 1
+    assert submit.call_args.args[2]["kind"] == "leg_exit_rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1309,9 @@ def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
         with (
             patch.object(signals, "_api_key_for", return_value="test-key"),
             patch.object(engine, "_subscribe_run"),
-            patch.object(signals.order_dispatch, "dispatch_order", side_effect=accept_while_admitted),
+            patch.object(
+                signals.order_dispatch, "dispatch_order", side_effect=accept_while_admitted
+            ),
             patch.object(
                 portfolio_governor,
                 "acquire_entry_admission",
@@ -1404,8 +1472,10 @@ def test_live_signal_rechecks_authorization_inside_portfolio_admission():
         patch.object(
             signals.order_dispatch,
             "dispatch_order",
-            side_effect=lambda **kw: placed.append(kw)
-            or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={}),
+            side_effect=lambda **kw: (
+                placed.append(kw)
+                or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={})
+            ),
         ),
     ):
         result = signals.handle_signal(strategy, "long_entry", leg_id=1)
