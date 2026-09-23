@@ -422,3 +422,36 @@ def test_service_reference_names_the_strategy_book_boundary() -> None:
     for name in account_services:
         assert f"`{name}`" in services_doc
         assert name in views
+
+
+def test_operator_docs_explain_automated_strategy_safety_workflow() -> None:
+    """Keep the operator-facing automation sequence and its safety gates visible."""
+    strategy_doc = _read(STRATEGY_API / "README.md").casefold()
+    whatsapp_doc = re.sub(r"\s+", " ", _read("docs/whatsapp.md").casefold())
+
+    for phrase in (
+        "starter pack",
+        "flow",
+        "ai",
+        "sandbox",
+        "live authorization",
+        "portfolio governor",
+        "exits remain allowed after revocation",
+        "kill switch",
+        "09:20",
+        "15:00",
+        "3 max positions",
+        "4% combined risk",
+        "30% debit",
+        "long-option minimum-lot max 3%",
+    ):
+        assert phrase in strategy_doc
+
+    for phrase in (
+        "whatsapp lifecycle notices",
+        "run started",
+        "live authorization granted",
+        "kill switch",
+        "notification failure never blocks trading",
+    ):
+        assert phrase in whatsapp_doc
