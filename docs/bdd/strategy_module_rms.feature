@@ -177,14 +177,14 @@ Feature: Strategy module and risk management
     Then a base symbol is refused before placement
     And a repeated exact-contract signal is a successful no-op
 
-  # Source: test/test_strategy_module_recovery.py:781
+  # Source: test/test_strategy_module_recovery.py:887
   Scenario: Recovery restores a live and superseded owner independently
     Given a crash occurs while a flip holds an outgoing and replacement side
     When the open run is recovered
     Then order rows are grouped by exact position_ref
     And both owners recover with independent quantities, exits and risk state
 
-  # Source: test/test_strategy_module_recovery.py:1058
+  # Source: test/test_strategy_module_recovery.py:1164
   Scenario: Proven unrepresentable exposure remains database open
     Given durable rows prove more than two held owner references on one leg
     When recovery cannot fit them into live plus superseded state
@@ -192,14 +192,14 @@ Feature: Strategy module and risk management
     And the strategy remains reserved
     And recovery_failed requests manual reconciliation at critical severity
 
-  # Source: test/test_strategy_module_recovery.py:1540
+  # Source: test/test_strategy_module_recovery.py:1646
   Scenario: Exact durable break-even overrides a stale checkpoint
     Given every reference group has usable priced entry and exit fills
     And those fills sum to exactly zero realized P&L
     When recovery reads a stale nonzero checkpoint
     Then the exact durable zero is authoritative
 
-  # Source: test/test_strategy_module_recovery.py:1628
+  # Source: test/test_strategy_module_recovery.py:1734
   Scenario: Incomplete valuation retains only known P&L
     Given durable fills prove exposure but one fill has no usable price
     And no checkpoint witnessed the same owner shape and quantities
@@ -207,7 +207,7 @@ Feature: Strategy module and risk management
     Then the known priced portion is retained
     And a critical recovery_succeeded event requests manual P&L reconciliation
 
-  # Source: test/test_strategy_module_recovery.py:2000
+  # Source: test/test_strategy_module_recovery.py:2106
   Scenario: Malformed recovery with no proven exposure cannot wedge startup
     Given an open run has malformed state but no durable evidence of exposure
     When it cannot be reconstructed

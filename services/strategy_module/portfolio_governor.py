@@ -758,6 +758,20 @@ def _reconstruct_recovered_entry_reservations(
 
     if not pending:
         return True
+    pending_instruments: set[tuple[str, str]] = set()
+    for _leg, order in pending:
+        instrument = (
+            str(_row_value(order, "exchange", "") or "").upper(),
+            str(_row_value(order, "symbol", "") or "").upper(),
+        )
+        if not all(instrument) or instrument in pending_instruments:
+            # Broker position books expose one net quantity per instrument,
+            # not the durable order that produced it. Rebuilding two lost
+            # reservations with the same identity would let one visible fill
+            # settle both components. Refuse new entries until exact order
+            # state removes the ambiguity.
+            return False
+        pending_instruments.add(instrument)
     if (
         facts.available_cash is None
         or facts.open_cash_positions is None

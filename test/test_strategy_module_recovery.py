@@ -423,6 +423,112 @@ def test_recovered_unfilled_entry_reserves_exposure_before_broker_state_catches_
     assert admission is None
 
 
+def test_duplicate_recovered_working_entries_for_one_instrument_fail_closed(
+    monkeypatch,
+):
+    """One visible net fill cannot settle two indistinguishable entry orders."""
+    from database import auth_db
+
+    sid = _strategy(
+        name="Duplicate recovered entries",
+        legs=[_leg(1, position="B", sl_pts=10), _leg(2, position="B", sl_pts=10)],
+    )
+    run_id = _run(sid, mode="live")
+    for leg_id in (1, 2):
+        _order(
+            run_id,
+            leg_id,
+            "entry",
+            action="BUY",
+            status="open",
+            position_ref=f"duplicate-working-{leg_id}",
+        )
+
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok is True
+    assert {
+        state.get_run_state(run_id)["legs"][str(leg_id)]["entry_status"] for leg_id in (1, 2)
+    } == {"open"}
+
+    portfolio_governor._entry_reservations.clear()
+    portfolio_governor._reservation_cash_baselines.clear()
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "kotak"))
+    monkeypatch.setattr(
+        portfolio_governor,
+        "_quote_price",
+        lambda _leg, _token, _broker: Decimal("100"),
+    )
+    visible = {"quantity": Decimal("0"), "cash": Decimal("100000"), "positions": 0}
+
+    def broker_facts(*_args, **_kwargs):
+        return EntryFacts(
+            intent="entry",
+            mode="live",
+            available_cash=visible["cash"],
+            open_cash_positions=0,
+            open_nifty_option_positions=visible["positions"],
+            entry_cash_positions=1,
+            entry_nifty_option_positions=0,
+            entry_cash_risk=Decimal("500"),
+            entry_option_lot_risk=Decimal("0"),
+            entry_risk=Decimal("500"),
+            open_risk=Decimal("0"),
+            estimated_debit=Decimal("10000"),
+            minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"),
+            consecutive_stopped_runs=0,
+            has_option_entry=False,
+            broker_quantities=(("NFO", CE, visible["quantity"]),),
+        )
+
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", broker_facts)
+    proposed_cash_leg = {
+        "leg_id": 3,
+        "position": "B",
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "segment": "cash",
+        "quantity": 50,
+        "lot_size": 1,
+        "sl_pts": 10,
+        "target_pts": 20,
+        "risk_unit": "points",
+    }
+    now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 23, 10, 0))
+
+    before_fill, before_fill_admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [proposed_cash_leg],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert before_fill.allowed is False
+    assert before_fill.code == "risk_missing"
+    assert before_fill_admission is None
+
+    # Only one of the two same-symbol orders can be represented by this net
+    # broker quantity and cash movement. The other must remain conservatively
+    # accounted for; without exact order attribution, another entry is refused.
+    visible.update(quantity=Decimal("75"), cash=Decimal("92500"), positions=1)
+    after_one_fill, after_one_fill_admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [proposed_cash_leg],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert after_one_fill.allowed is False
+    assert after_one_fill.code == "risk_missing"
+    assert after_one_fill_admission is None
+
+
 def test_legacy_unstructured_ack_event_keeps_possible_exposure_open_and_reserved():
     sid = _strategy()
     run_id = _run(sid)
