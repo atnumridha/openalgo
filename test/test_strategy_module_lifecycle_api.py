@@ -113,9 +113,7 @@ def test_account_lifecycle_socket_room_is_derived_only_from_authenticated_user(c
     ):
         session["user"] = USER
 
-        assert strategy_module._strategy_user_subscribe({"user_id": OTHER}) == {
-            "status": "success"
-        }
+        assert strategy_module._strategy_user_subscribe({"user_id": OTHER}) == {"status": "success"}
         assert strategy_module._strategy_user_unsubscribe({"user_id": OTHER}) == {
             "status": "success"
         }
@@ -162,6 +160,14 @@ def test_live_authorization_requires_confirmation_and_mirrors_only_safe_state(cl
 def test_account_event_store_refuses_a_strategy_scoped_kind():
     assert store.record_automation_event(USER, "run_started", "wrong owner") is None
     assert store.list_automation_events(USER) == []
+
+
+@pytest.mark.parametrize("kind", store.AUTOMATION_EVENT_KINDS)
+def test_strategy_event_store_refuses_an_account_scoped_kind(kind):
+    sid = _make()
+
+    assert store.record_event(sid, USER, kind, "wrong owner") is None
+    assert store.list_events(sid) == []
 
 
 @pytest.mark.parametrize("confirm", [1, 1.0])

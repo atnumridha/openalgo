@@ -426,11 +426,7 @@ def test_restx_close_all_event_matches_the_browser_intent_contract(client, engin
     assert response.status_code == 200
     assert response.get_json()["stop_pending"] is True
 
-    event = next(
-        event
-        for event in store.list_events(sid)
-        if event["kind"] == "close_all_manual"
-    )
+    event = next(event for event in store.list_events(sid) if event["kind"] == "close_all_manual")
     assert event["message"] == "Operator requested closure of all held legs"
     assert "closed" not in event["message"].lower()
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
@@ -537,9 +533,7 @@ def test_runs_orders_and_events_are_scoped_to_the_strategy(client):
         "live_authorization_expired",
     ),
 )
-def test_strategy_events_filter_refuses_account_only_authorization_events(
-    client, account_kind
-):
+def test_strategy_events_filter_refuses_account_only_authorization_events(client, account_kind):
     sid, _token = _make()
 
     response = post(client, "events", strategy_id=sid, kind=account_kind)

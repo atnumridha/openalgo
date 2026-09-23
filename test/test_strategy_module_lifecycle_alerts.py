@@ -61,8 +61,14 @@ def test_material_lifecycle_events_enqueue_a_whatsapp_alert(kind):
     with (
         patch.object(lifecycle_events.store, "record_event", return_value=row),
         patch.object(lifecycle_events.store, "event_to_dict", return_value=event),
-        patch.object(lifecycle_events.store, "get_strategy_unscoped", return_value=SimpleNamespace(name="Trend")),
-        patch.object(lifecycle_events.store, "get_run", return_value=SimpleNamespace(mode="sandbox")),
+        patch.object(
+            lifecycle_events.store,
+            "get_strategy_unscoped",
+            return_value=SimpleNamespace(name="Trend"),
+        ),
+        patch.object(
+            lifecycle_events.store, "get_run", return_value=SimpleNamespace(mode="sandbox")
+        ),
         patch.object(lifecycle_events.broadcast, "push_event"),
         patch.object(lifecycle_events, "alert_executor", _ImmediateExecutor()),
         patch.object(lifecycle_events, "whatsapp_alert_service", notifier),
@@ -153,6 +159,21 @@ def test_user_scope_rejects_a_strategy_event_before_persistence_or_delivery():
     submit.assert_not_called()
 
 
+@pytest.mark.parametrize("kind", lifecycle_events.store.AUTOMATION_EVENT_KINDS)
+def test_strategy_scope_rejects_an_account_event_before_persistence_or_delivery(kind):
+    """Authorization transitions must never enter a strategy-owned stream."""
+    with (
+        patch.object(lifecycle_events.store, "record_event") as record,
+        patch.object(lifecycle_events.broadcast, "push_event") as push,
+        patch.object(lifecycle_events.alert_executor, "submit") as submit,
+    ):
+        assert lifecycle_events.record_and_notify(7, "owner", kind, "Changed") is None
+
+    record.assert_not_called()
+    push.assert_not_called()
+    submit.assert_not_called()
+
+
 def test_user_lifecycle_notification_failure_does_not_escape_the_producer():
     """An alert outage cannot undo an account-level authorization transition."""
     row = SimpleNamespace(id=20)
@@ -168,7 +189,9 @@ def test_user_lifecycle_notification_failure_does_not_escape_the_producer():
     with (
         patch.object(lifecycle_events.store, "record_automation_event", return_value=row),
         patch.object(lifecycle_events.store, "automation_event_to_dict", return_value=event),
-        patch.object(lifecycle_events.broadcast, "push_user_event", side_effect=RuntimeError("socket down")),
+        patch.object(
+            lifecycle_events.broadcast, "push_user_event", side_effect=RuntimeError("socket down")
+        ),
         patch.object(lifecycle_events, "alert_executor", _ImmediateExecutor()),
         patch.object(lifecycle_events, "whatsapp_alert_service", notifier),
     ):
@@ -194,13 +217,22 @@ def test_recording_a_lifecycle_event_does_not_lookup_notification_context():
         patch.object(lifecycle_events.broadcast, "push_event"),
         patch.object(lifecycle_events, "alert_executor", executor),
     ):
-        assert lifecycle_events.record_and_notify(7, "owner", "run_started", "Started", run_id=3) is row
+        assert (
+            lifecycle_events.record_and_notify(7, "owner", "run_started", "Started", run_id=3)
+            is row
+        )
 
     strategy_lookup.assert_not_called()
     run_lookup.assert_not_called()
     assert executor.submissions[0][1] == (
         "owner",
-        {"id": 18, "strategy_id": 7, "kind": "run_started", "message": "Started", "user_id": "owner"},
+        {
+            "id": 18,
+            "strategy_id": 7,
+            "kind": "run_started",
+            "message": "Started",
+            "user_id": "owner",
+        },
     )
 
 

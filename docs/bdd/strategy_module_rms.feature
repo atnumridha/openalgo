@@ -260,7 +260,7 @@ Feature: Strategy module and risk management
     And a prior-run live frame never values the current run's fallback
     And a broker contract shared with another source is not attributed to this strategy
 
-  # Source: test/test_strategy_module_lifecycle_api.py:307
+  # Source: test/test_strategy_module_lifecycle_api.py:313
   Scenario: Close all records an attempt rather than proof of flatness
     Given an operator calls close_all
     When its intent event is written before the stop and broker results

@@ -2305,6 +2305,11 @@ def record_event(
 
     Append-only: nothing in this module updates or deletes an event row.
     """
+    if kind in AUTOMATION_EVENT_KINDS:
+        logger.warning(
+            "Refusing account automation event kind %r for strategy %s", kind, strategy_id
+        )
+        return None
     try:
         row = SmStrategyEvent(
             run_id=run_id,
