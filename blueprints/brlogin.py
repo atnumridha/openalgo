@@ -56,7 +56,10 @@ def broker_callback(broker, para=None):
             logger.warning(f"User not in session for {broker} callback, redirecting to login")
             return redirect(url_for("auth.login"))
 
-    if session.get("logged_in"):
+    # Kotak's daily broker session can expire while the OpenAlgo login remains
+    # valid. Visiting/submitting its auth form is an explicit reauthentication
+    # request; do not report success without checking the new TOTP and MPIN.
+    if session.get("logged_in") and broker != "kotak":
         # Store broker in session and g
         session["broker"] = broker
         return redirect(url_for("dashboard_bp.dashboard"))
