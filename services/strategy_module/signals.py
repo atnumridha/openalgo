@@ -624,6 +624,7 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             run_id=run_id,
             error="No API key is configured for this user",
         )
+    resolved["position_ref"] = state.new_position_ref()
     governor_decision, admission = portfolio_governor.acquire_entry_admission(
         str(strategy.user_id),
         strategy,
@@ -638,6 +639,7 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             else None
         ),
         broker=(str(run_row.broker) if run_row and getattr(run_row, "broker", None) else None),
+        managed_budget=True,
     )
     if not governor_decision.allowed:
         if governor_decision.code == "live_authorization_required":
@@ -718,7 +720,7 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         if not admitted:
             return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=error)
         result = _enter_admitted(
-            strategy, run_id, leg, side, leg_id, resolved, mode, broker, loss_strategy
+            strategy, run_id, leg, side, leg_id, resolved, mode, broker, loss_strategy, admission
         )
         if admission is not None and result.ok and result.note is None:
             snapshot = state.get_run_state(run_id) or {}
@@ -781,9 +783,10 @@ def _enter_admitted(
     mode: str,
     broker: str,
     loss_strategy: dict[str, Any],
+    admission=None,
 ) -> SignalResult:
     """Claim and publish one entry while its portfolio admission is held."""
-    claim = state.claim_signal_entry(run_id, leg_id, _POSITION_OF_SIDE[side])
+    claim = state.claim_signal_entry(run_id, leg_id, _POSITION_OF_SIDE[side], position_ref=resolved.get("position_ref"))
     if claim is None:
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error="No active run")
     if claim.get("note"):
@@ -849,6 +852,7 @@ def _enter_admitted(
             "entry",
             _POSITION_OF_SIDE[side],
             entry_claim=claim,
+            admission=admission,
         )
         if not outcome.ok:
             return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
@@ -1094,6 +1098,7 @@ def _place(
     exiting: bool = False,
     exit_owner: str = "live",
     entry_claim: dict | None = None,
+    admission=None,
 ) -> _Placement:
     """Place one signal-driven order and record it."""
     # Dispatch may synchronously publish a fill whose cleanup removes every
@@ -1243,6 +1248,12 @@ def _place(
             severity="critical",
         )
 
+    if not exiting and admission is not None and hasattr(admission, "mark_dispatch_attempted"):
+        admission.mark_dispatch_attempted(run_id)
+    order["_strategy_qualification"] = {
+        "owner": user_id, "strategy_id": strategy_id, "strategy_config": strategy,
+        "trade_ref": leg.get("position_ref"), "order_id": row_id,
+    }
     result = order_dispatch.dispatch_signal_order(
         strategy_id=strategy_id,
         user_id=user_id,

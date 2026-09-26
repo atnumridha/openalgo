@@ -778,7 +778,15 @@ def broker_callback(broker, para=None):
             logger.info(f"Kotak TOTP authentication initiated for mobile: {mobile_number[:5]}***")
 
             # Call the new authenticate_broker function
+            # Persist the UCC that actually accompanied this authentication.
+            # Reading mutable configuration later cannot identify an old token.
+            user_id = get_broker_api_key()
             auth_token, error_message = auth_function(mobile_number, totp, mpin)
+            if auth_token and (not user_id or user_id != get_broker_api_key()):
+                return jsonify(
+                    status="error",
+                    message="The Kotak account configuration changed during login. Authenticate again.",
+                ), 409
             forward_url = "broker.html"
 
             if auth_token:
@@ -1046,7 +1054,7 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital", "kotak"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database

@@ -174,13 +174,22 @@ def _scope_broker(scope: str | None) -> str | None:
 class EntryAdmission:
     """A user gate plus provisional portfolio reservation for one entry."""
 
-    __slots__ = ("_lock", "_owner_scopes", "_released", "_reservation")
+    __slots__ = ("_lock", "_owner_scopes", "_released", "_reservation", "_budget_ref", "_budget_dispatched")
 
     def __init__(self, lock: Lock, reservation: _EntryReservation) -> None:
         self._lock = lock
         self._owner_scopes = _admission_context.scopes
         self._released = False
         self._reservation = reservation
+        self._budget_ref = None
+        self._budget_dispatched = False
+
+    def mark_dispatch_attempted(self, run_id: int) -> None:
+        """Link durable capital before the first possible broker side effect."""
+        if self._budget_ref is not None:
+            from services.strategy_module import trading_budget
+            trading_budget.dispatch_started(self._reservation.user_id, _scope_mode(self._reservation.scope), self._budget_ref, run_id)
+            self._budget_dispatched = True
 
     def commit(self, run_id: int, exposures: list[dict[str, Any]]) -> None:
         """Keep only broker-accepted legs after releasing the admission gate."""
@@ -215,6 +224,9 @@ class EntryAdmission:
             return
         self._released = True
         try:
+            if self._budget_ref is not None:
+                from services.strategy_module import trading_budget
+                trading_budget.release_admission(self._reservation.user_id, _scope_mode(self._reservation.scope), self._budget_ref, self._budget_dispatched)
             if not self._reservation.committed:
                 _remove_reservation(self._reservation)
         finally:
@@ -1735,6 +1747,7 @@ def acquire_entry_admission(
     now: datetime,
     authorization_check: Callable[[], tuple[bool, str | None]] | None = None,
     broker: str | None = None,
+    managed_budget: bool = False,
 ) -> tuple[GovernorDecision, EntryAdmission | None]:
     """Atomically evaluate and lease one user's Strategy Module entry path.
 
@@ -1745,6 +1758,19 @@ def acquire_entry_admission(
     instead of evaluating concurrently against the same broker snapshot.
     """
 
+    if managed_budget:
+        from database import trading_risk_db
+        try:
+            managed_budget = trading_risk_db.policy_enabled(user_id)
+        except Exception:
+            logger.exception("Could not determine allocation policy for %s", user_id)
+            return GovernorDecision(False, "risk_missing", "Allocation policy is unavailable"), None
+    if managed_budget:
+        # Absolute allocation limits are enforced by the shared durable budget.
+        # Retain quote quality, session windows, cash checks and position caps.
+        policy = replace(policy, cash_risk_pct=Decimal("1"), option_risk_pct=Decimal("1"),
+                         high_volatility_option_risk_pct=Decimal("1"), combined_risk_pct=Decimal("1"),
+                         daily_loss_pct=Decimal("1"))
     if mode not in {"live", "sandbox"}:
         return (
             GovernorDecision(
@@ -1832,6 +1858,14 @@ def acquire_entry_admission(
         facts = _merge_reservations(user_id, raw_facts, scope=scope)
         decision = evaluate_entry(facts, policy, now)
         if decision.allowed:
+            budget_ref = None
+            if managed_budget:
+                from services.strategy_module import trading_budget
+                budget, budget_ref = trading_budget.reserve_entry(user_id, strategy, resolved_legs, mode, broker, raw_facts, now)
+                if not budget.allowed:
+                    _release_admission_lock(scope, lock)
+                    return GovernorDecision(False, budget.code, f"Capital policy refused entry: {budget.code.replace('_', ' ')}", budget.metrics), None
+                decision = GovernorDecision(True, "entry_allowed", "Entry fits the shared capital policy", {**decision.metrics, **budget.metrics})
             reservation = _EntryReservation(
                 user_id=str(user_id),
                 scope=scope,
@@ -1840,10 +1874,13 @@ def acquire_entry_admission(
             )
             with _admission_registry_lock:
                 _entry_reservations.setdefault(scope, []).append(reservation)
-            return decision, EntryAdmission(lock, reservation)
+            admission = EntryAdmission(lock, reservation)
+            admission._budget_ref = budget_ref
+            return decision, admission
         _release_admission_lock(scope, lock)
         return decision, None
     except Exception:
+        logger.exception("Portfolio admission facts could not be evaluated")
         _release_admission_lock(scope, lock)
         return (
             GovernorDecision(

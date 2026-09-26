@@ -236,6 +236,13 @@ def dispatch_order(
         return DispatchResult(ok=False, error=f"Unknown order intent: {intent!r}")
     if intent == "protection" and mode != "live":
         return DispatchResult(ok=False, error="Broker-held protection is available only for live runs")
+    order = dict(order)
+    qualification_metadata = order.pop("_strategy_qualification", None)
+    if qualification_metadata:
+        from services.research.qualification_execution import before_dispatch
+        refusal = before_dispatch(qualification_metadata, mode, intent, api_key, order)
+        if refusal:
+            return DispatchResult(ok=False, error=refusal)
     if mode == "sandbox":
         return _dispatch_sandbox(api_key, order)
     if mode == "live":
@@ -256,6 +263,7 @@ def dispatch_order(
             intent=intent,
             expected_broker=expected_broker,
             expected_connection_id=expected_connection_id,
+            qualification_metadata=qualification_metadata,
         )
     return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
@@ -645,6 +653,7 @@ def _dispatch_live(
     intent: str,
     expected_broker: str,
     expected_connection_id: str,
+    qualification_metadata: dict | None = None,
 ) -> DispatchResult:
     auth_token, broker, error = resolve_live_auth(api_key)
     if error:
@@ -699,6 +708,13 @@ def _dispatch_live(
     # These private routing claims belong to the strategy engine, not the
     # broker API. Never forward them to a plugin adapter or broker.
     order = {key: value for key, value in order.items() if not key.startswith("_strategy_")}
+    if intent == "entry" and qualification_metadata:
+        from services.research.qualification_execution import before_dispatch, live_session_reason
+        refusal = before_dispatch(qualification_metadata, "live", intent, api_key, order)
+        if not refusal:
+            refusal = live_session_reason(qualification_metadata, auth_token, broker, pinned_id)
+        if refusal:
+            return DispatchResult(ok=False, error=refusal)
     original = dict(order)
     original["apikey"] = api_key
     try:

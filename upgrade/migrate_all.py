@@ -87,6 +87,7 @@ MIGRATIONS = [
     ("migrate_watchlist.py", "Charting Terminal Watchlists"),
     ("migrate_strategy_module.py", "Strategy Module (multi-leg options + RMS)"),
     ("migrate_profit_comparison.py", "Sandbox Profit Comparison Records"),
+    ("migrate_trading_research.py", "Trading Research and Shared Capital Risk"),
     ("migrate_strategy_universe_tab.py", "Strategy Module Universe Tab Normalization"),
     ("migrate_agent.py", "Agent Module (LLM chat and chart surfaces)"),
     ("migrate_agent_voice.py", "Agent Voice Surface Settings"),
@@ -102,6 +103,7 @@ MIGRATIONS = [
 REQUIRED_MIGRATIONS = frozenset({
     "migrate_strategy_module.py",
     "migrate_profit_comparison.py",
+    "migrate_trading_research.py",
     "migrate_strategy_universe_tab.py",
 })
 

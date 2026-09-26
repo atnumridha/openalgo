@@ -10,6 +10,7 @@ openalgo.db
 *.pyc
 __pycache__/
 instance/
+.local-stack/
 .DS_Store
 Thumbs.db
 .vscode/

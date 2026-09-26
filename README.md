@@ -348,6 +348,8 @@ uv run app.py
 
 The application will be available at `http://127.0.0.1:5000`
 
+For an already configured local installation on macOS, double-click **Start OpenAlgo.command** to start the app and research worker and open the dashboard. Companion **Stop**, **Status**, and **Check** launchers are included. See the [one-click startup guide](docs/local-startup.md) for prerequisites, logs and shutdown behavior.
+
 For detailed installation instructions, deployment options (Docker, AWS, etc.), and configuration guides, visit [docs.openalgo.in/installation-guidelines/getting-started](https://docs.openalgo.in/installation-guidelines/getting-started)
 
 ## API Documentation

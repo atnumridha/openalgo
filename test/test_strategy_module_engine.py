@@ -2346,3 +2346,49 @@ def test_live_batch_rechecks_authorization_inside_portfolio_admission(api_key):
     assert result.error == expired
     assert dispatches == []
     assert store.list_runs(sid) == []
+
+
+def test_budget_dispatch_marker_waits_for_durable_order_intent(api_key):
+    sid = _make()
+    admission = Mock()
+    decision = GovernorDecision(allowed=True, code='admitted', message='admitted')
+    with (patch.object(portfolio_governor, 'acquire_entry_admission', return_value=(decision, admission)),
+          patch.object(store, 'record_order', return_value=None)):
+        result = _start(sid)
+    assert not result.ok
+    admission.mark_dispatch_attempted.assert_not_called()
+
+
+@pytest.mark.parametrize('unknown,unrecordable', [(False, False), (True, False), (False, True)])
+def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_path, monkeypatch, unknown, unrecordable):
+    from database import trading_risk_db as ledger
+    from database.engine_factory import create_db_engine
+    db_engine = create_db_engine(f'sqlite:///{tmp_path}/capital.db')
+    monkeypatch.setattr(ledger, 'engine', db_engine)
+    ledger.init_db()
+    ledger.set_costs(USER, {'schedule_id': 'test', 'source': 'test-only', 'effective_from': '2000-01-01', 'effective_to': '2099-01-01',
+                          'brokerage_per_order': 20, 'exchange_rate': 0, 'sebi_rate': 0, 'gst_rate': 0,
+                          'stamp_buy_rate': 0, 'stt_sell_rate': 0, 'slippage_bps': 0})
+    config = _config()
+    config['legs'][0].update(position='B', sl_pts=10, target_pts=20)
+    sid = _make(config)
+    calls = []
+    def dispatch(**kwargs):
+        rows = ledger.list_trades(USER, 'sandbox')
+        assert len(rows) == 1
+        assert rows[0]['status'] == 'pending'
+        assert rows[0]['run_id'] is not None
+        assert rows[0]['planned_risk'] == Decimal('790')
+        calls.append(kwargs)
+        return DispatchResult(ok=not unknown, unknown=unknown, broker_order_id=None if unknown else 'SB-managed', error='timeout' if unknown else None)
+    try:
+        if unrecordable:
+            monkeypatch.setattr(store, 'record_order', lambda *args, **kwargs: None)
+        result = _start(sid, dispatch=dispatch)
+        rows = ledger.list_trades(USER, 'sandbox')
+        assert len(rows) == 1, result.error
+        assert rows[0]['status'] == ('void' if unrecordable else 'pending')
+        assert bool(calls) is not unrecordable
+        assert result.ok is (not unknown and not unrecordable)
+    finally:
+        db_engine.dispose()

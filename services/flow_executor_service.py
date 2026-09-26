@@ -360,6 +360,7 @@ class WorkflowContext:
         # released when that workflow is deactivated or deleted.
         self.workflow_id = workflow_id
         self.execution_id: int | None = None
+        self.qualification_graph_hash: str | None = None
         self.requires_bar_evidence = False
         self.broker_connection_id: str | None = None
 
@@ -2234,12 +2235,11 @@ class NodeExecutor:
                 }
             )
 
-        started = engine.start_run(
-            strategy_id,
-            username,
-            mode,
-            trigger_source=f"flow:{self.context.workflow_id}",
-        )
+        from services.research.qualification_execution import flow_origin
+        with flow_origin(self.context.workflow_id, self.context.execution_id, self.context.qualification_graph_hash):
+            started = engine.start_run(
+                strategy_id, username, mode, trigger_source=f"flow:{self.context.workflow_id}",
+            )
         if not started.ok:
             if started.error == "This strategy is already running":
                 existing = self.existing_batch_run(get_strategy(strategy_id, username), mode, node_data)
@@ -2368,18 +2368,21 @@ class NodeExecutor:
             )
             if actual_mode != mode:
                 return {"status": "error", "message": "Signal mode differs from the strategy execution mode"}
-            outcome = signals.handle_signal(
-                strategy, action,
-                leg_id=node_data.get("legId"),
-                symbol=self.get_str(node_data, "symbol", "") or None,
-                exchange=self.get_str(node_data, "exchange", "") or None,
-            )
+            from services.research.qualification_execution import flow_origin
+            with flow_origin(self.context.workflow_id, self.context.execution_id, self.context.qualification_graph_hash):
+                outcome = signals.handle_signal(
+                    strategy, action, leg_id=node_data.get("legId"),
+                    symbol=self.get_str(node_data, "symbol", "") or None,
+                    exchange=self.get_str(node_data, "exchange", "") or None,
+                )
             if not outcome.ok:
                 return {"status": "error", "message": outcome.error or "Signal was refused"}
             result = {"status": "success", "action": action, "strategy_id": strategy_id,
                       "mode": mode, "run_id": outcome.run_id, "note": outcome.note}
         elif action == "start":
-            outcome = engine.start_run(strategy_id, owner, mode, trigger_source=f"flow:{self.context.workflow_id}")
+            from services.research.qualification_execution import flow_origin
+            with flow_origin(self.context.workflow_id, self.context.execution_id, self.context.qualification_graph_hash):
+                outcome = engine.start_run(strategy_id, owner, mode, trigger_source=f"flow:{self.context.workflow_id}")
             if not outcome.ok:
                 if outcome.error == "This strategy is already running":
                     existing = self.existing_batch_run(get_strategy(strategy_id, owner), mode, node_data)
@@ -5090,6 +5093,13 @@ def execute_workflow(
         if not workflow:
             return {"status": "error", "message": "Workflow not found"}
 
+        from copy import deepcopy
+        from types import SimpleNamespace
+
+        from services.research.qualification_context import workflow_digest
+
+        execution_nodes = deepcopy(workflow.nodes or [])
+        execution_edges = deepcopy(workflow.edges or [])
         # Every trigger converges here - schedules, price alerts, order updates,
         # webhooks and Run Now - so this is the only place that can guarantee an
         # incomplete graph never reaches the broker. Guarding the HTTP routes
@@ -5101,8 +5111,8 @@ def execute_workflow(
         validation_errors = validate_workflow(
             {
                 "name": workflow.name,
-                "nodes": workflow.nodes or [],
-                "edges": workflow.edges or [],
+                "nodes": execution_nodes or [],
+                "edges": execution_edges or [],
             },
             strict=True,
         )
@@ -5117,6 +5127,12 @@ def execute_workflow(
                 "errors": validation_errors,
             }
 
+        graph_hash = workflow_digest([
+            SimpleNamespace(
+                id=workflow.id, nodes=execution_nodes, edges=execution_edges,
+                broker_connection_id=getattr(workflow, "broker_connection_id", None),
+            )
+        ])
         execution = create_execution(workflow_id, status="running")
         if not execution:
             return {"status": "error", "message": "Failed to create execution record"}
@@ -5124,6 +5140,7 @@ def execute_workflow(
         logs = []
         context = WorkflowContext(workflow_id=workflow_id)
         context.execution_id = execution.id
+        context.qualification_graph_hash = graph_hash
 
         if webhook_data:
             context.set_variable("webhook", webhook_data)
@@ -5140,8 +5157,8 @@ def execute_workflow(
             logger.info(f"Starting workflow: {workflow.name}")
             executor.log(f"Starting workflow: {workflow.name}")
 
-            nodes = workflow.nodes or []
-            edges = workflow.edges or []
+            nodes = execution_nodes or []
+            edges = execution_edges or []
             context.requires_bar_evidence = workflow_requires_bar_evidence(nodes)
 
             # Find trigger node

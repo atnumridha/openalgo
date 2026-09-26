@@ -507,6 +507,11 @@ def react_strategy_new():
     return serve_react_app()
 
 
+@react_bp.route("/strategy/research", strict_slashes=False)
+def react_strategy_research():
+    return serve_react_app()
+
+
 @react_bp.route("/strategy/<int:strategy_id>", strict_slashes=False)
 def react_strategy_detail(strategy_id):
     return serve_react_app()

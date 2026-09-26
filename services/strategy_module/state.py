@@ -263,7 +263,7 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
         return dict(leg)
 
 
-def claim_signal_entry(run_id: int, leg_id: Any, position: str) -> dict[str, Any] | None:
+def claim_signal_entry(run_id: int, leg_id: Any, position: str, *, position_ref: str | None = None) -> dict[str, Any] | None:
     """Claim one bounded signal entry decision before any external I/O."""
     lock = _lock_for(run_id, create=False)
     if lock is None:
@@ -301,7 +301,7 @@ def claim_signal_entry(run_id: int, leg_id: Any, position: str) -> dict[str, Any
 
         claim = {
             "claim_token": new_position_ref(),
-            "position_ref": new_position_ref(),
+            "position_ref": position_ref or new_position_ref(),
             "position": requested,
             "held_position": live_position,
             "expected_position_ref": leg.get("position_ref") if leg else None,

@@ -53,3 +53,15 @@ collect_ignore = [
     "test_websocket.py",
     "test_websocket_service.py",
 ]
+
+
+import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def trading_profile_schema():
+    """Apply new schema to the isolated test DB, as application startup does."""
+    from database.trading_risk_db import init_db
+    init_db()
+    from database.strategy_qualification_db import init_db as qualification_init_db
+    qualification_init_db()

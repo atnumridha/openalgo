@@ -79,6 +79,24 @@ def facts(**overrides) -> EntryFacts:
     return replace(baseline, **overrides)
 
 
+def test_managed_admission_requires_durable_budget_before_dispatch(monkeypatch):
+    from services.strategy_module import trading_budget
+    monkeypatch.setattr(trading_budget.ledger, "policy_enabled", lambda _user: True)
+    from services.risk.budget import BudgetDecision
+
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", lambda *a, **kw: facts())
+    monkeypatch.setattr(portfolio_governor, "_reconstruct_recovered_entry_reservations", lambda *a: True)
+    monkeypatch.setattr(trading_budget, "reserve_entry", lambda *a: (BudgetDecision(False, "later_budget_exhausted", "later", Decimal("0")), None))
+    decision, admission = portfolio_governor.acquire_entry_admission(
+        "budget-user", SimpleNamespace(id=1), [{"id": 1}], "key", "live", DEFAULT_POLICY, NOW,
+        broker="kotak", managed_budget=True,
+    )
+    assert not decision.allowed
+    assert decision.code == "later_budget_exhausted"
+    assert admission is None
+    assert not portfolio_governor._admission_lock("budget-user|live|kotak").locked()
+
+
 def test_entry_before_the_intraday_window_is_rejected():
     decision = evaluate_entry(facts(), DEFAULT_POLICY, NOW.replace(hour=9, minute=19))
 

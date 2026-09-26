@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:900, test/test_strategy_module_engine.py:927, test/test_strategy_module_scheduler.py:750
+  # Source: services/strategy_module/engine.py:902, test/test_strategy_module_engine.py:927, test/test_strategy_module_scheduler.py:750
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order

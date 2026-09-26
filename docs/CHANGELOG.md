@@ -8,6 +8,12 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Add Strategy Research at `/strategy/research`: immutable dataset imports, cost-aware offline replay, durable worker jobs and sealed final tests with holdout reuse protection. Historical and forward results must be supplied and evaluated; the platform does not establish profitability on installation.
+- Add an opt-in ₹10,000 capital profile for managed Strategy Module entries. The first filled trade has a ₹1,000 planned-loss allowance and subsequent trades share another ₹1,000, with no replenishment from profits. A 20% peak-equity drawdown pauses admissions until a flat-account reconciliation review. Current live support is limited to single-leg intraday long options with verified contract evidence; other order paths are outside this profile.
+- Collect prospective Sandbox qualification evidence for the exact saved strategy and Flow. Live release requires a qualified campaign and explicit, expiring approval bound to its evidence, source, account and broker authentication. Protective exits remain available when qualification fails. Existing Kotak sessions without a persisted authenticated account identity require a fresh broker login.
+- **Requires a database migration:** `upgrade/migrate_trading_research.py` is included in `upgrade/migrate_all.py`. Run the separate research worker, or use the new local launcher, to process queued experiments. Interrupted jobs are recorded without automatically replaying consumed holdouts.
+- Add macOS Start, Stop, Status and Check launchers for the local app and research worker. Start checks configuration and ports, applies migrations and opens the dashboard only after readiness. Stop verifies ownership and shuts down managed processes; it does not close broker positions. See [local-startup.md](local-startup.md) for logs, prerequisites and failure handling.
+
 - Upgrade `/trading` to the published openalgo-charts 2.4.5 package, with 105 built-in studies, open interest readouts and chart alerts. Open interest is a level: aggregation keeps the last reading rather than summing values. Missing live readings remain absent.
 - Add saved chart workspaces, study templates, comparison symbols with price or percentage scales, and CSV downloads of the displayed bars, studies and comparisons.
 - Share one toolbar across the selected chart and one replay transport across the workspace. Replay can follow the selected chart or all charts on a shared clock; order actions and workspace autosave pause until replay ends.

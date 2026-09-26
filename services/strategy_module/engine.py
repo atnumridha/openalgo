@@ -395,6 +395,7 @@ def start_run(
             (lambda: live_authorization.require_live_entry(user_id)) if mode == "live" else None
         ),
         broker=run_broker,
+        managed_budget=True,
     )
     if not governor_decision.allowed:
         if governor_decision.code == "live_authorization_required":
@@ -515,6 +516,7 @@ def start_run(
             api_key,
             user_id,
             placement_progress=placement_progress,
+            admission=admission,
         )
         if admission is not None:
             resolved_by_id = {str(leg["leg_id"]): leg for leg in resolved}
@@ -906,6 +908,7 @@ def _place_entries(
     user_id: str,
     *,
     placement_progress: dict[str, set[str]] | None = None,
+    admission=None,
 ) -> list[dict[str, Any]]:
     """Place every leg's entry, longs first.
 
@@ -1011,7 +1014,13 @@ def _place_entries(
         # adapter code raises, the send may already have reached the broker;
         # the failed-start path must retain it as possible exposure rather than
         # misclassifying it as an undispatched placeholder.
+        if admission is not None and hasattr(admission, "mark_dispatch_attempted"):
+            admission.mark_dispatch_attempted(run_id)
         dispatch_attempted.add(position_ref)
+        order["_strategy_qualification"] = {
+            "owner": user_id, "strategy_id": int(strategy["id"]), "strategy_config": strategy,
+            "trade_ref": leg.get("position_ref"), "order_id": row_id,
+        }
         result = order_dispatch.dispatch_order(
             mode=mode, api_key=api_key, order=order, intent="entry"
         )
@@ -1182,6 +1191,11 @@ def apply_fill(
             allow_prior_order_correction,
             deferred_warnings,
         )
+        _sync_trading_budget(run_id, position_ref=position_ref)
+        try:
+            _enforce_trading_budget(run_id)
+        except Exception:
+            logger.exception("Portfolio budget enforcement failed after fill for run %s", run_id)
         if is_entry and order_terminal and avg_price is not None:
             try:
                 from services.strategy_module.comparison_lifecycle import attach_confirmed_entry
@@ -1689,6 +1703,10 @@ def _exit_legs(
                 continue
             exit_claim_id = row_id
 
+        order["_strategy_qualification"] = {
+            "owner": user_id, "strategy_id": int(strategy["id"]), "strategy_config": strategy,
+            "trade_ref": leg.get("position_ref"), "order_id": row_id,
+        }
         result = order_dispatch.dispatch_order(
             mode=mode, api_key=api_key, order=order, intent="exit"
         )
@@ -2301,6 +2319,7 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
             "pnl_trough": (live or {}).get("pnl_trough", 0.0) or 0.0,
         }
 
+    _sync_trading_budget(run_id)
     finished = store.finish_run_and_release_strategy(
         run_id,
         strategy_id,
@@ -2424,9 +2443,26 @@ def process_tick(symbol: str, exchange: str, ltp: float) -> None:
     for run_id in state.active_run_ids():
         try:
             _process_tick_for_run(run_id, symbol, exchange, ltp)
+            _enforce_trading_budget(run_id)
         except Exception:
             # One run's failure must not stop the others being evaluated.
             logger.exception("Tick processing failed for run %s", run_id)
+
+
+def _sync_trading_budget(run_id: int, position_ref: str | None = None) -> None:
+    try:
+        from services.strategy_module import trading_budget
+        trading_budget.sync_run(run_id, position_ref=position_ref)
+    except Exception:
+        # Budget failures must never interrupt the existing protective exits.
+        # Further admissions fail closed if their ledger cannot be read.
+        logger.exception("Trading budget reconciliation failed for run %s", run_id)
+
+
+def _enforce_trading_budget(run_id: int) -> None:
+    from services.strategy_module import trading_budget
+    for affected_run, user_id in set(trading_budget.breached_runs(run_id)):
+        stop_run(affected_run, user_id, reason="daily_loss_limit")
 
 
 def _daily_loss_limit(strategy: dict[str, Any]) -> float | None:

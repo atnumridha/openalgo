@@ -335,6 +335,7 @@ export default function StrategyList() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild><Link to="/strategy/research">Research</Link></Button>
           <Button
             variant="secondary"
             disabled={

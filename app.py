@@ -107,6 +107,9 @@ from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
+from blueprints.trading_research import trading_research_bp
+from blueprints.strategy_qualification import strategy_qualification_bp
+from blueprints.trading_risk import trading_risk_bp
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
@@ -137,6 +140,9 @@ from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
+from database.trading_research_db import init_db as ensure_trading_research_tables_exist
+from database.trading_risk_db import init_db as ensure_trading_risk_tables_exist
+from database.strategy_qualification_db import init_db as ensure_strategy_qualification_tables_exist
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -320,6 +326,9 @@ def create_app():
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
+    app.register_blueprint(trading_research_bp)
+    app.register_blueprint(strategy_qualification_bp)
+    app.register_blueprint(trading_risk_bp)
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)
@@ -762,6 +771,9 @@ def setup_environment(app):
                 ("Latency DB", ensure_latency_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
                 ("Strategy Module DB", ensure_strategy_module_tables_exists),
+                ("Trading Research DB", ensure_trading_research_tables_exist),
+                ("Strategy Qualification DB", ensure_strategy_qualification_tables_exist),
+                ("Trading Risk DB", ensure_trading_risk_tables_exist),
                 ("Action Center DB", ensure_action_center_tables_exists),
                 ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
                 ("Market Calendar DB", ensure_market_calendar_tables_exists),
@@ -1280,4 +1292,13 @@ if __name__ == "__main__":
 
         install_signal_handlers()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    from utils.local_startup import local_server_options
+
+    socketio.run(
+        app,
+        host=host_ip,
+        port=port,
+        debug=debug,
+        reloader_options=reloader_options,
+        **local_server_options(host_ip, debug, os.getenv("OPENALGO_LOCAL_STARTUP")),
+    )

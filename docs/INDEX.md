@@ -32,6 +32,7 @@ need → drill into the specific file. Don't load everything at once.
 
 | Topic | Entry point |
 |---|---|
+| One-click local startup (macOS) | [local-startup.md](local-startup.md) |
 | Ubuntu server install | [installation-guidelines/getting-started/ubuntu-server-installation.md](installation-guidelines/getting-started/ubuntu-server-installation.md) |
 | Docker | [docker/README.md](docker/README.md) |
 | Upgrade / SMTP / TOTP / forgot-password | https://docs.openalgo.in/installation-guidelines/getting-started/ |
@@ -43,6 +44,7 @@ need → drill into the specific file. Don't load everything at once.
 | Feature | Entry point |
 |---|---|
 | Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
+| Strategy Research and shared capital limits | [trading-research.md](trading-research.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
@@ -72,3 +74,5 @@ need → drill into the specific file. Don't load everything at once.
 
 - User responsibilities & risk ownership: https://docs.openalgo.in/responsibilities
 - Repository: https://github.com/marketcalls/openalgo · Docs: https://docs.openalgo.in
+
+- [Allocated capital profile](trading-capital-profile.md) — activation, budgets, reconciliation and qualification limits.

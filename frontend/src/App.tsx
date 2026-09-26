@@ -92,6 +92,7 @@ const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStr
 
 // Strategy module: multi-leg options strategies with risk management
 const StrategyList = lazy(() => import('@/pages/strategy/List'))
+const StrategyResearch = lazy(() => import('@/pages/strategy/Research'))
 const StrategyWizard = lazy(() => import('@/pages/strategy/Wizard'))
 const StrategyDetail = lazy(() => import('@/pages/strategy/Detail'))
 const StrategyEdit = lazy(() => import('@/pages/strategy/Edit'))
@@ -260,6 +261,7 @@ function App() {
                 {/* Strategy module. /strategy/new before /strategy/:id so the
                     literal wins over the parameter. */}
                 <Route path="/strategy" element={<StrategyList />} />
+                <Route path="/strategy/research" element={<StrategyResearch />} />
                 <Route path="/strategy/new" element={<StrategyWizard />} />
                 <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
                 <Route path="/strategy/:strategyId/edit" element={<StrategyEdit />} />
