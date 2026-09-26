@@ -863,6 +863,50 @@ export default function StrategyList() {
                         >
                           {row.name}
                         </Link>
+                        {row.strategy_kind === 'batch' && row.status === 'stopped' && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            className="mt-2"
+                            aria-label={`Start run for ${row.name}`}
+                            disabled={
+                              startMutation.isPending ||
+                              bulkMutation.isPending ||
+                              liveBulkMutation.isPending
+                            }
+                            onClick={() => {
+                              setStartTarget(row)
+                              setStartMode('sandbox')
+                              setStartConfirmation('')
+                            }}
+                          >
+                            <Play aria-hidden="true" className="size-4" />
+                            Start run
+                          </Button>
+                        )}
+                        {row.strategy_kind === 'signal' &&
+                          state === 'disabled' &&
+                          !row.live_enabled &&
+                          row.status === 'stopped' && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="mt-2"
+                              aria-label={`Arm signals for ${row.name}`}
+                              disabled={
+                                pending || bulkMutation.isPending || controlMutation.isPending
+                              }
+                              onClick={() => {
+                                setBulkResult(null)
+                                setControlError(null)
+                                setControlResult(null)
+                                controlMutation.mutate({ id: row.id, action: 'enable' })
+                              }}
+                            >
+                              <Power aria-hidden="true" className="size-4" />
+                              Arm signals
+                            </Button>
+                          )}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -965,48 +1009,6 @@ export default function StrategyList() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-                          {row.strategy_kind === 'batch' && row.status === 'stopped' && (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              aria-label={`Start run for ${row.name}`}
-                              disabled={
-                                startMutation.isPending ||
-                                bulkMutation.isPending ||
-                                liveBulkMutation.isPending
-                              }
-                              onClick={() => {
-                                setStartTarget(row)
-                                setStartMode('sandbox')
-                                setStartConfirmation('')
-                              }}
-                            >
-                              <Play aria-hidden="true" className="size-4" />
-                              Start run
-                            </Button>
-                          )}
-                          {row.strategy_kind === 'signal' &&
-                            state === 'disabled' &&
-                            !row.live_enabled &&
-                            row.status === 'stopped' && (
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                aria-label={`Arm signals for ${row.name}`}
-                                disabled={
-                                  pending || bulkMutation.isPending || controlMutation.isPending
-                                }
-                                onClick={() => {
-                                  setBulkResult(null)
-                                  setControlError(null)
-                                  setControlResult(null)
-                                  controlMutation.mutate({ id: row.id, action: 'enable' })
-                                }}
-                              >
-                                <Power aria-hidden="true" className="size-4" />
-                                Arm signals
-                              </Button>
-                            )}
                           {state !== 'closing' &&
                             !(
                               row.strategy_kind === 'signal' &&

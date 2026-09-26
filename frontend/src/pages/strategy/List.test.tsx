@@ -803,8 +803,14 @@ describe('individual strategy start controls', () => {
     rest.post.mockResolvedValue({ data: { run_id: 25, mode: 'sandbox', legs: [] } })
     renderList()
 
+    const nameCell = (await screen.findByRole('link', { name: 'Batch strategy' })).closest(
+      'td'
+    ) as HTMLElement
+    expect(
+      within(nameCell).getByRole('button', { name: 'Start run for Batch strategy' })
+    ).toBeVisible()
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Start run for Batch strategy' })
+      within(nameCell).getByRole('button', { name: 'Start run for Batch strategy' })
     )
     expect(rest.post).not.toHaveBeenCalled()
     const dialog = screen.getByRole('dialog')
