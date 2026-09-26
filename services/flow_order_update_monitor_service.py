@@ -469,6 +469,11 @@ def restore_order_update_watches() -> int:
                 f"Cannot restore order-update watch for workflow {workflow.id}: no stored API key"
             )
             continue
+        from services.flow_readiness_service import strategy_link_issues
+
+        if strategy_link_issues(workflow, api_key=api_key):
+            logger.warning("Not restoring workflow %s: its strategy link needs attention", workflow.id)
+            continue
         data = trigger_node.get("data", {}) or {}
         try:
             monitor.add_watch(

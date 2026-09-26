@@ -637,6 +637,11 @@ def restore_price_alerts() -> int:
                 f"Cannot restore price alert for workflow {workflow.id}: no stored API key"
             )
             continue
+        from services.flow_readiness_service import strategy_link_issues
+
+        if strategy_link_issues(workflow, api_key=api_key):
+            logger.warning("Not restoring workflow %s: its strategy link needs attention", workflow.id)
+            continue
         data = trigger_node.get("data", {}) or {}
         symbol = data.get("symbol", "")
         if not symbol:

@@ -614,6 +614,38 @@ class TestUpdate:
 
 
 class TestDelete:
+    def test_trigger_teardown_failure_preserves_strategy(self, client, monkeypatch):
+        from database import flow_db
+        from services import flow_lifecycle_service
+        from types import SimpleNamespace
+
+        sid = create(client)["data"]["id"]
+        monkeypatch.setattr(flow_db, "get_workflows_for_strategy", lambda _, **kw: [SimpleNamespace(id=999)])
+        monkeypatch.setattr(flow_lifecycle_service, "deactivate_workflow", lambda _: ({"error": "scheduler unavailable"}, 500))
+        response = client.delete(f"/strategy/api/strategies/{sid}")
+        assert response.status_code == 409
+        assert store.get_strategy(sid, USER) is not None
+
+    def test_linked_flow_stops_before_strategy_deletion(self, client, monkeypatch):
+        from database import flow_db
+        from services import flow_lifecycle_service
+        from types import SimpleNamespace
+
+        sid = create(client)["data"]["id"]
+        stopped = []
+        monkeypatch.setattr(flow_db, "get_workflows_for_strategy", lambda _, **kw: [SimpleNamespace(id=999)])
+
+        def deactivate(wid):
+            assert store.get_strategy(sid, USER) is not None
+            stopped.append(wid)
+            return {"status": "success"}, 200
+
+        monkeypatch.setattr(flow_lifecycle_service, "deactivate_workflow", deactivate)
+        response = client.delete(f"/strategy/api/strategies/{sid}")
+        assert response.status_code == 200
+        assert stopped == [999]
+        assert store.get_strategy(sid, USER) is None
+
     def test_a_stopped_strategy_is_deleted(self, client):
         sid = create(client)["data"]["id"]
 

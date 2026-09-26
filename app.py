@@ -855,7 +855,7 @@ def setup_environment(app):
             try:
                 from services.flow_scheduler_service import init_flow_scheduler
 
-                init_flow_scheduler()
+                init_flow_scheduler(paused=True)
                 logger.debug("Flow scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Flow scheduler: {e}")
@@ -880,6 +880,9 @@ def setup_environment(app):
                 from services.flow_scheduler_service import reconcile_scheduler_jobs
 
                 reconcile_scheduler_jobs()
+                from services.flow_scheduler_service import get_flow_scheduler
+
+                get_flow_scheduler().scheduler.resume()
             except Exception:
                 logger.exception("Failed to reconcile Flow scheduler jobs")
 

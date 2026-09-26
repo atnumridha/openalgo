@@ -1460,7 +1460,14 @@ def delete_strategy(sid):
     if row.status == "running":
         return _error("Stop the strategy before deleting it", 409)
 
-    deleted, message = store.delete_strategy(sid, username)
+    from services.flow_lifecycle_service import stopped_strategy_workflows
+
+    try:
+        with stopped_strategy_workflows(sid):
+            deleted, message = store.delete_strategy(sid, username)
+    except Exception:
+        logger.exception("Could not stop linked workflows before deleting strategy %s", sid)
+        return _error("The linked workflows could not be stopped. The strategy was kept; retry after checking Flow status.", 409)
     if not deleted:
         return _store_error(message)
 

@@ -936,6 +936,12 @@ def compute_indicator(
     # This catches a broken upstream implementation as well as genuinely
     # insufficient warm-up data.
     if isinstance(latest, dict) and latest and all(v is None for v in latest.values()):
+        # RSI needs one more close than its period to form period price changes.
+        # Do not classify arbitrary null output as warm-up: it can be bad data.
+        if name == "rsi" and len(df_index) <= int(resolved_params.get("period", 14)):
+            return {"status": "collecting_history", "reason_code": "insufficient_history",
+                    "message": "Waiting for more completed candles for RSI.",
+                    "bars_used": len(df_index)}
         return {
             "status": "error",
             "indicator": name,

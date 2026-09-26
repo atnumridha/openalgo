@@ -40,7 +40,7 @@ def diagnose(workflow_id: int) -> int:
     import pytz
 
     from database.flow_db import get_workflow, get_workflow_api_key
-    from database.settings_db import get_analyze_mode
+    from services.flow_readiness_service import strategy_nodes, workflow_readiness
     from services.flow_workflow_validator import validate_workflow
 
     wf = get_workflow(workflow_id)
@@ -51,25 +51,12 @@ def diagnose(workflow_id: int) -> int:
     print(f"Workflow {workflow_id}: {wf.name}\n")
     blockers: list[str] = []
 
-    # 1. Clock. The scheduler's market-hours gate is IST-aware, but timeWindow
-    # nodes compare against the server's local clock, so a host that is not on
-    # IST evaluates every window in the wrong timezone.
+    # Both intraday time gates and candle scheduling use IST explicitly.
     local = datetime.now()
     ist = datetime.now(pytz.timezone("Asia/Kolkata"))
-    skew = round(
-        (local.replace(tzinfo=None) - ist.replace(tzinfo=None)).total_seconds() / 60
-    )
     print(f"  server local time : {local.strftime('%Y-%m-%d %H:%M')}")
     print(f"  IST               : {ist.strftime('%Y-%m-%d %H:%M')}")
-    if abs(skew) > 1:
-        print(f"  MISMATCH          : local clock is {skew:+d} min from IST")
-        blockers.append(
-            f"Server timezone is not IST ({skew:+d} min). timeWindow nodes use the "
-            "server's local clock, so IST windows are compared against the wrong "
-            "time. Set TZ=Asia/Kolkata (the official Docker image already does)."
-        )
-    else:
-        print("  timezone          : IST, correct")
+    print("  time gates        : Asia/Kolkata (IST)")
 
     # 2. Activation.
     print(f"\n  is_active         : {bool(wf.is_active)}")
@@ -105,15 +92,16 @@ def diagnose(workflow_id: int) -> int:
     if errors:
         blockers.append(f"Graph is not runnable: {errors[0]['message']}")
 
-    # 5. Where orders would actually go.
-    if get_analyze_mode():
-        print("  analyzer mode     : ON - orders are simulated")
-        blockers.append(
-            "Analyzer mode is ON, so orders are simulated into the analyzer and never "
-            "reach the broker. Turn it off to trade live."
-        )
+    # Strategy workflows declare their mode; a global switch is not authority.
+    linked_nodes = strategy_nodes(wf)
+    if linked_nodes:
+        modes = sorted({str(node.get("data", {}).get("mode", "missing")) for node in linked_nodes})
+        print(f"  execution modes   : {', '.join(modes)}")
+        readiness = workflow_readiness(wf)
+        print(f"  readiness         : {readiness['label']}")
+        blockers.extend(item["message"] for item in readiness["reasons"] if item["blocking"])
     else:
-        print("  analyzer mode     : off - orders go to the broker")
+        print("  execution mode    : inspect the workflow's order nodes and account settings")
 
     # 6. Time windows, against the clock the executor will actually use.
     windows = [
@@ -122,13 +110,15 @@ def diagnose(workflow_id: int) -> int:
         if n.get("type") == "timeWindow"
     ]
     if windows:
-        now_t = local.time()
-        print("\n  time windows (vs server local clock):")
+        now_t = ist.time()
+        print("\n  time windows (IST):")
         open_any = False
         for nid, data in windows:
             start = _parse(data.get("startTime", "00:00"), time(0, 0))
             end = _parse(data.get("endTime", "23:59"), time(23, 59))
-            is_open = start <= now_t <= end
+            is_open = start <= now_t <= end if start <= end else now_t >= start or now_t <= end
+            if data.get("invertCondition"):
+                is_open = not is_open
             open_any = open_any or is_open
             print(
                 f"    {nid:<6} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}  "
@@ -147,9 +137,8 @@ def diagnose(workflow_id: int) -> int:
             print(f"  {i}. {blocker}\n")
     else:
         print(
-            "No blocking condition found. The workflow is active, in a window, and\n"
-            "pointed at the live broker - so the strategy's own entry conditions are\n"
-            "simply not true yet. Open the latest execution to see which one is false."
+            "No configuration blocker found. Market-data readiness and entry conditions\n"
+            "are checked at execution time. Open the latest execution for its outcome."
         )
     return 0
 
@@ -158,7 +147,12 @@ def main() -> int:
     if len(sys.argv) < 2:
         print("usage: uv run python scripts/flow_diagnose.py <workflow_id>")
         return 2
-    return diagnose(int(sys.argv[1]))
+    try:
+        return diagnose(int(sys.argv[1]))
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 if __name__ == "__main__":

@@ -42,6 +42,7 @@ def get_current_api_key():
 def list_workflows():
     """List all workflows"""
     from database.flow_db import get_all_workflows, get_workflow_executions
+    from services.flow_readiness_service import workflow_readiness
 
     workflows = get_all_workflows()
     items = []
@@ -60,6 +61,7 @@ def list_workflows():
                 "created_at": wf.created_at.isoformat() if wf.created_at else None,
                 "updated_at": wf.updated_at.isoformat() if wf.updated_at else None,
                 "last_execution_status": last_exec.status if last_exec else None,
+                "readiness": workflow_readiness(wf, owner=session.get("user"), last_execution=last_exec),
             }
         )
 
@@ -167,12 +169,14 @@ def create_workflow():
 @check_session_validity
 def get_workflow(workflow_id):
     """Get a workflow by ID"""
-    from database.flow_db import get_workflow
+    from database.flow_db import get_workflow, get_workflow_executions
+    from services.flow_readiness_service import workflow_readiness
 
     workflow = get_workflow(workflow_id)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
 
+    executions = get_workflow_executions(workflow_id, limit=1)
     return jsonify(
         {
             "id": workflow.id,
@@ -183,6 +187,8 @@ def get_workflow(workflow_id):
             "edges": workflow.edges,
             "is_active": workflow.is_active,
             "schedule_job_id": workflow.schedule_job_id,
+            "readiness": workflow_readiness(workflow, owner=session.get("user"),
+                                            last_execution=executions[0] if executions else None),
             "webhook_token": workflow.webhook_token,
             "webhook_secret": workflow.webhook_secret,
             "webhook_enabled": workflow.webhook_enabled,

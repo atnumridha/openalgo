@@ -13,6 +13,7 @@ import time as time_module
 import weakref
 from datetime import datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_
 
@@ -2175,6 +2176,9 @@ class NodeExecutor:
             return {"status": "error", "message": "Workflow and strategy broker connection do not match"}
         if getattr(strategy, "strategy_kind", "batch") != "batch":
             return {"status": "error", "message": "Strategy Module Run requires a batch strategy"}
+        existing = self.existing_batch_run(strategy, mode, node_data)
+        if existing is not None:
+            return existing
         active_run_id = getattr(strategy, "current_run_id", None)
         if active_run_id:
             active_run = get_run(active_run_id)
@@ -2237,6 +2241,10 @@ class NodeExecutor:
             trigger_source=f"flow:{self.context.workflow_id}",
         )
         if not started.ok:
+            if started.error == "This strategy is already running":
+                existing = self.existing_batch_run(get_strategy(strategy_id, username), mode, node_data)
+                if existing is not None:
+                    return existing
             result = {
                 "status": "error",
                 "strategy_id": strategy_id,
@@ -2254,6 +2262,32 @@ class NodeExecutor:
             "run_id": started.run_id,
         }
         self.log(f"Strategy Module run {started.run_id} started in {mode} mode")
+        self.store_output(node_data, result)
+        return result
+
+    def existing_batch_run(self, strategy, mode, node_data):
+        """An already-owned batch run needs no new entry, claim or order."""
+        from database.strategy_module_db import get_run
+
+        run_id = getattr(strategy, "current_run_id", None)
+        if not run_id:
+            return None
+        run = get_run(run_id)
+        if (run is None or getattr(run, "strategy_id", None) != strategy.id
+                or run.broker_connection_id != self.context.broker_connection_id or run.mode != mode
+                or getattr(run, "stopped_at", None) is not None):
+            return {"status": "error", "reason_code": "active_run_mismatch",
+                    "message": "The active run does not match this strategy, broker connection or mode."}
+        result = {"status": "success", "reason_code": "already_running", "note": "already_running",
+                  "message": "The existing strategy run is being managed; no new entry was placed.",
+                  "strategy_id": strategy.id, "run_id": run_id, "mode": mode}
+        self.log(result["message"])
+        self.store_output(node_data, result)
+        return result
+
+    def collecting_history(self, node_data, message):
+        result = {"status": "collecting_history", "readiness": "Collecting history",
+                  "reason_code": "insufficient_history", "message": message}
         self.store_output(node_data, result)
         return result
 
@@ -2292,6 +2326,10 @@ class NodeExecutor:
             return {"status": "error", "message": "start/stop requires a batch strategy"}
         if action in signals.SIGNAL_ACTIONS and kind != "signal":
             return {"status": "error", "message": "Directional actions require a signal strategy"}
+        if action == "start":
+            existing = self.existing_batch_run(strategy, mode, node_data)
+            if existing is not None:
+                return existing
 
         if action in {"start", "long_entry", "short_entry"}:
             from database.flow_db import claim_execution_bar
@@ -2343,6 +2381,10 @@ class NodeExecutor:
         elif action == "start":
             outcome = engine.start_run(strategy_id, owner, mode, trigger_source=f"flow:{self.context.workflow_id}")
             if not outcome.ok:
+                if outcome.error == "This strategy is already running":
+                    existing = self.existing_batch_run(get_strategy(strategy_id, owner), mode, node_data)
+                    if existing is not None:
+                        return existing
                 return {"status": "error", "message": outcome.error or "Strategy did not start"}
             result = {"status": "success", "action": action, "strategy_id": strategy_id,
                       "mode": mode, "run_id": outcome.run_id}
@@ -2389,9 +2431,11 @@ class NodeExecutor:
         if not window:
             return {"status": "error", "message": "Exchange session is unavailable"}
         start = datetime.fromtimestamp(window["start_ms"] / 1000, ZoneInfo("Asia/Kolkata"))
-        range_end = start + timedelta(minutes=minutes, seconds=5)
+        from services.indicator_service import FLOW_BAR_SETTLE_SECONDS
+
+        range_end = start + timedelta(minutes=minutes, seconds=FLOW_BAR_SETTLE_SECONDS)
         if moment < range_end:
-            return {"status": "error", "message": "Opening range is still forming"}
+            return self.collecting_history(node_data, "Opening range is still forming")
         first, last = history_window(lookback_bars=minutes + 5, interval="1m")
         history = fetch_history_cached(self.client, symbol, exchange, "1m", first, last,
                                        self.get_str(node_data, "source", "api"), now=moment)
@@ -2408,7 +2452,7 @@ class NodeExecutor:
                 by_time[stamp] = bar
         expected = [start + timedelta(minutes=i) for i in range(minutes)]
         if any(stamp not in by_time for stamp in expected):
-            return {"status": "error", "message": "Opening range candles are incomplete"}
+            return self.collecting_history(node_data, "Opening range candles are incomplete")
         selected = [by_time[stamp] for stamp in expected]
         try:
             highs = [float(bar["high"]) for bar in selected]
@@ -2538,10 +2582,7 @@ class NodeExecutor:
         records = trim_records((result or {}).get("data") or [])
         row = bar_at_offset(records, offset_bars, interval=interval)
         if row is None:
-            return {
-                "status": "error",
-                "message": f"Not enough history to reach {offset_bars} bars back for {symbol}",
-            }
+            return self.collecting_history(node_data, f"Waiting for completed candles to read {offset_bars} bars back for {symbol}.")
 
         output = {
             "status": "success",
@@ -2678,8 +2719,12 @@ class NodeExecutor:
                     offset_bars=offset_bars,
                 )
             except ValueError as e:
+                if re.fullmatch(r"Period \(\d+\) cannot be greater than data length \(\d+\)", str(e)):
+                    return self.collecting_history(node_data, f"Waiting for more upstream values for {indicator_name}.")
                 self.log(f"Indicator error: {e}", "error")
                 return {"status": "error", "message": str(e)}
+            if output.get("reason_code") == "insufficient_history":
+                return self.collecting_history(node_data, output["message"])
             self.log(f"{indicator_name} (nested) latest: {output.get('latest')}")
             self.store_output(node_data, output)
             return output
@@ -2712,7 +2757,7 @@ class NodeExecutor:
         # when the broker returns 200 closed bars plus the forming candle.
         records = trim_records(completed_history_records((history or {}).get("data") or [], interval, now))
         if not records:
-            return {"status": "error", "message": "No completed candles available for indicator"}
+            return self.collecting_history(node_data, "Waiting for completed candles for the indicator.")
         try:
             output = compute_indicator(
                 records,
@@ -2723,9 +2768,15 @@ class NodeExecutor:
                 offset_bars=offset_bars,
             )
         except ValueError as e:
+            # The indicator library identifies a short input explicitly. Do not
+            # turn bad parameters, unknown indicators or corrupt prices into warm-up.
+            if re.fullmatch(r"Period \(\d+\) cannot be greater than data length \(\d+\)", str(e)):
+                return self.collecting_history(node_data, f"Waiting for more completed candles for {indicator_name}: {len(records)} available.")
             self.log(f"Indicator error: {e}", "error")
             return {"status": "error", "message": str(e)}
 
+        if output.get("reason_code") == "insufficient_history":
+            return self.collecting_history(node_data, output["message"])
         self.log(f"{indicator_name} latest: {output.get('latest')}")
         self.store_output(node_data, output)
         return output
@@ -3919,7 +3970,7 @@ class NodeExecutor:
         end_time_str = node_data.get("endTime", "15:30")
         invert = bool(node_data.get("invertCondition", False))
 
-        now = datetime.now().time()
+        now = datetime.now(ZoneInfo("Asia/Kolkata")).time()
         start_h, start_m, _ = parse_time_string(start_time_str, 9, 15)
         end_h, end_m, _ = parse_time_string(end_time_str, 15, 30)
         start_time = time(start_h, start_m)
@@ -3951,7 +4002,7 @@ class NodeExecutor:
         # gates readable in the execution log — "which 15:15 check was that?".
         condition_type = node_data.get("conditionType", "entry")
 
-        now = datetime.now().time()
+        now = datetime.now(ZoneInfo("Asia/Kolkata")).time()
         # Seconds are kept. Dropping them made "after 15:29:59" behave as
         # "after 15:29:00", a minute early, while waitUntil parsing the very
         # same string honoured them -- so two nodes given one time disagreed.
@@ -4901,6 +4952,10 @@ def execute_node_chain(
         "collecting_history", "data_unavailable", "risk_blocked"
     }:
         status = result["status"]
+        executor.logs.append({"time": datetime.now().isoformat(),
+                              "level": "info", "message": result.get("message") or status,
+                              "readiness": {key: result.get(key) for key in
+                                            ("status", "readiness", "reason_code", "message")}})
         priority = {"collecting_history": 1, "data_unavailable": 2, "risk_blocked": 3}
         if priority[status] >= priority.get(executor.readiness_status, 0):
             executor.readiness_status = status

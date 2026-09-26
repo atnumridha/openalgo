@@ -8,6 +8,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -37,7 +38,20 @@ logger = get_logger(__name__)
 INTERVAL_ALIGN_OFFSET_SECONDS = env_int("FLOW_INTERVAL_ALIGN_OFFSET", 2, minimum=0)
 
 
-def _next_aligned_start(value: int, unit: str) -> datetime:
+def uses_completed_candles(nodes) -> bool:
+    return any(node.get("type") in {"barOffset", "indicator", "openingRange"}
+               for node in (nodes or []))
+
+
+def interval_alignment_offset(candle_driven=False):
+    if not candle_driven:
+        return INTERVAL_ALIGN_OFFSET_SECONDS
+    from services.indicator_service import FLOW_BAR_SETTLE_SECONDS
+
+    return max(INTERVAL_ALIGN_OFFSET_SECONDS, FLOW_BAR_SETTLE_SECONDS + 1)
+
+
+def _next_aligned_start(value: int, unit: str, *, candle_driven=False) -> datetime:
     """The next clock boundary for an interval schedule, plus a small offset.
 
     A 5-minute job lands on :00, :05, :10 rather than five minutes after
@@ -45,7 +59,7 @@ def _next_aligned_start(value: int, unit: str) -> datetime:
     no meaningful boundary to align a 10-second job to, and the offset would
     cost more than the alignment is worth.
     """
-    now = datetime.now()
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
     if unit == "seconds":
         return now + timedelta(seconds=1)
 
@@ -56,7 +70,7 @@ def _next_aligned_start(value: int, unit: str) -> datetime:
         # Back up to the last boundary this interval divides into the hour on.
         anchor -= timedelta(minutes=anchor.minute % value)
 
-    start = anchor + timedelta(seconds=INTERVAL_ALIGN_OFFSET_SECONDS)
+    start = anchor + timedelta(seconds=interval_alignment_offset(candle_driven))
     while start <= now:
         start += step
     return start
@@ -78,7 +92,7 @@ class FlowScheduler:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def init(self, db_url: str = None, api_key: str = None):
+    def init(self, db_url: str = None, api_key: str = None, *, paused: bool = False):
         """Initialize the scheduler with database URL for job persistence"""
         if self._initialized:
             return
@@ -116,7 +130,7 @@ class FlowScheduler:
                     jobstores=jobstores,
                     job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
                 )
-                self._scheduler.start()
+                self._scheduler.start(paused=paused)
                 self._initialized = True
                 logger.debug("Flow Scheduler initialized and started")
             except Exception as e:
@@ -150,6 +164,7 @@ class FlowScheduler:
         interval_unit: str | None = None,
         func: Callable = None,
         market_hours_only: bool = False,
+        candle_driven: bool = False,
     ) -> str:
         """Add a workflow job to the scheduler
 
@@ -191,7 +206,7 @@ class FlowScheduler:
             # boundary. Firing exactly on the minute races the bar that is
             # closing: the feed may or may not have opened the next one yet, and
             # the two answers differ by a whole candle.
-            start = _next_aligned_start(value, unit)
+            start = _next_aligned_start(value, unit, candle_driven=candle_driven)
 
             if unit == "seconds":
                 trigger = IntervalTrigger(seconds=value, start_date=start)
@@ -448,7 +463,9 @@ def reconcile_scheduler_jobs() -> dict:
 
     Returns counts of what it changed.
     """
-    from database.flow_db import get_active_workflows, get_workflow, set_schedule_job_id
+    from database.flow_db import get_active_workflows, get_workflow, set_schedule_job_id, get_workflow_api_key
+    from services.flow_lifecycle_service import deactivate_workflow
+    from services.flow_readiness_service import strategy_link_issues, strategy_nodes
 
     scheduler = get_flow_scheduler()
     removed = 0
@@ -475,6 +492,24 @@ def reconcile_scheduler_jobs() -> dict:
 
     # The mirror case: active, scheduled, but nothing registered to fire it.
     for workflow in get_active_workflows():
+        if strategy_nodes(workflow):
+            try:
+                key = get_workflow_api_key(workflow)
+                issues = strategy_link_issues(workflow, api_key=key) if key else [{"message": "Workflow account is unavailable"}]
+                if issues:
+                    payload, status = deactivate_workflow(workflow.id)
+                    if status != 200:
+                        raise RuntimeError(f"Could not stop invalid workflow {workflow.id}: {payload.get('error')}")
+                    logger.warning("Stopped workflow %s: %s", workflow.id, issues[0]["message"])
+                    removed += 1
+                    continue
+            except Exception:
+                # Keep a transient lookup failure from disabling a saved flow
+                # or preventing healthy workflows (including exits) from starting.
+                # Quarantine only this registration; reactivation restores it.
+                logger.exception("Could not verify workflow %s; removing its scheduled trigger until reactivation", workflow.id)
+                scheduler.remove_workflow_job(workflow.id, strict=True)
+                continue
         trigger = next(
             (n for n in (workflow.nodes or []) if n.get("type") == "start"), None
         )
@@ -484,8 +519,15 @@ def reconcile_scheduler_jobs() -> dict:
         schedule_type = data.get("scheduleType")
         if not schedule_type or schedule_type == "manual":
             continue
-        if scheduler.get_workflow_job(workflow.id) is not None:
-            continue
+        existing_job = scheduler.get_workflow_job(workflow.id)
+        candle_driven = uses_completed_candles(workflow.nodes)
+        if existing_job is not None:
+            trigger = getattr(existing_job, "trigger", None)
+            start_date = getattr(trigger, "start_date", None)
+            if not (candle_driven and schedule_type == "interval" and data.get("intervalUnit") != "seconds"
+                    and (start_date is None or start_date.second + start_date.microsecond / 1e6
+                         < interval_alignment_offset(True))):
+                continue
 
         try:
             job_id = scheduler.add_workflow_job(
@@ -497,6 +539,7 @@ def reconcile_scheduler_jobs() -> dict:
                 interval_value=data.get("intervalValue"),
                 interval_unit=data.get("intervalUnit"),
                 market_hours_only=bool(data.get("marketHoursOnly", False)),
+                candle_driven=candle_driven,
             )
             set_schedule_job_id(workflow.id, job_id)
             restored += 1
@@ -631,7 +674,7 @@ def get_flow_scheduler() -> FlowScheduler:
     return flow_scheduler
 
 
-def init_flow_scheduler(db_url: str = None, api_key: str = None):
+def init_flow_scheduler(db_url: str = None, api_key: str = None, *, paused: bool = False):
     """Initialize the flow scheduler"""
-    flow_scheduler.init(db_url=db_url, api_key=api_key)
+    flow_scheduler.init(db_url=db_url, api_key=api_key, paused=paused)
     return flow_scheduler

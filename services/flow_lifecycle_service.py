@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from database.flow_db import with_workflow_mutation_lease
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def stopped_strategy_workflows(strategy_id):
+    """Keep linked flow edits/activation excluded until deletion commits."""
+    from database.flow_db import flow_link_mutation_lease, get_workflows_for_strategy, workflow_mutation_lease
+
+    with ExitStack() as stack:
+        stack.enter_context(flow_link_mutation_lease())
+        workflows = sorted(get_workflows_for_strategy(strategy_id, strict=True), key=lambda item: item.id)
+        for workflow in workflows:
+            stack.enter_context(workflow_mutation_lease(workflow.id))
+        for workflow in workflows:
+            payload, status = deactivate_workflow(workflow.id)
+            if status != 200:
+                raise RuntimeError(f"Could not stop linked workflow {workflow.id}: {payload.get('error')}")
+        yield
 
 
 def trigger_node(nodes):
@@ -37,10 +55,10 @@ def unregister_trigger(workflow_id):
 
 def register_trigger(workflow_id, trigger_type, trigger_data, api_key):
     """Register the existing trigger contract after active state is durable."""
-    from database.flow_db import set_schedule_job_id
+    from database.flow_db import get_workflow, set_schedule_job_id
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
+    from services.flow_scheduler_service import get_flow_scheduler, uses_completed_candles
 
     if trigger_type == "start":
         schedule_type = trigger_data.get("scheduleType")
@@ -56,6 +74,7 @@ def register_trigger(workflow_id, trigger_type, trigger_data, api_key):
                 interval_value=trigger_data.get("intervalValue"),
                 interval_unit=trigger_data.get("intervalUnit"),
                 market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
+                candle_driven=uses_completed_candles(get_workflow(workflow_id).nodes),
             )
             if not set_schedule_job_id(workflow_id, job_id):
                 scheduler.remove_workflow_job(workflow_id)
@@ -86,7 +105,7 @@ def register_trigger(workflow_id, trigger_type, trigger_data, api_key):
         )
 
 
-def execution_blocked(workflow):
+def execution_blocked(workflow, api_key=None):
     from services.flow_workflow_validator import validate_workflow
 
     errors = validate_workflow(
@@ -98,7 +117,14 @@ def execution_blocked(workflow):
         strict=True,
     )
     if not errors:
-        return None
+        from services.flow_readiness_service import strategy_link_issues
+
+        issues = strategy_link_issues(workflow, api_key=api_key)
+        if not issues:
+            return None
+        return {"status": "error", "error": "Workflow needs attention",
+                "reason_code": issues[0]["code"], "message": issues[0]["message"],
+                "readiness": {"status": "risk_blocked", "label": "Needs attention", "reasons": issues}}
     return {
         "status": "error",
         "error": "Workflow cannot be executed",
@@ -143,13 +169,19 @@ def activate_workflow(workflow_id: int, api_key: str | None) -> tuple[dict, int]
     workflow = get_workflow(workflow_id)
     if not workflow:
         return {"error": "Workflow not found"}, 404
-    if workflow.is_active:
-        return {"status": "already_active", "message": "Workflow is already active"}, 200
     if not api_key:
         return {"error": "API key not configured"}, 400
-    blocked = execution_blocked(workflow)
+    blocked = execution_blocked(workflow, api_key=api_key)
     if blocked:
         return {**blocked, "error": "Workflow cannot be activated"}, 400
+    if workflow.is_active:
+        trigger = trigger_node(workflow.nodes)
+        if trigger and trigger.get("type") == "start" and trigger.get("data", {}).get("scheduleType") not in {None, "manual"}:
+            from services.flow_scheduler_service import get_flow_scheduler
+
+            if get_flow_scheduler().get_workflow_job(workflow_id) is None:
+                register_trigger(workflow_id, trigger["type"], trigger.get("data", {}), api_key)
+        return {"status": "already_active", "message": "Workflow is already active"}, 200
     trigger = trigger_node(workflow.nodes)
     if not trigger:
         return {"error": "No trigger node found in workflow"}, 400
@@ -181,8 +213,7 @@ def deactivate_workflow(workflow_id: int) -> tuple[dict, int]:
     workflow = get_workflow(workflow_id)
     if not workflow:
         return {"error": "Workflow not found"}, 404
-    if not workflow.is_active:
-        return {"status": "already_inactive", "message": "Workflow is already inactive"}, 200
+    was_active = workflow.is_active
     try:
         get_flow_scheduler().remove_workflow_job(workflow_id, strict=True)
         if workflow.schedule_job_id:
@@ -192,7 +223,7 @@ def deactivate_workflow(workflow_id: int) -> tuple[dict, int]:
         release_workflow_subscriptions(workflow_id)
         if not db_deactivate(workflow_id):
             return {"error": "Could not deactivate workflow"}, 500
-        return {"status": "success", "message": "Workflow deactivated"}, 200
+        return {"status": "success" if was_active else "already_inactive", "message": "Workflow deactivated"}, 200
     except Exception as exc:
         logger.exception("Failed to deactivate workflow %s", workflow_id)
         return {"error": str(exc)}, 500

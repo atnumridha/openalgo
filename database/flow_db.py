@@ -59,6 +59,20 @@ _workflow_lease_context = local()
 
 @contextmanager
 def workflow_mutation_lease(workflow_id):
+    if type(workflow_id) is not int or workflow_id <= 0:
+        raise ValueError("Workflow ID must be a positive integer")
+    # A shared outer lease also serializes link edits/activation with strategy
+    # deletion, including workflows not yet linked when deletion begins.
+    with flow_link_mutation_lease(), _flow_resource_lease(workflow_id):
+        yield
+
+
+def flow_link_mutation_lease():
+    return _flow_resource_lease("strategy-links")
+
+
+@contextmanager
+def _flow_resource_lease(workflow_id):
     """Serialize one workflow's graph and lifecycle across threads/workers.
 
     SQLite is the supported deployment store. An OS lease survives transaction
@@ -66,8 +80,6 @@ def workflow_mutation_lease(workflow_id):
     calls on the owning thread. Do not silently provide process-only safety
     for an unsupported/shared remote database.
     """
-    if type(workflow_id) is not int or workflow_id <= 0:
-        raise ValueError("Workflow ID must be a positive integer")
     bind = db_session.bind
     database_path = bind.url.database
     if bind.dialect.name != "sqlite" or not database_path or database_path == ":memory:":
@@ -335,7 +347,7 @@ def get_all_workflows():
         return []
 
 
-def get_workflows_for_strategy(strategy_id: int):
+def get_workflows_for_strategy(strategy_id: int, *, strict=False):
     """Find explicit execution links, including exits, for strict admission checks.
 
     Keep exit-only/shared rows visible so the validator can refuse them rather
@@ -346,7 +358,9 @@ def get_workflows_for_strategy(strategy_id: int):
     if type(strategy_id) is not int:
         return []
     matches = []
-    for workflow in get_all_workflows():
+    workflows = (FlowWorkflow.query.order_by(FlowWorkflow.updated_at.desc()).all()
+                 if strict else get_all_workflows())
+    for workflow in workflows:
         nodes = workflow.nodes
         if not isinstance(nodes, list):
             continue

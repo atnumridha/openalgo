@@ -40,6 +40,7 @@ import {
   type WorkflowListItem,
 } from '@/api/flow'
 import { Button } from '@/components/ui/button'
+import { FlowReadinessNotice } from '@/components/flow/FlowReadinessNotice'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -281,6 +282,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
           )}
         </CardHeader>
         <CardContent>
+          <FlowReadinessNotice readiness={workflow.readiness} className="mb-3" />
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2 text-muted-foreground">
               <StatusIcon status={workflow.last_execution_status} />

@@ -1240,7 +1240,7 @@ def list_strategies(user_id: str, status: str | None = None, q: str | None = Non
         return []
 
 
-def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:
+def get_strategy(strategy_id: int, user_id: str, *, strict=False) -> SmStrategy | None:
     """One strategy, scoped to its owner.
 
     The ``user_id`` filter is in the signature rather than left to callers so
@@ -1250,6 +1250,8 @@ def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:
         return db_session.query(SmStrategy).filter_by(id=strategy_id, user_id=user_id).first()
     except Exception:
         logger.exception("Could not read strategy %s", strategy_id)
+        if strict:
+            raise
         return None
 
 

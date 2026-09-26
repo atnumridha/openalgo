@@ -8,7 +8,20 @@ import { webClient } from './client'
 // Types
 // =============================================================================
 
+export interface FlowReadiness {
+  status: string
+  label: string
+  reasons: {
+    code: string
+    message: string
+    strategy_id?: number | null
+    link?: string | null
+    blocking: boolean
+  }[]
+}
+
 export interface Workflow {
+  readiness?: FlowReadiness
   id: number
   name: string
   description: string | null
@@ -26,6 +39,7 @@ export interface Workflow {
 }
 
 export interface WorkflowListItem {
+  readiness?: FlowReadiness
   id: number
   name: string
   description: string | null

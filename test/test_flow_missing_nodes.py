@@ -204,7 +204,7 @@ def test_opening_range_requires_complete_closed_one_minute_candles(monkeypatch):
 
     rows.pop(1)
     incomplete = executor.execute_opening_range(node, now=datetime(2026, 9, 25, 9, 18, 6, tzinfo=ist))
-    assert incomplete["status"] == "error"
+    assert incomplete["status"] == "collecting_history"
 
 
 def test_indicator_uses_only_completed_candles(monkeypatch):

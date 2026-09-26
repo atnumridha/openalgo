@@ -78,6 +78,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { FlowReadinessNotice } from '@/components/flow/FlowReadinessNotice'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
@@ -260,6 +261,7 @@ function FlowEditorContent() {
       markSaved(saved.revision)
       setSavedBrokerConnectionId(saved.broker_connection_id || '')
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
+      queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
       // The server re-arms a changed trigger during the save. It only reports
       // needs_reactivate when that failed, in which case it has stood the
       // workflow down rather than leave it running a stale registration.
@@ -919,6 +921,7 @@ function FlowEditorContent() {
       </div>
 
       {/* Main content */}
+      <FlowReadinessNotice readiness={workflow?.readiness} className="mx-3 my-2 shrink-0" />
       <div className="flex flex-1 overflow-hidden">
         {/* Node Palette - Left Sidebar */}
         <div className="w-56 flex-shrink-0">
