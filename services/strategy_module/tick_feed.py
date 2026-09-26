@@ -79,6 +79,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from utils import real_threading as _real_threading
@@ -205,6 +206,8 @@ class _SymbolState:
     last_ws_at: float = 0.0
     #: Monotonic time of the last price from *any* source. Drives STALE.
     last_price_at: float = 0.0
+    #: Broker trade/update time, distinct from arrival time at the proxy.
+    last_market_at: datetime | None = None
 
 
 def _key(symbol: str, exchange: str) -> str:
@@ -258,6 +261,7 @@ class RiskTickFeed:
         self,
         *,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         ws_provider: Callable[[str], Any] | None = None,
         quote_fetcher: Callable[[list[dict[str, str]], str], tuple[bool, dict, int]] | None = None,
         api_key_provider: Callable[[], str | None] | None = None,
@@ -268,6 +272,7 @@ class RiskTickFeed:
         max_tracked_symbols: int = MAX_TRACKED_SYMBOLS,
     ) -> None:
         self._clock = clock
+        self._wall_clock = wall_clock
         self._ws_provider = ws_provider
         self._quote_fetcher = quote_fetcher
         self._api_key_provider = api_key_provider
@@ -302,6 +307,7 @@ class RiskTickFeed:
 
         self._notify: Callable[[TickSourceEvent], None] | None = None
         self._on_price: Callable[[str, str, float], None] | None = None
+        self._on_observation: Callable[[dict, datetime, str, str | None], None] | None = None
 
         self._degraded = False
         self._backoff_index = -1
@@ -340,6 +346,12 @@ class RiskTickFeed:
         fallback would keep the price fresh on screen while protecting nothing.
         """
         self._on_price = callback
+
+    def set_on_observation(
+        self, callback: Callable[[dict, datetime, str, str | None], None] | None
+    ) -> None:
+        """Optional read-only evidence hook, called only after price admission."""
+        self._on_observation = callback
 
     # ------------------------------------------------------------ subscriptions
 
@@ -444,7 +456,7 @@ class RiskTickFeed:
         preempted mid-statement anyway.
         """
         state = self._symbols.get(_key(symbol, exchange))
-        return None if state is None else state.ltp
+        return None if state is None or state.source == STALE else state.ltp
 
     def get_source(self, symbol: str, exchange: str) -> str | None:
         """Where this symbol's price is coming from, or None if untracked."""
@@ -492,6 +504,7 @@ class RiskTickFeed:
             state.source = POLLING
             state.last_ws_at = now
             state.last_price_at = now
+            state.ltp = None
             event = TickSourceEvent(
                 symbol=state.symbol,
                 exchange=state.exchange,
@@ -539,6 +552,7 @@ class RiskTickFeed:
         applied = 0
         events: list[TickSourceEvent] = []
         prices: list[tuple[str, str, float]] = []
+        observations: list[tuple[dict, datetime, str]] = []
         while applied < limit:
             try:
                 key, payload, at = self._queue.get_nowait()
@@ -547,34 +561,54 @@ class RiskTickFeed:
             except Exception:
                 break
             applied += 1
-            event = self._apply_tick(key, payload, at)
+            accepted, event = self._apply_tick(key, payload, at)
             if event is not None:
                 events.append(event)
             price = _price_from(payload)
-            if price is not None:
+            if accepted and price is not None and self.get_source(str(payload.get("symbol")), str(payload.get("exchange"))) != STALE:
                 prices.append((str(payload.get("symbol")), str(payload.get("exchange")), price))
+                observations.append((payload, self._wall_clock(), "websocket"))
         self._emit(events)
+        self._emit_observations(observations)
         self._emit_prices(prices)
         return applied
 
-    def _apply_tick(self, key: str, payload: dict, at: float) -> TickSourceEvent | None:
+    def _apply_tick(self, key: str, payload: dict, at: float) -> tuple[bool, TickSourceEvent | None]:
         """Record one tick and say whether it changed the symbol's source."""
         price = _price_from(payload)
         if price is None:
-            return None
+            return False, None
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if data.get("market_time_missing"):
+            return False, None
+        native_raw = data.get("ltt") or data.get("lstup_time") or data.get("market_timestamp")
+        market_at = None
+        if native_raw is not None:
+            from services.strategy_module.portfolio_governor import _quote_timestamp
+
+            market_at = _quote_timestamp(native_raw)
+            if market_at is None:
+                return False, None
+            age = (self._wall_clock() - market_at).total_seconds()
+            if age > self.stale_threshold_sec or age < -2:
+                return False, None
         with self._lock:
             state = self._symbols.get(key)
             if state is None:
                 # Unsubscribed between the enqueue and now. Nothing to do.
-                return None
+                return False, None
+            if market_at is not None and state.last_market_at is not None and market_at < state.last_market_at:
+                return False, None
             state.ltp = price
+            if market_at is not None:
+                state.last_market_at = market_at
             state.last_ws_at = at
-            state.last_price_at = at
+            state.last_price_at = at - max((self._wall_clock() - market_at).total_seconds(), 0.0) if market_at is not None else at
             if state.source == POLLING:
                 # Promoted, and dropped from the next poll cycle by virtue of
                 # no longer being POLLING when that cycle picks its batch.
                 state.source = WS_LIVE
-                return TickSourceEvent(
+                return True, TickSourceEvent(
                     symbol=state.symbol,
                     exchange=state.exchange,
                     source=WS_LIVE,
@@ -585,7 +619,7 @@ class RiskTickFeed:
             # STALE is terminal: the price is still recorded, because a real
             # number beats a missing one on the operator's screen, but the
             # source does not recover on its own. See clear_stale().
-            return None
+            return True, None
 
     # ------------------------------------------------------------------- poll
 
@@ -709,8 +743,12 @@ class RiskTickFeed:
         if not rows:
             return 0
         now = self._clock()
+        wall_now = self._wall_clock()
         applied = 0
         prices: list[tuple[str, str, float]] = []
+        observations: list[tuple[dict, datetime, str]] = []
+        from services.strategy_module.portfolio_governor import _quote_timestamp
+
         with self._lock:
             for row in rows:
                 if not isinstance(row, dict):
@@ -727,11 +765,20 @@ class RiskTickFeed:
                 price = _price_from(row)
                 if price is None:
                     continue
+                data = row.get("data") if isinstance(row.get("data"), dict) else row
+                market_time = _quote_timestamp(data.get("timestamp") or data.get("lstup_time"))
+                if market_time is None:
+                    continue
+                age = (wall_now - market_time).total_seconds()
+                if age > self.stale_threshold_sec or age < -2:
+                    continue
                 state.ltp = price
-                state.last_price_at = now
+                state.last_price_at = now - max(age, 0.0)
                 prices.append((state.symbol, state.exchange, price))
+                observations.append((row, wall_now, "rest"))
                 applied += 1
         # Outside the lock: the hook evaluates risk and may place an order.
+        self._emit_observations(observations)
         self._emit_prices(prices)
         return applied
 
@@ -976,6 +1023,14 @@ class RiskTickFeed:
             return None
         if client is None:
             return None
+        previous = self._ws
+        if previous is not None and previous is not client:
+            try:
+                previous.unregister_callback("market_data", self.on_tick)
+                previous.unregister_callback("auth", self._on_auth)
+            except Exception:
+                logger.debug("Strategy tick feed could not unregister old websocket callbacks")
+            self._ws_callbacks_registered = False
         self._ws = client
         if not self._ws_callbacks_registered:
             # on_tick is the ONLY thing registered on the feed's own thread, and
@@ -984,6 +1039,14 @@ class RiskTickFeed:
             client.register_callback("market_data", self.on_tick)
             client.register_callback("auth", self._on_auth)
             self._ws_callbacks_registered = True
+        if previous is not None and previous is not client:
+            with self._lock:
+                pairs = [{"symbol": s.symbol, "exchange": s.exchange} for s in self._symbols.values()]
+            if pairs:
+                try:
+                    client.subscribe(pairs, mode=SUBSCRIBE_MODE)
+                except Exception:
+                    logger.exception("Strategy tick feed could not restore subscriptions")
         return self._ws
 
     def _on_auth(self, data: dict) -> None:
@@ -1062,6 +1125,16 @@ class RiskTickFeed:
                 # One symbol's evaluation failing must not cost the rest of the
                 # batch their prices.
                 logger.exception("Strategy tick feed price hook raised for %s", symbol)
+
+    def _emit_observations(self, rows: list[tuple[dict, datetime, str]]) -> None:
+        callback = self._on_observation
+        if callback is None:
+            return
+        for payload, received_at, source in rows:
+            try:
+                callback(payload, received_at, source, self._api_key)
+            except Exception:
+                logger.exception("Strategy tick feed comparison hook failed")
 
     def _emit(self, events: list[TickSourceEvent]) -> None:
         """Log and push transitions. Green side, always outside every lock.

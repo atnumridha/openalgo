@@ -162,6 +162,7 @@ Each leg carries `risk_unit`, `points` (the default) or `percent`, which governs
 | strategy_id | integer | Owning strategy |
 | mode | string | `live` or `sandbox`, fixed for the life of the run |
 | broker | string | Broker the run is bound to, snapshotted at start. `sandbox` for a sandbox run |
+| broker_connection_id | string or null | Explicit broker connection pinned to this run, including sandbox data ownership |
 | started_at | string | ISO 8601 UTC |
 | stopped_at | string or null | ISO 8601 UTC, `null` while the run is open |
 | stop_reason | string or null | One of the stop reasons, `null` while the run is open |

@@ -21,8 +21,17 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, order_events, signals, state, webhook
+from services.strategy_module import (
+    engine,
+    order_events,
+    portfolio_governor,
+    signals,
+    state,
+    webhook,
+)
+from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 
 USER = "signal_test_user"
 
@@ -89,6 +98,8 @@ def _legs():
             "qty": 100,
             "segment": "cash",
             "sl_pts": 20,
+            "target_pts": 40,
+            "ltp": 100,
             "trail": {"x": 0, "y": 0},
         },
         {
@@ -98,15 +109,52 @@ def _legs():
             "side": "long",
             "qty": 50,
             "segment": "cash",
+            "sl_pts": 20,
+            "target_pts": 40,
+            "ltp": 100,
             "trail": {"x": 0, "y": 0},
         },
     ]
 
 
 @pytest.fixture(autouse=True)
-def clean_slate():
+def clean_slate(monkeypatch):
+    from datetime import datetime
+    from decimal import Decimal
+
+    import pytz
+
+    from database import auth_db, market_calendar_db
+    from services import quotes_service
+
+    zone = pytz.timezone("Asia/Kolkata")
+    from services.strategy_module import session
+
+    day = session.session_day(datetime.now(zone))
+    now = zone.localize(datetime(day.year, day.month, day.day, 10, 30))
+    monkeypatch.setattr(portfolio_governor, "_facts_now", lambda: now)
+    monkeypatch.setattr(portfolio_governor, "_decision_now", lambda: now)
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("test-token", "sandbox"))
+    monkeypatch.setattr(portfolio_governor, "_sandbox_account", lambda _user: (Decimal("10000000"), []))
+    monkeypatch.setattr(quotes_service, "get_quotes", lambda *_a, **_k: (
+        True, {"data": {"bid": 99.5, "ask": 100, "bid_qty": 10000, "ask_qty": 10000,
+                        "timestamp": now.isoformat()}}, 200,
+    ))
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", lambda day, _exchange: {
+        "start_ms": int(pytz.timezone("Asia/Kolkata").localize(datetime(day.year, day.month, day.day, 9, 15)).timestamp() * 1000),
+        "end_ms": int(pytz.timezone("Asia/Kolkata").localize(datetime(day.year, day.month, day.day, 15, 30)).timestamp() * 1000),
+    })
+    authz.revoke(USER)
     store.db_session.remove()
     store.init_db()
+    store.db_session.query(store.SmRiskReservation).filter_by(user_id=USER).delete(
+        synchronize_session=False
+    )
+    store.db_session.commit()
+    for key in list(portfolio_governor._entry_reservations):
+        if key == USER or key.startswith(f"{USER}|"):
+            portfolio_governor._entry_reservations.pop(key, None)
+            portfolio_governor._reservation_cash_baselines.pop(key, None)
 
     def purge():
         for row in store.list_strategies(USER):
@@ -118,6 +166,7 @@ def clean_slate():
 
     purge()
     yield
+    authz.revoke(USER)
     purge()
 
 
@@ -145,6 +194,19 @@ def placed():
         yield seen
 
 
+@pytest.fixture
+def mock_verified_live_contract():
+    """Exercise prior live plumbing as if a venue contract were verified."""
+    from services.strategy_module import live_protection
+
+    with (
+        patch.object(live_protection, "entry_block_reason", return_value=None),
+        patch.object(live_protection, "_connection_for_api_key", return_value=("", "kotak")),
+        patch.object(signals.order_dispatch, "live_entry_protection_reason", return_value=None),
+    ):
+        yield
+
+
 def _fill(strategy, *leg_ids, price=100.0):
     """Confirm the entry fills for these legs.
 
@@ -161,6 +223,7 @@ def _fill(strategy, *leg_ids, price=100.0):
 
 
 def _make(**overrides):
+    automation_state = overrides.pop("automation_state", "armed")
     config = {
         "name": "Signal test",
         "underlying": "MULTI",
@@ -175,7 +238,568 @@ def _make(**overrides):
     config.update(overrides)
     created, error = store.create_strategy(USER, config)
     assert error is None, error
+    assert store.set_automation_state(created["id"], USER, automation_state) == (True, None)
     return store.get_strategy(created["id"], USER)
+
+
+@pytest.mark.parametrize("automation_state", ["disabled", "closing", "close_failed"])
+@pytest.mark.parametrize("existing_run", [False, True])
+@pytest.mark.parametrize("action", ["long_entry", "short_entry"])
+def test_automation_blocks_entries_before_new_or_existing_run(
+    placed, automation_state, existing_run, action
+):
+    strategy = _make()
+    sid = strategy.id
+    run_id = signals._day_run(signals._snapshot_strategy(strategy))[0] if existing_run else None
+    store.set_automation_state(sid, USER, automation_state)
+    placed.clear()
+
+    result = signals.handle_signal(store.get_strategy(sid, USER), action, leg_id=1)
+
+    assert result.ok is False
+    assert result.error == f"Strategy automation is {automation_state}; new entries are blocked"
+    assert placed == []
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    events = store.list_events(sid)
+    blocked = [event for event in events if event["kind"] == "automation_entry_blocked"]
+    assert len(blocked) == 1
+    assert blocked[0]["payload"] == {"state": automation_state, "reason": result.error}
+
+
+@pytest.mark.parametrize("automation_state", ["disabled", "armed", "closing", "close_failed"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_automation_never_blocks_signal_exits(placed, automation_state, side):
+    strategy = _make()
+    sid = strategy.id
+    assert signals.handle_signal(strategy, f"{side}_entry", leg_id=1).ok
+    _fill(store.get_strategy(sid, USER), 1)
+    store.set_automation_state(sid, USER, automation_state)
+    placed.clear()
+
+    result = signals.handle_signal(store.get_strategy(sid, USER), f"{side}_exit", leg_id=1)
+
+    assert result.ok is True
+    assert len(placed) == 1
+    assert placed[0]["action"] == ("SELL" if side == "long" else "BUY")
+    assert not [event for event in store.list_events(sid)
+                if event["kind"] == "automation_entry_blocked"]
+
+
+def test_automation_closing_race_after_entry_install_blocks_dispatch(placed, monkeypatch):
+    strategy = _make()
+    sid = strategy.id
+    snapshot = signals._snapshot_strategy(strategy)
+    installed, resume = Event(), Event()
+    real_add_leg = state.add_leg
+
+    def pause_after_install(*args, **kwargs):
+        result = real_add_leg(*args, **kwargs)
+        installed.set()
+        assert resume.wait(5), "test did not release entry dispatch"
+        return result
+
+    monkeypatch.setattr(state, "add_leg", pause_after_install)
+
+    def enter():
+        try:
+            return signals.handle_signal(snapshot, "long_entry", leg_id=1)
+        finally:
+            store.db_session.remove()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(enter)
+        try:
+            assert installed.wait(5), "entry never reached final dispatch boundary"
+            assert store.set_automation_state(sid, USER, "closing") == (True, None)
+        finally:
+            resume.set()
+        result = pending.result(timeout=5)
+
+    assert result.ok is False
+    assert result.error == "Strategy automation is closing; new entries are blocked"
+    assert placed == []
+    assert not state.get_run_state(result.run_id)["signal_entry_claims"]
+    orders = store.list_orders(result.run_id)
+    assert len(orders) == 1
+    assert orders[0]["status"] == "rejected"
+    blocked = [event for event in store.list_events(sid)
+               if event["kind"] == "automation_entry_blocked"]
+    assert len(blocked) == 1
+
+
+def test_automation_closing_after_portfolio_admission_does_not_exit_for_flip(placed, monkeypatch):
+    strategy = _make()
+    sid = strategy.id
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok
+    _fill(store.get_strategy(sid, USER), 1)
+    placed.clear()
+    acquire = portfolio_governor.acquire_entry_admission
+
+    def close_after_admission(*args, **kwargs):
+        result = acquire(*args, **kwargs)
+        store.set_automation_state(sid, USER, "closing")
+        return result
+
+    monkeypatch.setattr(portfolio_governor, "acquire_entry_admission", close_after_admission)
+    result = signals.handle_signal(store.get_strategy(sid, USER), "short_entry", leg_id=1)
+
+    assert result.ok is False
+    assert result.error == "Strategy automation is closing; new entries are blocked"
+    assert placed == []
+    assert signals._held_side(result.run_id, 1) == "long"
+
+
+def test_automation_requires_fresh_owner_scoped_durable_state(placed):
+    strategy = _make()
+    sid = strategy.id
+    snapshot = signals._snapshot_strategy(strategy)
+    # An independent writer leaves the ORM instance and plain snapshot stale.
+    with store.engine.begin() as connection:
+        connection.execute(store.SmStrategy.__table__.update().where(
+            store.SmStrategy.id == sid
+        ).values(automation_state="disabled"))
+
+    result = signals.handle_signal(snapshot, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "disabled" in result.error
+    assert placed == []
+
+
+def test_automation_wrong_owner_cannot_enter_or_create_run(placed):
+    strategy = _make()
+    sid = strategy.id
+    snapshot = signals._snapshot_strategy(strategy)
+    from dataclasses import replace
+    result = signals.handle_signal(replace(snapshot, user_id="another-owner"), "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "unavailable" in result.error.lower()
+    assert placed == []
+    assert store.get_strategy(sid, USER).current_run_id is None
+
+
+def test_automation_unknown_durable_state_fails_closed(placed):
+    strategy = _make()
+    sid = strategy.id
+    snapshot = signals._snapshot_strategy(strategy)
+    with store.engine.begin() as connection:
+        connection.execute(store.SmStrategy.__table__.update().where(
+            store.SmStrategy.id == sid
+        ).values(automation_state="unexpected"))
+
+    result = signals.handle_signal(snapshot, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "new entries are blocked" in result.error
+    assert placed == []
+    assert store.get_strategy(sid, USER).current_run_id is None
+
+
+def _bank_loss(strategy_id, amount=1000):
+    run = store.create_run(strategy_id, "sandbox", "sandbox", trigger_source="webhook")
+    assert run is not None
+    for kind, action, price in (("entry", "BUY", 100), ("exit", "SELL", 100 - amount / 100)):
+        order = store.record_order(run.id, 1, kind, {
+            "symbol": "RELIANCE", "exchange": "NSE", "action": action,
+            "qty": 100, "position_ref": "banked-owner", "status": "pending",
+        })
+        assert order is not None
+        assert store.fold_order_broker_frame(
+            order.id, status="complete", avg_fill_price=price, filled_qty=100
+        ) is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=-amount)
+
+
+# ---------------------------------------------------------------------------
+# Live authorization
+# ---------------------------------------------------------------------------
+
+
+def test_spent_session_budget_blocks_entry_on_existing_signal_run_but_allows_exit(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = _fill(strategy, 1)
+    _bank_loss(strategy.id)
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "short_entry", leg_id=1)
+    assert refused.ok is False
+    assert "Daily loss limit" in refused.error
+    assert placed == []
+    assert state.get_run_state(run_id)["legs"]["1"]["position"] == "B"
+    assert len(store.list_events(strategy.id, kind="daily_loss_entry_rejected")) == 1
+
+    exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert exited.ok is True
+    assert placed[-1]["action"] == "SELL"
+
+
+def test_current_signal_run_realized_loss_spends_its_session_budget(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = _fill(strategy, 1)
+    assert signals.handle_signal(strategy, "long_exit", leg_id=1).ok is True
+    engine.apply_fill(run_id, 1, 90.0, is_entry=False)
+    for order in store.list_orders(run_id):
+        assert store.fold_order_broker_frame(
+            order["id"], status="complete", avg_fill_price=(100 if order["kind"] == "entry" else 90),
+            filled_qty=100,
+        ) is not None
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert refused.ok is False
+    assert "Daily loss limit" in refused.error
+    assert placed == []
+
+
+def test_current_signal_run_mark_to_market_loss_spends_its_session_budget(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = _fill(strategy, 1)
+    with state.run_state(run_id) as run:
+        run["pnl_unrealized"] = -1000.0
+        run["pnl_total"] = -1000.0
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert refused.ok is False
+    assert "Daily loss limit" in refused.error
+    assert placed == []
+
+
+def test_active_unpriced_fill_blocks_another_signal_entry(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = entered.run_id
+    order = store.list_orders(run_id)[0]
+    folded = store.fold_order_broker_frame(
+        order["id"], status="complete", avg_fill_price=None, filled_qty=100
+    )
+    assert folded is not None
+    engine.apply_fill(run_id, 1, None, is_entry=True, filled_qty=100, order_row_id=order["id"])
+    assert state.get_run_state(run_id)["pnl_total"] == 0
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert refused.ok is False
+    assert "P&L" in refused.error
+    assert placed == []
+
+
+def test_active_priced_entry_without_exit_allows_another_signal_entry(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = entered.run_id
+    order_id = store.list_orders(run_id)[0]["id"]
+    assert store.fold_order_broker_frame(
+        order_id, status="complete", avg_fill_price=100, filled_qty=100
+    ) is not None
+    engine.apply_fill(run_id, 1, 100, is_entry=True, filled_qty=100, order_row_id=order_id)
+
+    placed.clear()
+    second = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert second.ok is True
+    assert len(placed) == 1
+
+
+def test_active_priced_round_trip_conflicting_with_snapshot_blocks_signal(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = entered.run_id
+    entry_id = store.list_orders(run_id)[0]["id"]
+    assert store.fold_order_broker_frame(
+        entry_id, status="complete", avg_fill_price=100, filled_qty=100
+    ) is not None
+    engine.apply_fill(run_id, 1, 100, is_entry=True, filled_qty=100, order_row_id=entry_id)
+    exit_order = store.record_order(run_id, 1, "exit", {
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "SELL", "qty": 100,
+        "position_ref": store.list_orders(run_id)[0]["position_ref"], "status": "pending",
+    })
+    assert exit_order is not None
+    assert store.fold_order_broker_frame(
+        exit_order.id, status="complete", avg_fill_price=90, filled_qty=100
+    ) is not None
+    assert state.get_run_state(run_id)["pnl_realized"] == 0
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert refused.ok is False
+    assert "P&L" in refused.error
+    assert placed == []
+
+
+def test_active_run_with_no_fills_cannot_claim_realized_profit(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    with state.run_state(entered.run_id) as run:
+        run["pnl_realized"] = 500.0
+
+    placed.clear()
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert refused.ok is False
+    assert "P&L" in refused.error
+    assert placed == []
+
+
+def test_flip_exit_that_spends_budget_blocks_replacement_entry(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    run_id = _fill(strategy, 1)
+    entry_order_id = store.list_orders(run_id)[0]["id"]
+    assert store.fold_order_broker_frame(
+        entry_order_id, status="complete", avg_fill_price=100, filled_qty=100
+    ) is not None
+    seen = []
+
+    def fill_outgoing_exit(**kwargs):
+        seen.append(kwargs["order"])
+        if kwargs["intent"] == "exit":
+            order_id = store.list_orders(run_id)[-1]["id"]
+            folded = store.fold_order_broker_frame(
+                order_id, status="complete", avg_fill_price=90, filled_qty=100
+            )
+            assert folded is not None
+            engine.apply_fill(
+                run_id, 1, 90.0, is_entry=False, filled_qty=100, order_row_id=order_id
+            )
+        return DispatchResult(ok=True, broker_order_id=f"SB-FLIP-{len(seen)}", response={})
+
+    with patch.object(signals.order_dispatch, "dispatch_order", side_effect=fill_outgoing_exit):
+        refused = signals.handle_signal(strategy, "short_entry", leg_id=1)
+
+    assert refused.ok is False
+    assert "Daily loss limit" in refused.error
+    assert [order["action"] for order in seen] == ["SELL"]
+    assert state.get_run_state(run_id)["pnl_realized"] == -1000
+
+
+def test_unknown_order_blocks_signal_replacement_before_flip_exit(placed):
+    strategy = _make()
+    entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert entered.ok is True
+    _fill(strategy, 1)
+    run_id = entered.run_id
+
+    with patch.object(store, "has_unresolved_order_outcomes", return_value=True):
+        placed.clear()
+        refused = signals.handle_signal(strategy, "short_entry", leg_id=1)
+        exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert refused.ok is False
+    assert "unknown" in refused.error.lower()
+    assert exited.ok is True
+    assert [order["action"] for order in placed] == ["SELL"]
+    assert state.get_run_state(run_id)["legs"]["1"]["position"] == "B"
+
+
+def test_signal_entry_fails_closed_when_session_pnl_is_unavailable(placed):
+    strategy = _make(daily_loss_limit_inr=1000)
+    with patch.object(store, "list_user_runs", return_value=None):
+        refused = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert refused.ok is False
+    assert "P&L" in refused.error
+    assert placed == []
+    assert store.get_run(refused.run_id).stopped_at is None
+    assert store.list_orders(refused.run_id) == []
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(placed):
+    """An expired live-entry gate must never strand an already open position."""
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    authz.grant(USER)
+    with (
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
+    ):
+        assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    _fill(strategy, 1)
+
+    authz.revoke(USER)
+    blocked = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert blocked.error == "Live automation is not authorized for this trading session"
+    placed.clear()
+    exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert exited.ok is True
+    assert placed[-1]["action"] == "SELL"
+
+
+def test_live_signal_refuses_unverified_protection_before_entry_claim(placed):
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    authz.grant(USER)
+    try:
+        refused = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert refused.ok is False
+    assert "broker-held strategy stops" in refused.error.lower()
+    assert refused.run_id is None
+    assert placed == []
+    assert store.list_runs(strategy.id) == []
+    assert not any(event["kind"] == "run_started" for event in store.list_events(strategy.id))
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_governor_rejects_signal_before_the_entry_claim(placed):
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    try:
+        with (
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(
+                    False,
+                    "risk_missing",
+                    "Live funds, positions, quotes, and configured protective risk are required",
+                ),
+            ),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert (
+        result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    )
+    assert placed == []
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot is not None
+    assert snapshot["signal_entry_claims"] == {}
+    rejected = store.list_events(strategy.id, kind="portfolio_governor_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["payload"]["code"] == "risk_missing"
+
+
+def test_signal_dispatch_labels_entries_and_exits_by_intent():
+    strategy = _make()
+    intents = []
+
+    def record(**kwargs):
+        intents.append(kwargs["intent"])
+        return DispatchResult(ok=True, broker_order_id=f"SB-{len(intents)}", response={})
+
+    with (
+        patch.object(signals.order_dispatch, "dispatch_order", side_effect=record),
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(engine, "_subscribe_run"),
+    ):
+        entered = signals.handle_signal(strategy, "long_entry", leg_id=1)
+        assert entered.ok is True
+        _fill(strategy, 1)
+        exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert exited.ok is True
+    assert intents == ["entry", "exit"]
+
+
+def test_an_unrecordable_signal_exit_emits_one_material_lifecycle_event(placed):
+    strategy = _make()
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    _fill(strategy, 1)
+
+    with patch.object(store, "record_order", return_value=None):
+        exited = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert exited.ok is True
+    events = store.list_events(strategy.id, kind="exit_order_unrecorded")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+
+
+def test_immediate_signal_entry_refusal_records_and_alerts_one_rejection():
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="venue refused entry"),
+        ),
+        patch("services.strategy_module.lifecycle_events.broadcast.push_event") as broadcast,
+        patch("services.strategy_module.lifecycle_events.alert_executor.submit") as submit,
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert result.run_id == run_id
+    assert store.list_events(strategy.id, kind="leg_entry_placed") == []
+    rejected = store.list_events(strategy.id, kind="leg_entry_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["severity"] == "warn"
+    assert broadcast.call_count == 1
+    assert broadcast.call_args.args[1]["kind"] == "leg_entry_rejected"
+    assert submit.call_count == 1
+    assert submit.call_args.args[2]["kind"] == "leg_entry_rejected"
+
+
+def test_immediate_signal_exit_refusal_records_and_alerts_one_critical_rejection(placed):
+    strategy = _make()
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    run_id = _fill(strategy, 1)
+
+    with (
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="venue refused exit"),
+        ),
+        patch("services.strategy_module.lifecycle_events.broadcast.push_event") as broadcast,
+        patch("services.strategy_module.lifecycle_events.alert_executor.submit") as submit,
+    ):
+        result = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert result.ok is False
+    assert result.run_id == run_id
+    assert store.list_events(strategy.id, kind="leg_exit_placed") == []
+    rejected = store.list_events(strategy.id, kind="leg_exit_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["severity"] == "critical"
+    assert broadcast.call_count == 1
+    assert broadcast.call_args.args[1]["kind"] == "leg_exit_rejected"
+    assert submit.call_count == 0  # durable worker owns critical delivery
+    assert rejected[0]["whatsapp_delivery"]["status"] == "pending"
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +958,7 @@ def test_an_exit_for_a_position_that_is_not_held_does_nothing(placed):
     assert result.ok is True
     assert result.note == "no_matching_position"
     assert not placed
+    assert store.get_strategy(strategy.id, USER).current_run_id is None
 
 
 def test_an_exit_for_the_other_side_does_nothing(placed):
@@ -835,6 +1460,9 @@ def test_five_lots_of_nifty_is_sent_as_the_lot_size_times_five(placed):
                 "qty": 5,
                 "qty_mode": "lots",
                 "segment": "futures",
+                "sl_pts": 20,
+                "target_pts": 40,
+                "ltp": 100,
                 "trail": {"x": 0, "y": 0},
             }
         ]
@@ -1005,6 +1633,38 @@ def test_stale_signal_rollover_uses_full_stop_management_before_replacement(plac
         assert state.get_run_state(run_id)["stopping"] is True
 
 
+def test_stale_live_owner_is_exited_before_new_entry_protection_refusal(placed):
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    state.init_run_state(
+        run_id, strategy.id,
+        [{"leg_id": 1, "position": "B", "position_ref": "yesterday-owner",
+          "symbol": "RELIANCE", "exchange": "NSE", "quantity": 10}],
+    )
+    with state.run_state(run_id) as live:
+        leg = live["legs"]["1"]
+        leg["entry_status"] = "complete"
+        leg["status"] = "open"
+        leg["entry_avg"] = 100.0
+    _age_run(run_id, days=3)
+
+    result = signals.handle_signal(
+        store.get_strategy(strategy.id, USER), "long_entry", leg_id=2,
+    )
+
+    assert result.ok is False
+    assert result.note == "run_stopping"
+    assert result.run_id == run_id
+    assert store.get_run(run_id).stop_requested_reason == "eod"
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert len(store.list_runs(strategy.id)) == 1
+    assert [(order["action"], order["quantity"]) for order in placed] == [("SELL", "10")]
+
+
 def test_a_flat_run_from_an_earlier_day_is_rolled(placed):
     strategy = _make()
     signals.handle_signal(strategy, "long_entry", leg_id=1)
@@ -1111,3 +1771,255 @@ def test_a_batch_run_still_ends_when_it_goes_flat(placed):
     assert went_flat is True
     assert store.get_run(run.id).stopped_at is not None
     assert store.get_strategy(strategy.id, USER).status == "stopped"
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False, committed=False)
+    admission.release = lambda: setattr(admission, "released", True)
+    admission.commit = lambda *_a, **_k: setattr(admission, "committed", True)
+
+    def accept_while_admitted(**_kwargs):
+        assert admission.released is False
+        return DispatchResult(ok=True, broker_order_id="LIVE-SIGNAL-ADMITTED", response={})
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(
+                signals.order_dispatch, "dispatch_order", side_effect=accept_while_admitted
+            ),
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ) as acquire,
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+            repeated = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is True
+    assert repeated.ok is True
+    assert repeated.note == "already_long"
+    assert acquire.call_count == 2
+    assert admission.committed is True
+    assert admission.released is True
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot["legs"]["1"]["status"] == "open"
+    admitted = store.list_events(strategy.id, kind="portfolio_governor_admitted")
+    assert len(admitted) == 1
+    assert admitted[0]["payload"]["code"] == "entry_allowed"
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_signal_releases_portfolio_admission_when_entry_claim_is_refused():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+    admission.release = lambda: setattr(admission, "released", True)
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+            patch.object(state, "claim_signal_entry", return_value=None),
+        ):
+            result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert result.error == "No active run"
+    assert admission.released is True
+
+
+@pytest.mark.parametrize("failing_read", ["unknown_outcome", "session_loss"])
+def test_signal_releases_account_admission_when_leased_recheck_raises(
+    placed, monkeypatch, failing_read
+):
+    strategy = _make()
+    acquired = []
+    real_acquire = portfolio_governor.acquire_entry_admission
+
+    def capture_admission(*args, **kwargs):
+        decision, admission = real_acquire(*args, **kwargs)
+        if admission is not None:
+            acquired.append(admission)
+        return decision, admission
+
+    monkeypatch.setattr(portfolio_governor, "acquire_entry_admission", capture_admission)
+    if failing_read == "unknown_outcome":
+        real_read = store.has_unresolved_order_outcomes
+
+        def fail_after_acquisition(*args, **kwargs):
+            if acquired:
+                raise RuntimeError("leased unknown-order read failed")
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(store, "has_unresolved_order_outcomes", fail_after_acquisition)
+    else:
+        real_read = engine.strategy_session_entry_loss_reason
+
+        def fail_after_acquisition(*args, **kwargs):
+            if acquired:
+                raise RuntimeError("leased session-loss read failed")
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(engine, "strategy_session_entry_loss_reason", fail_after_acquisition)
+
+    try:
+        with pytest.raises(RuntimeError, match="leased .* read failed"):
+            signals.handle_signal(strategy, "long_entry", leg_id=1)
+        assert len(acquired) == 1
+        assert placed == []
+        if failing_read == "unknown_outcome":
+            monkeypatch.setattr(store, "has_unresolved_order_outcomes", real_read)
+        else:
+            monkeypatch.setattr(engine, "strategy_session_entry_loss_reason", real_read)
+        retry = signals.handle_signal(store.get_strategy(strategy.id, USER), "long_entry", leg_id=1)
+        assert retry.ok is True
+        assert len(placed) == 1
+    finally:
+        for admission in acquired:
+            admission.release()
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_signal_pending_entries_reserve_positions_during_broker_lag(monkeypatch):
+    from database import auth_db
+    from services import funds_service, positionbook_service, quotes_service
+
+    strategies = [
+        _make(name=f"Signal reservation {index}", legs=[dict(_legs()[0], sl_pts=5, target_pts=10, qty=10)])
+        for index in range(3)
+    ]
+    for strategy in strategies:
+        store.set_live_enabled(strategy.id, USER, True)
+    strategies = [store.get_strategy(strategy.id, USER) for strategy in strategies]
+    authz.grant(USER)
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "broker"))
+    monkeypatch.setattr(
+        funds_service,
+        "get_funds",
+        lambda **_kw: (True, {"data": {"availablecash": "10000000"}}, 200),
+    )
+    monkeypatch.setattr(
+        positionbook_service,
+        "get_positionbook",
+        lambda **_kw: (True, {"data": []}, 200),
+    )
+    monkeypatch.setattr(
+        quotes_service,
+        "get_quotes",
+        lambda *_a, **_kw: (True, {"data": {
+            "bid": "99.5", "ask": "100", "bid_qty": "100", "ask_qty": "100",
+            "timestamp": portfolio_governor._facts_now().isoformat(),
+        }}, 200),
+    )
+
+    placed = []
+
+    def accept(**kwargs):
+        placed.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id=f"LIVE-{len(placed)}", response={})
+
+    try:
+        with (
+            patch.object(signals, "_api_key_for", return_value="test-key"),
+            patch.object(engine, "_subscribe_run"),
+            patch.object(signals.order_dispatch, "dispatch_order", side_effect=accept),
+        ):
+            first = signals.handle_signal(strategies[0], "long_entry", leg_id=1)
+            second = signals.handle_signal(strategies[1], "long_entry", leg_id=1)
+            third = signals.handle_signal(strategies[2], "long_entry", leg_id=1)
+    finally:
+        authz.revoke(USER)
+
+    assert first.ok is True
+    assert second.ok is True
+    assert third.ok is False
+    assert third.error == "The portfolio position limit is reached"
+    assert len(placed) == 2
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_signal_rechecks_authorization_inside_portfolio_admission():
+    strategy = _make()
+    store.set_live_enabled(strategy.id, USER, True)
+    strategy = store.get_strategy(strategy.id, USER)
+    expired = "Live automation authorization expired while waiting"
+    placed = []
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(
+            authz,
+            "require_live_entry",
+            side_effect=[(True, None), (False, expired)],
+        ) as authorize,
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            side_effect=lambda **kw: (
+                placed.append(kw)
+                or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={})
+            ),
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert authorize.call_count == 2
+    assert result.ok is False
+    assert result.error == expired
+    assert placed == []

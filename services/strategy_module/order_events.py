@@ -36,6 +36,7 @@ from typing import Any
 from cachetools import TTLCache
 
 from database import strategy_module_db as store
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -198,7 +199,7 @@ def _report_stranded_exit(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "run_stop_failed",
@@ -229,7 +230,7 @@ def report_flip_outgoing_exit_rejected(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "flip_outgoing_exit_rejected",
@@ -262,7 +263,7 @@ def report_pending_stop_exit_failed(
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
             return
-        store.record_event(
+        record_and_notify(
             run.strategy_id,
             strategy.user_id,
             "run_stop_failed",
@@ -446,7 +447,7 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
         return True
 
     try:
-        store.record_event(
+        record_and_notify(
             strategy_id,
             user_id,
             "run_stop_failed" if stop_pending else "leg_exit_rejected",
@@ -533,6 +534,7 @@ def _apply_update(order_id: str, event: Any) -> None:
         run_id = row.run_id
         leg_id = row.leg_id
         is_entry = row.kind == "entry"
+        order_kind = str(row.kind or "")
         row_id = row.id
         position_ref = row.position_ref
         broker_order_id = row.broker_order_id
@@ -589,6 +591,31 @@ def _apply_update(order_id: str, event: Any) -> None:
                     **fill_identity,
                     **fill_options,
                 )
+                if is_entry and fold.fill_delta > 0 and run_row is not None and run_row.mode == "live":
+                    from services.strategy_module import live_protection
+
+                    live_protection.protect_entry_fill(
+                        run_id,
+                        leg_id,
+                        str(position_ref or ""),
+                        entry_order_id=row_id,
+                        entry_is_terminal=fold.terminal,
+                    )
+                elif (
+                    order_kind == "protective_stop"
+                    and fold.fill_delta > 0
+                    and not fold.terminal
+                    and position_ref
+                ):
+                    # A partially filled native stop still has its original
+                    # quantity working at the broker. Reconcile/cancel that
+                    # remainder, then protect only the quantity still held.
+                    # Otherwise a later fill could reverse the account.
+                    from services.strategy_module import live_protection
+
+                    live_protection.resize_after_partial_stop_fill(
+                        run_id, leg_id, str(position_ref), row_id
+                    )
             if fold.fill_delta > 0 and price is None:
                 _report_unpriced_fill(
                     run_id,
@@ -626,8 +653,31 @@ def _apply_update(order_id: str, event: Any) -> None:
                     if owns_entry and leg.get("entry_status") != "complete":
                         leg["entry_status"] = ended
                         leg["status"] = "rejected"
+                from services.strategy_module import portfolio_governor
+
+                portfolio_governor.release_terminal_entry_reservation(row_id)
                 engine.reconcile_pending_stop(run_id)
             elif not is_entry:
+                # A normal software exit deliberately cancels the native stop
+                # immediately before sending its replacement market exit. That
+                # expected cancellation must not race the caller by launching a
+                # second emergency close. An unsolicited broker-side cancel or
+                # rejection still triggers the emergency stop path below.
+                before_release = state.get_run_state(run_id) or {}
+                current_leg = (before_release.get("legs") or {}).get(str(leg_id)) or {}
+                current_owner = current_leg
+                superseded = current_leg.get("superseded")
+                if (
+                    position_ref is not None
+                    and isinstance(superseded, dict)
+                    and superseded.get("position_ref") == position_ref
+                ):
+                    current_owner = superseded
+                expected_protective_cancel = bool(
+                    order_kind == "protective_stop"
+                    and ended == "cancelled"
+                    and current_owner.get("protective_stop_cancel_expected_order_id") == row_id
+                )
                 if not should_apply:
                     exit_owner = state.release_order_exit(
                         run_id,
@@ -654,7 +704,7 @@ def _apply_update(order_id: str, event: Any) -> None:
                         ended,
                         broker_order_id,
                     )
-                if owner_still_held:
+                if owner_still_held and not expected_protective_cancel:
                     report_pending_stop_exit_failed(
                         run_id,
                         leg_id,
@@ -675,6 +725,24 @@ def _apply_update(order_id: str, event: Any) -> None:
                         qty=order_qty,
                         symbol=order_symbol,
                     )
+                if (
+                    order_kind == "protective_stop"
+                    and owner_still_held
+                    and not expected_protective_cancel
+                ):
+                    from services.strategy_module import engine
+
+                    run = store.get_run(run_id)
+                    strategy = store.get_strategy_unscoped(run.strategy_id) if run else None
+                    if run is not None and strategy is not None:
+                        from services.strategy_module.lifecycle_events import record_and_notify
+
+                        record_and_notify(
+                            int(strategy.id), str(strategy.user_id), "protective_stop_failed",
+                            f"Kotak protective stop {broker_order_id} was {ended}; attempting to close the held run",
+                            run_id=run_id, leg_id=leg_id, severity="critical", mode="live",
+                        )
+                        engine.stop_run(run_id, str(strategy.user_id), reason="protection_failed")
 
         if fold.fill_delta > 0 or fold.terminal:
             durable = store.get_order_by_broker_id(order_id)

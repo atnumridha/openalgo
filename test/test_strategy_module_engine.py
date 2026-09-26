@@ -7,17 +7,24 @@ what it refuses, and what it leaves behind when something fails partway.
 Several cases pin defects from the module this was ported from, and say so.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, time, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+import pytz
 
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, order_events, state
+from services.strategy_module import engine, order_events, portfolio_governor, session, state
+from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 from services.strategy_module.symbol_resolver import ResolvedLeg
+from services.strategy_module.tick_feed import STALE, TickSourceEvent
 
 USER = "engine_test_user"
 
@@ -41,12 +48,20 @@ def _config(name="Engine test", legs=None, **overrides):
                 "option_type": "CE",
                 "strike_mode": "atm",
                 "atm_offset": "ATM",
+                # Sandbox admission needs the option premium explicitly; the
+                # underlying index LTP is not a valid debit.
+                "ltp": 100,
                 "sl_pts": 20,
+                "target_pts": 40,
                 "trail": {"x": 0, "y": 0},
             }
         ],
     }
     config.update(overrides)
+    for leg in config["legs"]:
+        leg.setdefault("ltp", 100)
+        leg.setdefault("sl_pts", 20)
+        leg.setdefault("target_pts", 40)
     return config
 
 
@@ -64,20 +79,53 @@ def _resolved(leg_id=1, symbol="NIFTY28MAY2624000CE", qty=75):
         quantity=qty,
         lots=1,
         option_type="CE",
-        underlying="NIFTY",
+        underlying=("BANKEX" if str(symbol).upper().startswith("BANKEX") else "NIFTY"),
         underlying_ltp=24010.0,
         atm_strike=24000.0,
     )
 
 
 @pytest.fixture(autouse=True)
-def clean_slate():
+def inside_entry_window():
+    zone = pytz.timezone("Asia/Kolkata")
+    day = session.session_day(datetime.now(zone))
+    moment = zone.localize(datetime(day.year, day.month, day.day, 10, 30))
+    with (
+        patch.object(portfolio_governor, "_facts_now", return_value=moment),
+        patch.object(portfolio_governor, "_decision_now", return_value=moment),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def clean_slate(monkeypatch):
+    from database import auth_db, market_calendar_db
+    from services import quotes_service
+
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("test-token", "sandbox"))
+    monkeypatch.setattr(portfolio_governor, "_sandbox_account", lambda _user: (Decimal("10000000"), []))
+    monkeypatch.setattr(quotes_service, "get_quotes", lambda *_a, **_k: (
+        True, {"data": {"bid": 99.5, "ask": 100, "bid_qty": 10000, "ask_qty": 10000,
+                        "timestamp": portfolio_governor._facts_now().isoformat()}}, 200,
+    ))
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", lambda day, exchange: {
+        "start_ms": int(pytz.timezone("Asia/Kolkata").localize(datetime(day.year, day.month, day.day, 9, 15)).timestamp() * 1000),
+        "end_ms": int(pytz.timezone("Asia/Kolkata").localize(datetime(day.year, day.month, day.day, 23 if exchange == "MCX" else 15, 55 if exchange == "MCX" else 30)).timestamp() * 1000),
+    })
     # Start from a clean session. This scoped_session is shared with every
     # other suite in the run, and a sibling that left rows deleted underneath
     # it leaves stale objects in the identity map here, which surface as
     # ObjectDeletedError on rows this file never touched.
     store.db_session.remove()
     store.init_db()
+    store.db_session.query(store.SmRiskReservation).filter_by(user_id=USER).delete(
+        synchronize_session=False
+    )
+    store.db_session.commit()
+    for key in list(portfolio_governor._entry_reservations):
+        if key == USER or key.startswith(f"{USER}|"):
+            portfolio_governor._entry_reservations.pop(key, None)
+            portfolio_governor._reservation_cash_baselines.pop(key, None)
 
     def purge():
         for row in store.list_strategies(USER):
@@ -97,6 +145,18 @@ def api_key():
     """Every path needs a server-side API key; none of these tests need a real one."""
     with patch.object(engine, "_api_key_for", return_value="test-api-key"):
         yield "test-api-key"
+
+
+@pytest.fixture
+def mock_verified_live_contract():
+    """Exercise prior live plumbing as if a venue contract were verified."""
+    from services.strategy_module import live_protection
+
+    with (
+        patch.object(live_protection, "entry_block_reason", return_value=None),
+        patch.object(engine.order_dispatch, "live_entry_protection_reason", return_value=None),
+    ):
+        yield
 
 
 def _make(config=None):
@@ -127,17 +187,344 @@ def _start(sid, mode="sandbox", dispatch=None, resolved=None):
     dispatch = dispatch or (
         lambda **kw: DispatchResult(ok=True, broker_order_id="SB-1", response={})
     )
+    supplied = list(resolved)
+
+    def resolve_supplied(request, base_symbol, *_args, **_kwargs):
+        symbol = str(request.get("symbol") or "")
+        for item in supplied:
+            if getattr(item, "symbol", None) == symbol:
+                return item
+        for item in supplied:
+            if getattr(item, "underlying", None) == base_symbol:
+                return item
+        return supplied[0]
+
     with (
-        patch.object(engine, "resolve_leg", side_effect=list(resolved) * 5),
+        patch.object(engine, "resolve_leg", side_effect=resolve_supplied),
         patch.object(engine.order_dispatch, "dispatch_order", side_effect=dispatch),
         patch.object(engine, "_broker_for", return_value="sandbox"),
+        patch.object(
+            portfolio_governor,
+            "_sandbox_account",
+            return_value=(Decimal("10000000"), []),
+        ),
     ):
         return engine.start_run(sid, USER, mode)
+
+
+def _bank_loss(sid, amount=1000):
+    run = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert run is not None
+    for kind, action, price in (("entry", "BUY", 100), ("exit", "SELL", 100 - amount / 100)):
+        order = store.record_order(run.id, 1, kind, {
+            "symbol": "NIFTY28MAY2624000CE", "exchange": "NFO", "action": action,
+            "qty": 100, "position_ref": "banked-owner", "status": "pending",
+        })
+        assert order is not None
+        assert store.fold_order_broker_frame(
+            order.id, status="complete", avg_fill_price=price, filled_qty=100
+        ) is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=-amount)
+
+
+@pytest.mark.parametrize("failing_step", ["unknown_outcome", "session_loss", "claim"])
+def test_batch_releases_account_admission_when_leased_preflight_raises(
+    api_key, monkeypatch, failing_step
+):
+    sid = _make()
+    acquired = []
+    orders = []
+    real_acquire = portfolio_governor.acquire_entry_admission
+
+    def capture_admission(*args, **kwargs):
+        decision, admission = real_acquire(*args, **kwargs)
+        if admission is not None:
+            acquired.append(admission)
+        return decision, admission
+
+    def dispatch(**_kwargs):
+        orders.append("entry")
+        return DispatchResult(ok=True, broker_order_id=f"SB-{len(orders)}", response={})
+
+    monkeypatch.setattr(portfolio_governor, "acquire_entry_admission", capture_admission)
+    if failing_step == "unknown_outcome":
+        target = store
+        name = "has_unresolved_order_outcomes"
+    elif failing_step == "session_loss":
+        target = engine
+        name = "strategy_session_entry_loss_reason"
+    else:
+        target = store
+        name = "claim_strategy_for_run"
+    real_step = getattr(target, name)
+
+    def fail_after_acquisition(*args, **kwargs):
+        if acquired:
+            raise RuntimeError(f"leased {failing_step} failed")
+        return real_step(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, fail_after_acquisition)
+    try:
+        with pytest.raises(RuntimeError, match=f"leased {failing_step} failed"):
+            _start(sid, dispatch=dispatch)
+        assert len(acquired) == 1
+        assert orders == []
+        monkeypatch.setattr(target, name, real_step)
+        retry = _start(sid, dispatch=dispatch)
+        assert retry.ok is True
+        assert orders == ["entry"]
+    finally:
+        for admission in acquired:
+            admission.release()
 
 
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("trigger", ["manual", "scheduler"])
+def test_spent_strategy_session_budget_refuses_new_batch_entry(api_key, trigger):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    _bank_loss(sid)
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox", trigger_source=trigger)
+
+    assert result.ok is False
+    assert "Daily loss limit" in result.error
+    dispatch.assert_not_called()
+    assert len(store.list_runs(sid)) == 1
+    assert len(store.list_events(sid, kind="daily_loss_entry_rejected")) == 1
+
+
+def test_spent_strategy_budget_survives_state_reset_and_simultaneous_starts(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    _bank_loss(sid)
+    store.db_session.remove()
+    store.clear_strategy_module_cache()
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: engine.start_run(sid, USER, "sandbox"), range(2)))
+
+    assert all(not result.ok and "Daily loss limit" in result.error for result in results)
+    dispatch.assert_not_called()
+    assert len(store.list_runs(sid)) == 1
+
+
+def test_missing_strategy_session_pnl_refuses_batch_entry(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(store, "list_user_runs", return_value=None),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=True, broker_order_id="SB-1", response={}),
+        ) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "P&L" in result.error
+    dispatch.assert_not_called()
+    assert len(store.list_events(sid, kind="daily_loss_entry_rejected")) == 1
+
+
+def test_prior_session_loss_does_not_lock_new_batch_session(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    _bank_loss(sid)
+    run = store.db_session.query(store.SmStrategyRun).filter_by(strategy_id=sid).first()
+    before_reset = (
+        session.session_started_at().astimezone(UTC).replace(tzinfo=None)
+        - timedelta(minutes=1)
+    )
+    run.started_at = before_reset
+    run.stopped_at = before_reset
+    store.db_session.commit()
+    store.db_session.remove()
+
+    result = _start(sid)
+
+    assert result.ok is True
+    assert len(store.list_events(sid, kind="daily_loss_entry_rejected")) == 0
+
+
+def test_other_mode_and_strategy_losses_do_not_spend_batch_budget(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    other = _make(_config(name="Other strategy", daily_loss_limit_inr=1000))
+    _bank_loss(other)
+    live = store.create_run(sid, "live", "kotak", trigger_source="manual")
+    assert live is not None
+    assert store.finish_run(live.id, "manual", pnl_realized=-1000)
+
+    result = _start(sid)
+
+    assert result.ok is True
+    assert len(store.list_events(sid, kind="daily_loss_entry_rejected")) == 0
+
+
+def test_tick_banked_pnl_uses_the_run_account_scope():
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    _bank_loss(sid, amount=50)
+    live = store.create_run(sid, "live", "kotak", trigger_source="manual")
+    assert live is not None
+    assert store.finish_run(live.id, "manual", pnl_realized=-1000)
+    current = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert current is not None
+    strategy = store.strategy_to_dict(store.get_strategy(sid, USER))
+
+    assert engine._session_banked_pnl(strategy, current.id, "sandbox", "sandbox") == -50
+
+
+def test_tick_daily_limit_fails_closed_when_banked_pnl_is_unavailable():
+    strategy = {"daily_loss_limit_inr": 1000}
+    run = {"pnl_total": -50}
+
+    reason = engine._daily_loss_breached(strategy, None, run)
+
+    assert reason is not None
+    assert "P&L" in reason
+
+
+def test_unknown_outcome_seen_after_account_lease_blocks_batch_dispatch(api_key):
+    sid = _make()
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(store, "has_unresolved_order_outcomes", side_effect=[False, True]),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=True, broker_order_id="SB-1", response={}),
+        ) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "unknown" in result.error.lower()
+    dispatch.assert_not_called()
+    assert store.get_strategy(sid, USER).current_run_id is None
+
+
+def test_completed_unpriced_fill_blocks_batch_after_restart(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    run = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert run is not None
+    order = store.record_order(run.id, 1, "entry", {
+        "symbol": "NIFTY28MAY2624000CE", "exchange": "NFO", "action": "BUY",
+        "qty": 75, "position_ref": "owner-one", "status": "pending",
+    })
+    assert order is not None
+    folded = store.fold_order_broker_frame(
+        order.id, status="complete", avg_fill_price=None, filled_qty=75
+    )
+    assert folded is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=0)
+    store.db_session.remove()
+    store.clear_strategy_module_cache()
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=True, broker_order_id="SB-1", response={}),
+        ) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "P&L" in result.error
+    dispatch.assert_not_called()
+    assert len(store.list_runs(sid)) == 1
+
+
+def test_completed_priced_entry_without_durable_exit_blocks_batch(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    run = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert run is not None
+    order = store.record_order(run.id, 1, "entry", {
+        "symbol": "NIFTY28MAY2624000CE", "exchange": "NFO", "action": "BUY",
+        "qty": 75, "position_ref": "owner-one", "status": "pending",
+    })
+    assert order is not None
+    assert store.fold_order_broker_frame(
+        order.id, status="complete", avg_fill_price=100, filled_qty=75
+    ) is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=0)
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine.order_dispatch, "dispatch_order", return_value=DispatchResult(
+            ok=True, broker_order_id="SB-1", response={}
+        )) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "P&L" in result.error
+    dispatch.assert_not_called()
+
+
+def test_completed_priced_loss_conflicting_with_stored_zero_blocks_batch(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    run = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert run is not None
+    for kind, action, price in (("entry", "BUY", 100), ("exit", "SELL", 90)):
+        order = store.record_order(run.id, 1, kind, {
+            "symbol": "NIFTY28MAY2624000CE", "exchange": "NFO", "action": action,
+            "qty": 100, "position_ref": "owner-one", "status": "pending",
+        })
+        assert order is not None
+        assert store.fold_order_broker_frame(
+            order.id, status="complete", avg_fill_price=price, filled_qty=100
+        ) is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=0)
+    store.db_session.remove()
+    store.clear_strategy_module_cache()
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine.order_dispatch, "dispatch_order", return_value=DispatchResult(
+            ok=True, broker_order_id="SB-1", response={}
+        )) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "P&L" in result.error
+    dispatch.assert_not_called()
+
+
+def test_completed_orderless_positive_pnl_blocks_batch(api_key):
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    run = store.create_run(sid, "sandbox", "sandbox", trigger_source="manual")
+    assert run is not None
+    assert store.finish_run(run.id, "manual", pnl_realized=1500)
+
+    with (
+        patch.object(engine, "resolve_leg", return_value=_resolved()),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine.order_dispatch, "dispatch_order", return_value=DispatchResult(
+            ok=True, broker_order_id="SB-1", response={}
+        )) as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert "P&L" in result.error
+    dispatch.assert_not_called()
 
 
 def test_a_leg_that_cannot_be_resolved_stops_the_start_before_anything_is_claimed(api_key):
@@ -156,6 +543,32 @@ def test_a_leg_that_cannot_be_resolved_stops_the_start_before_anything_is_claime
     assert "No contract found" in result.error
     assert dispatch.call_count == 0
     assert store.get_strategy(sid, USER).status == "stopped"
+    assert store.list_runs(sid) == []
+
+
+def test_manual_intraday_start_is_refused_before_resolution_outside_entry_window(api_key):
+    sid = _make(
+        _config(
+            strategy_type="intraday",
+            entry_time=time(9, 20),
+            exit_time=time(15, 20),
+        )
+    )
+    before_mcx_open = pytz.timezone("Asia/Kolkata").localize(
+        datetime(2026, 9, 23, 6, 7)
+    )
+
+    with (
+        patch.object(portfolio_governor, "_decision_now", return_value=before_mcx_open),
+        patch.object(engine, "resolve_leg") as resolve,
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        result = engine.start_run(sid, USER, "sandbox", trigger_source="manual")
+
+    assert result.ok is False
+    assert result.error == "This intraday strategy can start only between 09:20 and 15:20 IST"
+    assert resolve.call_count == 0
+    assert dispatch.call_count == 0
     assert store.list_runs(sid) == []
 
 
@@ -209,6 +622,70 @@ def test_live_is_refused_unless_the_strategy_opted_in(api_key):
     assert store.get_strategy(sid, USER).status == "stopped"
 
 
+def test_live_batch_refuses_unverified_protection_before_run_or_entry(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    try:
+        with (
+            patch.object(engine, "_broker_for", return_value="kotak"),
+            patch.object(engine, "_resolve_all_legs") as resolve,
+            patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+        ):
+            result = engine.start_run(sid, USER, "live")
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert "connected kotak account pinned" in result.error.lower()
+    assert store.list_runs(sid) == []
+    resolve.assert_not_called()
+    dispatch.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_governor_rejects_batch_before_the_strategy_is_claimed(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    try:
+        with (
+            patch.object(engine, "resolve_leg", return_value=_resolved()),
+            patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+            patch.object(engine, "_broker_for", return_value="broker"),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ) as build_facts,
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(
+                    False,
+                    "risk_missing",
+                    "Live funds, positions, quotes, and configured protective risk are required",
+                ),
+            ),
+        ):
+            result = engine.start_run(sid, USER, "live")
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert result.error == "Live funds, positions, quotes, and configured protective risk are required"
+    dispatch.assert_not_called()
+    resolved_for_governor = build_facts.call_args.args[2]
+    assert resolved_for_governor[0]["segment"] == "options"
+    assert resolved_for_governor[0]["lot_size"] == 75
+    assert resolved_for_governor[0]["underlying"] == "NIFTY"
+    assert store.get_strategy(sid, USER).status == "stopped"
+    assert store.list_runs(sid) == []
+    rejected = store.list_events(sid, kind="portfolio_governor_rejected")
+    assert len(rejected) == 1
+    assert rejected[0]["payload"]["code"] == "risk_missing"
+
+
 def test_an_unknown_mode_is_refused(api_key):
     sid = _make()
 
@@ -224,25 +701,32 @@ def test_entries_are_placed_longs_first(api_key):
     sid = _make(
         _config(
             legs=[
-                {"id": 1, "segment": "options", "position": "S", "lots": 1, "option_type": "CE"},
-                {"id": 2, "segment": "options", "position": "B", "lots": 1, "option_type": "CE"},
+                {"id": 1, "segment": "options", "position": "S", "lots": 1, "option_type": "CE", "sl_pts": 20, "target_pts": 40},
+                {"id": 2, "segment": "options", "position": "B", "lots": 1, "option_type": "CE", "sl_pts": 20, "target_pts": 40},
             ]
         )
     )
     seen = []
 
     def record(**kwargs):
-        seen.append(kwargs["order"]["action"])
+        seen.append((kwargs["intent"], kwargs["order"]["action"]))
         return DispatchResult(ok=True, broker_order_id="SB", response={})
 
-    _start(
+    result = _start(
         sid,
         dispatch=record,
-        resolved=[_resolved(leg_id=1, symbol="LEG1"), _resolved(leg_id=2, symbol="LEG2")],
+        resolved=[
+            _resolved(leg_id=1, symbol="BANKEX28MAY2655000CE"),
+            _resolved(leg_id=2, symbol="BANKEX28MAY2656000CE"),
+        ],
     )
+    events = store.list_events(sid)
+    payload = (events[-1].get("payload") or {}) if events else {}
+    metrics = payload.get("metrics") or {}
+    assert result.ok, metrics
 
-    assert seen[0] == "BUY"
-    assert seen[1] == "SELL"
+    assert seen[0] == ("entry", "BUY")
+    assert seen[1] == ("entry", "SELL")
 
 
 def test_every_entry_rejected_finalises_the_run_rather_than_leaving_it_running(api_key):
@@ -260,6 +744,184 @@ def test_every_entry_rejected_finalises_the_run_rather_than_leaving_it_running(a
     assert len(runs) == 1
     assert runs[0]["stopped_at"] is not None
     assert runs[0]["stop_reason"] == "error"
+
+
+def test_unknown_entry_keeps_its_intent_and_blocks_another_batch_entry(api_key):
+    sid = _make()
+    result = _start(
+        sid,
+        dispatch=lambda **kw: DispatchResult(
+            ok=False, unknown=True, error="Broker reply timed out"
+        ),
+    )
+
+    assert result.ok is False
+    assert result.run_id is not None
+    assert store.get_run(result.run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == result.run_id
+    order = store.list_orders(result.run_id)[0]
+    assert order["status"] == "unknown"
+    assert order["broker_order_id"] is None
+    leg = state.get_run_state(result.run_id)["legs"]["1"]
+    assert leg["entry_status"] == "pending"
+    assert leg["entry_order_id"] == order["id"]
+    assert len(store.list_events(sid, kind="order_outcome_unknown")) == 1
+
+    other = _make(_config(name="Another strategy"))
+    with (
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+        patch.object(engine, "resolve_leg", return_value=_resolved()) as resolve,
+    ):
+        held = engine.start_run(other, USER, "sandbox")
+    assert held.ok is False
+    assert "unknown" in held.error.lower()
+    assert dispatch.call_count == 0
+    assert resolve.call_count == 0
+
+
+def test_unknown_first_leg_stops_the_rest_of_the_basket_before_dispatch(api_key):
+    sid = _make(
+        _config(
+            legs=[
+                {"id": 1, "position": "B", "segment": "options", "lots": 1},
+                {"id": 2, "position": "S", "segment": "options", "lots": 1},
+            ]
+        )
+    )
+    attempted = []
+
+    def dispatch(**kwargs):
+        attempted.append(kwargs["order"]["action"])
+        return DispatchResult(ok=False, unknown=True, error="reply lost")
+
+    result = _start(
+        sid,
+        dispatch=dispatch,
+        resolved=[
+            _resolved(leg_id=1, symbol="NIFTY28MAY2624000CE"),
+            _resolved(leg_id=2, symbol="NIFTY28MAY2624100CE"),
+        ],
+    )
+
+    assert result.ok is False
+    assert attempted == ["BUY"]
+    assert store.get_run(result.run_id).stopped_at is None
+    assert [order["status"] for order in store.list_orders(result.run_id)] == ["unknown"]
+    assert state.get_run_state(result.run_id)["legs"]["1"]["entry_status"] == "pending"
+
+
+def test_unknown_entry_event_holds_account_when_status_write_fails(api_key):
+    sid = _make()
+    with (
+        patch.object(store, "update_order", return_value=False),
+        patch.object(engine, "_subscribe_run"),
+    ):
+        result = _start(
+            sid,
+            dispatch=lambda **kw: DispatchResult(
+                ok=False, unknown=True, error="Broker reply timed out"
+            ),
+        )
+
+    assert result.ok is False
+    assert store.list_orders(result.run_id)[0]["status"] == "pending"
+    assert store.list_events(sid, kind="order_outcome_unknown")
+    other = _make(_config(name="Held by event"))
+    with (
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="Unexpected second dispatch"),
+        ) as dispatch,
+        patch.object(engine, "resolve_leg", return_value=_resolved()) as resolve,
+        patch.object(engine, "_subscribe_run"),
+    ):
+        held = engine.start_run(other, USER, "sandbox")
+    assert held.ok is False
+    assert "unknown" in held.error.lower()
+    assert dispatch.call_count == 0
+    assert resolve.call_count == 0
+
+
+def test_pending_intent_holds_account_when_status_and_event_writes_both_fail(api_key):
+    sid = _make()
+    original_record_event = store.record_event
+
+    def drop_unknown_witness(strategy_id, user_id, kind, message, **fields):
+        if kind in {"order_outcome_unknown", "order_ack_unrecorded"}:
+            return None
+        return original_record_event(strategy_id, user_id, kind, message, **fields)
+
+    with (
+        patch.object(store, "update_order", return_value=False),
+        patch.object(store, "record_event", side_effect=drop_unknown_witness),
+        patch.object(engine, "_subscribe_run"),
+    ):
+        result = _start(
+            sid,
+            dispatch=lambda **kw: DispatchResult(
+                ok=False, unknown=True, error="Broker reply timed out"
+            ),
+        )
+
+    assert result.ok is False
+    assert store.list_orders(result.run_id)[0]["status"] == "pending"
+    assert store.list_events(sid, kind="order_outcome_unknown") == []
+    other = _make(_config(name="Held by pending intent"))
+    with (
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="Unexpected second dispatch"),
+        ) as dispatch,
+        patch.object(engine, "resolve_leg", return_value=_resolved()) as resolve,
+        patch.object(engine, "_subscribe_run"),
+    ):
+        held = engine.start_run(other, USER, "sandbox")
+    assert held.ok is False
+    assert "unknown" in held.error.lower()
+    assert dispatch.call_count == 0
+    assert resolve.call_count == 0
+
+
+def test_unknown_entry_keeps_its_admission_reservation(api_key):
+    sid = _make()
+
+    class CapturingAdmission:
+        exposures = None
+
+        def commit(self, run_id, exposures):
+            self.exposures = (run_id, exposures)
+
+        def release(self):
+            pass
+
+    admission = CapturingAdmission()
+    decision = GovernorDecision(allowed=True, code="admitted", message="admitted")
+    with patch.object(
+        portfolio_governor,
+        "acquire_entry_admission",
+        return_value=(decision, admission),
+    ):
+        result = _start(
+            sid,
+            dispatch=lambda **kw: DispatchResult(
+                ok=False, unknown=True, error="Broker reply timed out"
+            ),
+        )
+
+    assert result.ok is False
+    row = store.list_orders(result.run_id)[0]
+    assert admission.exposures == (
+        result.run_id,
+        [
+            {
+                "leg_id": 1,
+                "position_ref": row["position_ref"],
+                "entry_order_id": row["id"],
+            }
+        ],
+    )
 
 
 def test_every_unrecordable_entry_rejects_its_placeholder_and_cleans_up_the_run(api_key):
@@ -283,6 +945,50 @@ def test_every_unrecordable_entry_rejects_its_placeholder_and_cleans_up_the_run(
     assert state.get_run_state(durable["id"]) is None
     subscribe.assert_called_once()
     unsubscribe.assert_called_once_with(durable["id"])
+
+
+def test_an_unrecordable_batch_exit_emits_one_material_lifecycle_event(api_key):
+    sid = _make()
+    started = _start(sid)
+    assert started.ok is True
+    engine.apply_fill(started.run_id, 1, 100.0, is_entry=True)
+    entry = store.list_orders(started.run_id)[0]
+    store.update_order(entry["id"], status="filled")
+
+    with patch.object(store, "record_order", return_value=None):
+        stopped = engine.stop_run(started.run_id, USER, reason="manual")
+
+    assert stopped["exits"]
+    events = store.list_events(sid, kind="exit_order_unrecorded")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+
+
+def test_unrecordable_exit_never_sends_even_if_audit_fails_and_run_restarts(api_key):
+    from services.strategy_module import recovery
+
+    sid = _make()
+    started = _start(sid)
+    assert started.ok is True
+    engine.apply_fill(started.run_id, 1, 100.0, is_entry=True)
+    entry = store.list_orders(started.run_id)[0]
+    store.update_order(entry["id"], status="filled")
+
+    with (
+        patch.object(store, "record_order", return_value=None),
+        patch.object(store, "record_event", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        first = engine.stop_run(started.run_id, USER, reason="manual")
+        assert first["stop_pending"] is True
+        assert dispatch.call_count == 0
+        state.clear_run_state(started.run_id)
+        assert recovery.recover_run(started.run_id).ok is True
+        second = engine.stop_run(started.run_id, USER, reason="manual")
+
+    assert second["stop_pending"] is True
+    assert dispatch.call_count == 0
+    assert store.get_run(started.run_id).stopped_at is None
 
 
 def test_failed_ack_persistence_records_exact_structured_repair_metadata(api_key):
@@ -516,13 +1222,17 @@ def test_an_exit_fill_locks_in_realized_pnl_with_the_right_sign(api_key):
     sid = _make(
         _config(
             legs=[
-                {"id": 1, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20},
-                {"id": 2, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20},
+                {"id": 1, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20, "target_pts": 40},
+                {"id": 2, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20, "target_pts": 40},
             ]
         )
     )
     run_id = _start(
-        sid, resolved=[_resolved(leg_id=1, symbol="L1"), _resolved(leg_id=2, symbol="L2")]
+        sid,
+        resolved=[
+            _resolved(leg_id=1, symbol="BANKEX28MAY2655000CE"),
+            _resolved(leg_id=2, symbol="BANKEX28MAY2656000CE"),
+        ],
     ).run_id
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     engine.apply_fill(run_id, 2, 50.0, is_entry=True)
@@ -542,13 +1252,17 @@ def test_a_long_exit_fill_carries_the_opposite_sign(api_key):
     sid = _make(
         _config(
             legs=[
-                {"id": 1, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20},
-                {"id": 2, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20},
+                {"id": 1, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20, "target_pts": 40},
+                {"id": 2, "segment": "options", "position": "B", "lots": 1, "sl_pts": 20, "target_pts": 40},
             ]
         )
     )
     run_id = _start(
-        sid, resolved=[_resolved(leg_id=1, symbol="L1"), _resolved(leg_id=2, symbol="L2")]
+        sid,
+        resolved=[
+            _resolved(leg_id=1, symbol="BANKEX28MAY2655000PE"),
+            _resolved(leg_id=2, symbol="BANKEX28MAY2656000PE"),
+        ],
     ).run_id
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     engine.apply_fill(run_id, 2, 50.0, is_entry=True)
@@ -754,6 +1468,34 @@ def test_a_rejected_exit_can_be_retried_rather_than_looking_like_a_duplicate(api
     assert len(calls) == 2
 
 
+def test_unknown_exit_keeps_the_covering_claim_until_broker_reconciliation(api_key):
+    sid = _make()
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    strategy = store.strategy_to_dict(store.get_strategy(sid, USER))
+    calls = []
+
+    def uncertain(**kwargs):
+        calls.append(kwargs["order"])
+        return DispatchResult(ok=False, unknown=True, error="Broker reply timed out")
+
+    with patch.object(engine.order_dispatch, "dispatch_order", side_effect=uncertain):
+        first = engine._exit_legs(run_id, strategy, [1], "exit_sl", "sandbox", "k", USER)
+        engine._exit_legs(run_id, strategy, [1], "exit_sl", "sandbox", "k", USER)
+
+    assert len(calls) == 1
+    assert first[0]["ok"] is False
+    assert first[0]["unknown"] is True
+    orders = store.list_orders(run_id)
+    assert orders[-1]["status"] == "unknown"
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["qty"] == 75
+    assert leg["exit_order_id"] == orders[-1]["id"]
+    assert store.get_run(run_id).stopped_at is None
+    assert len(store.list_events(sid, kind="order_outcome_unknown")) == 1
+
+
 def test_a_manual_close_does_not_trail_the_other_legs_to_entry(api_key):
     # Trail-to-entry answers the market moving against the book. An operator
     # closing one leg by hand is an override, and treating it as a signal would
@@ -762,13 +1504,17 @@ def test_a_manual_close_does_not_trail_the_other_legs_to_entry(api_key):
         _config(
             trail_sl_to_entry=True,
             legs=[
-                {"id": 1, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20},
-                {"id": 2, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20},
+                {"id": 1, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20, "target_pts": 40},
+                {"id": 2, "segment": "options", "position": "S", "lots": 1, "sl_pts": 20, "target_pts": 40},
             ],
         )
     )
     run_id = _start(
-        sid, resolved=[_resolved(leg_id=1, symbol="L1"), _resolved(leg_id=2, symbol="L2")]
+        sid,
+        resolved=[
+            _resolved(leg_id=1, symbol="BANKEX28MAY2655000CE"),
+            _resolved(leg_id=2, symbol="BANKEX28MAY2656000CE"),
+        ],
     ).run_id
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     engine.apply_fill(run_id, 2, 200.0, is_entry=True)
@@ -1048,6 +1794,28 @@ def test_an_overall_stop_closes_the_whole_run(api_key):
     runs = store.list_runs(sid)
     assert runs[0]["stop_reason"] == "overall_sl"
     assert store.get_strategy(sid, USER).status == "stopped"
+
+
+def test_daily_loss_breach_records_the_mark_and_triggering_tick(api_key):
+    sid = _make(_config(overall_sl_mtm=5000, daily_loss_limit_inr=1000))
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    with patch.object(
+        engine.order_dispatch, "dispatch_order",
+        return_value=DispatchResult(ok=True, broker_order_id="X", response={}),
+    ):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 114.0)
+    alerts = store.list_events(sid, kind="overall_sl_hit")
+    assert alerts
+    payload = alerts[-1]["payload"]
+    assert payload["reason"] == "daily_loss_limit"
+    assert payload["trigger_total"] == pytest.approx(-1050.0)
+    assert payload["session_total"] == pytest.approx(-1050.0)
+    assert payload["session_threshold"] == pytest.approx(-1000.0)
+    assert payload["banked_session_pnl"] == pytest.approx(0.0)
+    assert payload["triggering_tick"] == {
+        "symbol": "NIFTY28MAY2624000CE", "exchange": "NFO", "ltp": 114.0
+    }
 
 
 def test_a_tick_for_an_instrument_no_run_holds_is_ignored(api_key):
@@ -1358,3 +2126,223 @@ def test_synchronous_signal_risk_exit_fill_does_not_end_the_session_run(api_key)
     live = state.get_run_state(run_id)
     assert live is not None
     assert live["legs"]["1"]["status"] == "closed"
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False, committed=False)
+
+    def release():
+        admission.released = True
+
+    admission.release = release
+    admission.commit = lambda *_a, **_k: setattr(admission, "committed", True)
+
+    def accept_while_admitted(**_kwargs):
+        assert admission.released is False
+        return DispatchResult(ok=True, broker_order_id="LIVE-ADMITTED", response={})
+
+    try:
+        with (
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ) as acquire,
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+        ):
+            result = _start(sid, mode="live", dispatch=accept_while_admitted)
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is True
+    acquire.assert_called_once()
+    assert admission.committed is True
+    assert admission.released is True
+    snapshot = state.get_run_state(result.run_id)
+    assert snapshot["legs"]["1"]["status"] == "open"
+    admitted = store.list_events(sid, kind="portfolio_governor_admitted")
+    assert len(admitted) == 1
+    assert admitted[0]["payload"]["code"] == "entry_allowed"
+
+
+def test_stale_feed_stops_each_affected_run_and_alerts_only_on_terminal_transition(api_key):
+    """A repeated stale callback cannot duplicate a terminal lifecycle event."""
+    sid = _make()
+    assert store.claim_strategy_for_run(sid)
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = int(run.id)
+    assert store.set_strategy_status(sid, "running", run_id)
+    state.init_run_state(
+        run_id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "B",
+                "symbol": "STALE-CONTRACT",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    # Model a run whose working entry was already proven dead. It remains
+    # subscribed until terminal cleanup, but carries no exposure that would
+    # make a stale-feed stop wait for broker reconciliation.
+    with state.run_state(run_id) as live:
+        live["legs"]["1"]["entry_status"] = "rejected"
+        live["legs"]["1"]["status"] = "rejected"
+    event = TickSourceEvent(
+        symbol="STALE-CONTRACT",
+        exchange="NFO",
+        source=STALE,
+        previous="polling",
+        degraded=False,
+        at=1.0,
+    )
+
+    engine.handle_tick_source_event(event)
+    engine.handle_tick_source_event(event)
+
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is not None
+    assert durable.stop_reason == "tick_stale"
+    stopped = store.list_events(sid, kind="stale_feed_stop")
+    assert len(stopped) == 1
+    assert stopped[0]["run_id"] == run_id
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_batch_releases_portfolio_admission_when_strategy_claim_is_refused(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    admission = SimpleNamespace(released=False)
+    admission.release = lambda: setattr(admission, "released", True)
+
+    try:
+        with (
+            patch.object(
+                portfolio_governor,
+                "acquire_entry_admission",
+                return_value=(
+                    GovernorDecision(True, "entry_allowed", "allowed"),
+                    admission,
+                ),
+            ),
+            patch.object(
+                portfolio_governor,
+                "build_entry_facts",
+                return_value=EntryFacts(intent="entry", mode="live"),
+            ),
+            patch.object(
+                portfolio_governor,
+                "evaluate_entry",
+                return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+            ),
+            patch.object(store, "claim_strategy_for_run", return_value=False),
+        ):
+            result = _start(sid, mode="live")
+    finally:
+        authz.revoke(USER)
+
+    assert result.ok is False
+    assert "already running" in result.error
+    assert admission.released is True
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_batch_pending_entry_reserves_position_during_broker_lag(api_key, monkeypatch):
+    from database import auth_db, token_db
+    from services import funds_service, positionbook_service
+
+    configured_leg = dict(_config()["legs"][0], target_pts=40)
+    first = _make(_config(name="First", legs=[configured_leg]))
+    second = _make(_config(name="Second", legs=[configured_leg]))
+    for strategy_id in (first, second):
+        store.set_live_enabled(strategy_id, USER, True)
+    authz.grant(USER)
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "broker"))
+    monkeypatch.setattr(token_db, "get_symbol_info", lambda *_args: SimpleNamespace(tick_size=0.05))
+    monkeypatch.setattr(
+        funds_service,
+        "get_funds",
+        lambda **_kw: (True, {"data": {"availablecash": "10000000"}}, 200),
+    )
+    monkeypatch.setattr(
+        positionbook_service,
+        "get_positionbook",
+        lambda **_kw: (True, {"data": []}, 200),
+    )
+
+    try:
+        fixed_now = portfolio_governor.IST.localize(
+            portfolio_governor.datetime(2026, 9, 23, 10, 0)
+        )
+        with (
+            patch.object(engine, "_subscribe_run"),
+            patch.object(engine, "datetime", SimpleNamespace(now=lambda _tz: fixed_now)),
+        ):
+            accepted = _start(first, mode="live")
+            refused = _start(second, mode="live")
+    finally:
+        authz.revoke(USER)
+
+    assert accepted.ok is True
+    assert refused.ok is False
+    assert refused.error == "The portfolio position limit is reached"
+    assert store.list_runs(second) == []
+
+
+@pytest.mark.usefixtures("mock_verified_live_contract")
+def test_live_batch_rechecks_authorization_inside_portfolio_admission(api_key):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    dispatches = []
+    expired = "Live automation authorization expired while waiting"
+
+    with (
+        patch.object(
+            authz,
+            "require_live_entry",
+            side_effect=[(True, None), (False, expired)],
+        ) as authorize,
+        patch.object(
+            portfolio_governor,
+            "build_entry_facts",
+            return_value=EntryFacts(intent="entry", mode="live"),
+        ),
+        patch.object(
+            portfolio_governor,
+            "evaluate_entry",
+            return_value=GovernorDecision(True, "entry_allowed", "allowed"),
+        ),
+    ):
+        result = _start(
+            sid,
+            mode="live",
+            dispatch=lambda **kw: dispatches.append(kw)
+            or DispatchResult(ok=True, broker_order_id="TOO-LATE", response={}),
+        )
+
+    assert authorize.call_count == 2
+    assert result.ok is False
+    assert result.error == expired
+    assert dispatches == []
+    assert store.list_runs(sid) == []

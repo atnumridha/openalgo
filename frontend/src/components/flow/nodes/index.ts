@@ -34,6 +34,7 @@ import { ModifyOrderNode } from './ModifyOrderNode'
 import { MultiQuotesNode } from './MultiQuotesNode'
 import { NotGateNode } from './NotGateNode'
 import { OpenPositionNode } from './OpenPositionNode'
+import { OpeningRangeNode } from './OpeningRangeNode'
 import { OptionChainNode } from './OptionChainNode'
 import { OptionSymbolNode } from './OptionSymbolNode'
 import { OptionsMultiOrderNode } from './OptionsMultiOrderNode'
@@ -54,6 +55,8 @@ import { SplitOrderNode } from './SplitOrderNode'
 // Trigger Nodes
 import { StartNode } from './StartNode'
 import { StrategyPnlNode } from './StrategyPnlNode'
+import { StrategyModuleRunNode } from './StrategyModuleRunNode'
+import { StrategySignalNode } from './StrategySignalNode'
 import { SubscribeDepthNode } from './SubscribeDepthNode'
 // WebSocket Streaming Nodes
 import { SubscribeLTPNode } from './SubscribeLTPNode'
@@ -114,6 +117,9 @@ export {
   IndicatorNode,
   PriorPeriodOhlcNode,
   StrategyPnlNode,
+  StrategyModuleRunNode,
+  StrategySignalNode,
+  OpeningRangeNode,
   BarOffsetNode,
   OpenPositionNode,
   ExpiryNode,
@@ -194,6 +200,9 @@ export const nodeTypes = {
   indicator: IndicatorNode,
   priorPeriodOhlc: PriorPeriodOhlcNode,
   strategyPnl: StrategyPnlNode,
+  strategyModuleRun: StrategyModuleRunNode,
+  strategySignal: StrategySignalNode,
+  openingRange: OpeningRangeNode,
   barOffset: BarOffsetNode,
   openPosition: OpenPositionNode,
   expiry: ExpiryNode,

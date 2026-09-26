@@ -360,6 +360,39 @@ export interface StrategyPnlNodeData {
   outputVariable?: string
 }
 
+export interface StrategyModuleRunNodeData {
+  label?: string
+  strategyId: number
+  brokerOwner: string
+  mode: 'sandbox' | 'live'
+  marketHoursExchange?: string
+  barEvidence?: { '5m': [string, string]; '15m': [string, string] }
+  outputVariable?: string
+}
+
+export interface StrategySignalNodeData {
+  label?: string
+  strategyId: number
+  brokerOwner: string
+  mode: 'sandbox' | 'live' | ''
+  action: 'start' | 'stop' | 'long_entry' | 'long_exit' | 'short_entry' | 'short_exit' | ''
+  legId?: number
+  symbol?: string
+  exchange?: string
+  marketHoursExchange?: string
+  barEvidence?: { '5m': [string, string]; '15m': [string, string] }
+  outputVariable?: string
+}
+
+export interface OpeningRangeNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  rangeMinutes: number
+  source?: 'api' | 'historify'
+  outputVariable?: string
+}
+
 /** Prior Period OHLC - last fully-closed hour/day/week/month candle
  * (e.g. previous day's high/low for a PDH/PDL breakout strategy) without
  * the workflow author computing a relative date. */
@@ -682,6 +715,8 @@ export type ActionNodeData =
   | CancelOrderNodeData
   | CancelAllOrdersNodeData
   | ClosePositionsNodeData
+  | StrategyModuleRunNodeData
+  | StrategySignalNodeData
 
 /** All Condition Node Data Types */
 export type ConditionNodeDataTypes =
@@ -707,6 +742,7 @@ export type DataNodeData =
   | PriorPeriodOhlcNodeData
   | StrategyPnlNodeData
   | BarOffsetNodeData
+  | OpeningRangeNodeData
   | OpenPositionNodeData
   | ExpiryNodeData
   | IntervalsNodeData

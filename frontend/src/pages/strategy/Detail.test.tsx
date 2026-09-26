@@ -44,8 +44,8 @@ import {
   type StrategyLiveState,
   useBrokerBook,
 } from '@/api/strategy_module'
-import type { Order, Run, Strategy } from '@/types/strategy_module'
-import StrategyDetail, { OrdersTab, PositionsTab, TradesTab } from './Detail'
+import type { Order, Run, Strategy, StrategyEvent } from '@/types/strategy_module'
+import StrategyDetail, { EventsTab, OrdersTab, PositionsTab, ProfitComparisonTab, TradesTab, eventRefreshInterval } from './Detail'
 
 function client() {
   return new QueryClient({
@@ -148,6 +148,54 @@ beforeEach(() => {
   liveHook.mockReturnValue(live)
   for (const mock of Object.values(toast)) mock.mockReset()
   hookClient = client()
+})
+
+it('labels comparison triggers without executable quotes as estimates, not fills', () => {
+  const profile = {
+    status: 'trigger_only', simulated_realized_pnl: null,
+    peak_profit: 420, max_drawdown: 160,
+    trigger_mark_pnl: 260, exit_fill_quality: 'trigger_only_estimate', missed_fill: true,
+  }
+  renderWithQuery(<ProfitComparisonTab loading={false} records={[{
+    run_id: 42, position_ref: 'test-owner', symbol: 'NIFTY29SEP2623500CE', exchange: 'NFO',
+    entry_at: '2026-09-25T04:10:00+00:00', entry_timestamp_source: 'local_confirmation',
+    risk_budget: 500, last_observed_at: '2026-09-25T04:15:00+00:00', fees: null,
+    profiles: { baseline: profile, early: profile, room: profile },
+  }]} />)
+  expect(screen.getByText(/They place no extra orders/)).toBeInTheDocument()
+  expect(screen.getAllByText('Trigger only — no executable quote')).toHaveLength(3)
+  expect(screen.getByText('Earlier protection')).toBeInTheDocument()
+})
+
+it('shows failed WhatsApp delivery separately from the original strategy event', () => {
+  const event: StrategyEvent = {
+    id: 81,
+    run_id: 42,
+    strategy_id: 7,
+    ts: '2026-09-25T04:10:00+00:00',
+    kind: 'protective_stop_uncovered',
+    severity: 'critical',
+    leg_id: 1,
+    message: 'Open quantity is not protected',
+    payload: null,
+    whatsapp_delivery: {
+      status: 'failed',
+      attempts: 5,
+      event_ts: '2026-09-25T04:10:00+00:00',
+      last_attempt_at: '2026-09-25T04:15:00+00:00',
+      accepted_at: null,
+      last_error: 'WhatsApp did not accept the alert',
+    },
+  }
+  renderWithQuery(<EventsTab events={[event]} />)
+  expect(screen.getByText('WhatsApp failed')).toBeInTheDocument()
+  expect(screen.getByText(/not proof of human receipt/i)).toBeInTheDocument()
+  expect(screen.getByText(/Last attempt/)).toBeInTheDocument()
+})
+
+it('continues refreshing safety events for a stopped strategy', () => {
+  expect(eventRefreshInterval(false)).toBe(30_000)
+  expect(eventRefreshInterval(true)).toBe(15_000)
 })
 
 describe('broker book requests and cache ownership', () => {
@@ -1407,5 +1455,44 @@ describe('strategy exit action toasts describe proven state only', () => {
     expect(toast.warning).toHaveBeenCalledWith(
       'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
     )
+  })
+
+  it('blocks live start up front and points to inactive session authorization', async () => {
+    const stoppedStrategy = {
+      ...strategy,
+      status: 'stopped',
+      current_run_id: null,
+      live_enabled: true,
+    }
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({ data: { data: stoppedStrategy } })
+      }
+      if (url === '/strategy/api/automation/live-authorization') {
+        return Promise.resolve({
+          data: {
+            live_authorization: {
+              active: false,
+              session_day: '2026-09-25',
+              expires_at: '2026-09-26T03:00:00+05:30',
+            },
+          },
+        })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Start run' }))
+    await user.click(screen.getByRole('button', { name: 'LIVE' }))
+
+    const dialog = screen.getByRole('dialog')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Live automation authorization is inactive'
+    )
+    expect(within(dialog).getByRole('button', { name: 'Start live' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: 'Open authorization controls' })).toBeEnabled()
+    expect(rest.post).not.toHaveBeenCalled()
   })
 })

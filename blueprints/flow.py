@@ -12,6 +12,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request, session
 
 from database.auth_db import get_api_key_for_tradingview
+from database.flow_db import with_workflow_mutation_lease
 from limiter import limiter
 from utils.session import check_session_validity
 
@@ -129,7 +130,16 @@ def create_workflow():
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
 
-    workflow = create_workflow(name=name, description=description, nodes=nodes, edges=edges)
+    connection_id = data.get("broker_connection_id")
+    if connection_id is not None:
+        from uuid import UUID
+
+        try:
+            connection_id = str(UUID(connection_id))
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({"error": "broker_connection_id must be a UUID"}), 400
+    workflow = create_workflow(name=name, description=description, nodes=nodes, edges=edges,
+                               broker_connection_id=connection_id)
 
     if not workflow:
         return jsonify({"error": "Failed to create workflow"}), 500
@@ -139,6 +149,7 @@ def create_workflow():
             "id": workflow.id,
             "name": workflow.name,
             "description": workflow.description,
+            "broker_connection_id": workflow.broker_connection_id,
             "nodes": workflow.nodes,
             "edges": workflow.edges,
             "is_active": workflow.is_active,
@@ -167,6 +178,7 @@ def get_workflow(workflow_id):
             "id": workflow.id,
             "name": workflow.name,
             "description": workflow.description,
+            "broker_connection_id": workflow.broker_connection_id,
             "nodes": workflow.nodes,
             "edges": workflow.edges,
             "is_active": workflow.is_active,
@@ -212,6 +224,7 @@ def _existing_for_trigger_check(workflow_id):
 
 @flow_bp.route("/api/workflows/<int:workflow_id>", methods=["PUT"])
 @check_session_validity
+@with_workflow_mutation_lease
 def update_workflow(workflow_id):
     """Update a workflow"""
     from database.flow_db import update_workflow
@@ -240,9 +253,16 @@ def update_workflow(workflow_id):
     # webhook without ensure_webhook_credentials, which leaves webhook_secret
     # NULL and _execute_webhook then skips authentication entirely. Those
     # transitions belong to the activate/deactivate/webhook routes.
-    editable = {"name", "description", "nodes", "edges"}
+    editable = {"name", "description", "nodes", "edges", "broker_connection_id"}
     rejected = sorted(set(data) - editable)
     data = {key: value for key, value in data.items() if key in editable}
+    if "broker_connection_id" in data and data["broker_connection_id"] is not None:
+        from uuid import UUID
+
+        try:
+            data["broker_connection_id"] = str(UUID(data["broker_connection_id"]))
+        except (ValueError, TypeError, AttributeError):
+            return jsonify({"error": "broker_connection_id must be a UUID"}), 400
     if rejected:
         logger.warning(
             f"Ignoring non-editable field(s) {rejected} in PUT for workflow {workflow_id}"
@@ -318,6 +338,7 @@ def update_workflow(workflow_id):
             "id": workflow.id,
             "name": workflow.name,
             "description": workflow.description,
+            "broker_connection_id": workflow.broker_connection_id,
             "nodes": workflow.nodes,
             "edges": workflow.edges,
             "is_active": workflow.is_active,
@@ -333,6 +354,7 @@ def update_workflow(workflow_id):
 
 @flow_bp.route("/api/workflows/<int:workflow_id>", methods=["DELETE"])
 @check_session_validity
+@with_workflow_mutation_lease
 def delete_workflow(workflow_id):
     """Delete a workflow"""
     from database.flow_db import delete_workflow, get_workflow
@@ -370,99 +392,21 @@ def delete_workflow(workflow_id):
 
 
 def _trigger_node(nodes):
-    """The workflow's trigger node, or None."""
-    return next(
-        (
-            n
-            for n in (nodes or [])
-            if n.get("type") in ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
-        ),
-        None,
-    )
+    from services.flow_lifecycle_service import trigger_node
+
+    return trigger_node(nodes)
 
 
 def _unregister_trigger(workflow_id):
-    """Remove every in-memory trigger registration for a workflow.
+    from services.flow_lifecycle_service import unregister_trigger
 
-    Deliberately unconditional across all three kinds: the stored
-    schedule_job_id can be missing, and a workflow whose trigger type changed
-    still has the previous kind registered.
-    """
-    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
-    from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
-
-    get_flow_scheduler().remove_workflow_job(workflow_id, strict=True)
-    get_flow_price_monitor().remove_alert(workflow_id)
-    get_flow_order_update_monitor().remove_watch(workflow_id)
+    return unregister_trigger(workflow_id)
 
 
 def _register_trigger(workflow_id, trigger_type, trigger_data, api_key):
-    """Arm the scheduler job, price alert or order watch for a trigger node.
+    from services.flow_lifecycle_service import register_trigger
 
-    Shared by activation and by a save that changes the trigger of an already
-    active workflow, so the two cannot drift.
-
-    Raises ValueError for a misconfigured node (a client error) and
-    RuntimeError when a registration cannot be recorded. The caller decides how
-    to report it and what to roll back.
-    """
-    from database.flow_db import set_schedule_job_id
-    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
-    from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
-
-    if trigger_type == "start":
-        schedule_type = trigger_data.get("scheduleType")
-        if schedule_type and schedule_type != "manual":
-            scheduler = get_flow_scheduler()
-            scheduler.set_api_key(api_key)
-
-            job_id = scheduler.add_workflow_job(
-                workflow_id=workflow_id,
-                schedule_type=schedule_type,
-                time_str=trigger_data.get("time", "09:15"),
-                days=trigger_data.get("days"),
-                execute_at=trigger_data.get("executeAt"),
-                interval_value=trigger_data.get("intervalValue"),
-                interval_unit=trigger_data.get("intervalUnit"),
-                # Offered by the editor and defaulted on, but never read
-                # before, so schedules kept firing overnight and at weekends.
-                market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
-            )
-            if not set_schedule_job_id(workflow_id, job_id):
-                # Without the stored id, deactivation cannot find the job.
-                # Undo the job rather than leave one nothing can reach.
-                scheduler.remove_workflow_job(workflow_id)
-                raise RuntimeError("Could not record the scheduler job id for this workflow")
-
-    elif trigger_type == "priceAlert":
-        get_flow_price_monitor().add_alert(
-            workflow_id=workflow_id,
-            symbol=trigger_data.get("symbol", ""),
-            exchange=trigger_data.get("exchange", "NSE"),
-            condition=trigger_data.get("condition", "greater_than"),
-            target_price=float(trigger_data.get("price", 0) or 0),
-            price_lower=trigger_data.get("priceLower"),
-            price_upper=trigger_data.get("priceUpper"),
-            percentage=trigger_data.get("percentage"),
-            api_key=api_key,
-            # Previously dropped here, so "Every Time" behaved as one-shot
-            # and the expiry window was never applied.
-            trigger=trigger_data.get("trigger", "once"),
-            expiration=trigger_data.get("expiration", "none"),
-        )
-
-    elif trigger_type == "orderUpdateTrigger":
-        get_flow_order_update_monitor().add_watch(
-            workflow_id=workflow_id,
-            api_key=api_key,
-            order_id=trigger_data.get("orderId") or None,
-            symbol=trigger_data.get("symbol") or None,
-            exchange=trigger_data.get("exchange") or None,
-            status=trigger_data.get("status", "complete"),
-            trigger=trigger_data.get("trigger", "once"),
-        )
+    return register_trigger(workflow_id, trigger_type, trigger_data, api_key)
 
 
 def _reregister_trigger(workflow):
@@ -487,187 +431,38 @@ def _reregister_trigger(workflow):
 
 
 def _rollback_activation(workflow_id):
-    """Undo a partial activation so nothing is left armed.
+    from services.flow_lifecycle_service import rollback_activation
 
-    Activation persists `is_active` before registering the trigger, so a
-    registration failure must clear the flag again -- otherwise the workflow
-    reports Active with nothing watching, and the activate endpoint refuses to
-    retry it as `already_active`. Every registration is torn down too, because
-    a multi-step activation can fail after one of them succeeded.
-    """
-    from database.flow_db import deactivate_workflow as db_deactivate
-    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
-    from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
-
-    for undo, what in (
-        (lambda: get_flow_scheduler().remove_workflow_job(workflow_id), "scheduler job"),
-        (lambda: get_flow_price_monitor().remove_alert(workflow_id), "price alert"),
-        (lambda: get_flow_order_update_monitor().remove_watch(workflow_id), "order-update watch"),
-        (lambda: db_deactivate(workflow_id), "active flag"),
-    ):
-        try:
-            undo()
-        except Exception:
-            logger.exception(
-                f"Could not roll back the {what} for workflow {workflow_id} after a "
-                "failed activation; it may need to be deactivated manually"
-            )
+    return rollback_activation(workflow_id)
 
 
 @flow_bp.route("/api/workflows/<int:workflow_id>/activate", methods=["POST"])
 @check_session_validity
 def activate_workflow(workflow_id):
-    """Activate a workflow"""
-    from database.flow_db import activate_workflow as db_activate
-    from database.flow_db import get_workflow, set_schedule_job_id
-    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
-    from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
+    """Activate a workflow using the shared trigger lifecycle."""
+    from services.flow_lifecycle_service import activate_workflow as activate
 
-    workflow = get_workflow(workflow_id)
-    if not workflow:
-        return jsonify({"error": "Workflow not found"}), 404
-
-    if workflow.is_active:
-        return jsonify({"status": "already_active", "message": "Workflow is already active"})
-
-    api_key = get_current_api_key()
-    if not api_key:
-        return jsonify({"error": "API key not configured"}), 400
-
-    blocked = _execution_blocked(workflow)
-    if blocked:
-        return jsonify({**blocked, "error": "Workflow cannot be activated"}), 400
-
-    nodes = workflow.nodes or []
-
-    # Find trigger node to determine activation type
-    trigger_node = _trigger_node(nodes)
-    if not trigger_node:
-        return jsonify({"error": "No trigger node found in workflow"}), 400
-
-    trigger_type = trigger_node.get("type")
-    trigger_data = trigger_node.get("data", {})
-
-    # Persist the active state before registering anything. The old order
-    # registered the trigger first and ignored what the database said, so a
-    # failed write returned HTTP 200 "success" while leaving a live scheduler
-    # job against a row marked inactive -- a workflow that traded on schedule
-    # and could not be stopped, because deactivate short-circuits on
-    # already_inactive and delete only removes the job when the row is active.
-    # Persisting first fails closed: nothing is registered yet, so a failure
-    # here leaves nothing running.
-    if not db_activate(workflow_id, api_key=api_key):
-        logger.error(f"Failed to persist active state for workflow {workflow_id}")
-        return jsonify({"error": "Could not activate workflow"}), 500
-
-    try:
-        _register_trigger(workflow_id, trigger_type, trigger_data, api_key)
-
-        return jsonify(
-            {"status": "success", "message": f"Workflow activated with {trigger_type} trigger"}
-        )
-
-    except ValueError as e:
-        # Misconfigured node (no Order ID/Symbol, a {{variable}} Order ID, or an
-        # unknown status) is a client error, not a 500.
-        _rollback_activation(workflow_id)
-        return jsonify({"error": str(e)}), 400
-
-    except Exception as e:
-        logger.exception(f"Failed to activate workflow {workflow_id}: {e}")
-        _rollback_activation(workflow_id)
-        return jsonify({"error": str(e)}), 500
+    payload, status = activate(workflow_id, get_current_api_key())
+    return jsonify(payload), status
 
 
 @flow_bp.route("/api/workflows/<int:workflow_id>/deactivate", methods=["POST"])
 @check_session_validity
 def deactivate_workflow(workflow_id):
-    """Deactivate a workflow"""
-    from database.flow_db import deactivate_workflow as db_deactivate
-    from database.flow_db import get_workflow, set_schedule_job_id
-    from services.flow_executor_service import release_workflow_subscriptions
-    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
-    from services.flow_price_monitor_service import get_flow_price_monitor
-    from services.flow_scheduler_service import get_flow_scheduler
+    """Deactivate a workflow using the shared trigger lifecycle."""
+    from services.flow_lifecycle_service import deactivate_workflow as deactivate
 
-    workflow = get_workflow(workflow_id)
-    if not workflow:
-        return jsonify({"error": "Workflow not found"}), 404
-
-    if not workflow.is_active:
-        return jsonify({"status": "already_inactive", "message": "Workflow is already inactive"})
-
-    try:
-        # Removed by workflow id, not by the stored schedule_job_id. The id is
-        # derived deterministically, so this still finds the job when the stored
-        # pointer was never written or was cleared -- the case that used to skip
-        # removal entirely and strand a live job. strict=True turns a jobstore
-        # failure into an exception instead of a silent False, so the workflow
-        # is never marked inactive while its job is still armed. An already-gone
-        # job returns False and is fine: that is the desired end state.
-        scheduler = get_flow_scheduler()
-        scheduler.remove_workflow_job(workflow_id, strict=True)
-        if workflow.schedule_job_id:
-            set_schedule_job_id(workflow_id, None)
-
-        # Remove price alert if any
-        price_monitor = get_flow_price_monitor()
-        price_monitor.remove_alert(workflow_id)
-
-        # Remove order-update watch if any
-        order_monitor = get_flow_order_update_monitor()
-        order_monitor.remove_watch(workflow_id)
-
-        # Give back any market-data subscription the workflow opened. The
-        # websocket client is a process-wide singleton, so a subscription left
-        # behind is held for the life of the worker and counts against the
-        # per-broker symbol ceiling that /trading and the sandbox engine share.
-        release_workflow_subscriptions(workflow_id)
-
-        # Update workflow as inactive
-        if not db_deactivate(workflow_id):
-            logger.error(f"Failed to persist inactive state for workflow {workflow_id}")
-            return jsonify({"error": "Could not deactivate workflow"}), 500
-
-        return jsonify({"status": "success", "message": "Workflow deactivated"})
-
-    except Exception as e:
-        logger.exception(f"Failed to deactivate workflow {workflow_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+    payload, status = deactivate(workflow_id)
+    return jsonify(payload), status
 
 
 # === Execution Routes ===
 
 
 def _execution_blocked(workflow):
-    """Structured 400 payload when a workflow is not fit to execute, else None.
+    from services.flow_lifecycle_service import execution_blocked
 
-    Saving deliberately accepts a half-built graph so the editor stays usable,
-    which means "stored" is not the same as "runnable". Every path that can
-    reach the broker - Run Now, activation, and webhooks - checks completeness
-    here instead. A workflow can also be edited into an invalid state after it
-    was activated, so checking once at activation is not enough.
-    """
-    from services.flow_workflow_validator import validate_workflow
-
-    errors = validate_workflow(
-        {"name": workflow.name, "nodes": workflow.nodes or [], "edges": workflow.edges or []},
-        strict=True,
-    )
-    if not errors:
-        return None
-    logger.warning(
-        f"Workflow {getattr(workflow, 'id', '?')} ({getattr(workflow, 'name', '?')}) "
-        f"blocked: {errors[0]['path']} {errors[0]['code']} - {errors[0]['message']}"
-    )
-    return {
-        "status": "error",
-        "error": "Workflow cannot be executed",
-        "message": errors[0]["message"],
-        "errors": errors,
-    }
+    return execution_blocked(workflow)
 
 
 @flow_bp.route("/api/workflows/<int:workflow_id>/execute", methods=["POST"])
@@ -1228,6 +1023,7 @@ def import_workflow():
 
 @flow_bp.route("/api/workflows/<int:workflow_id>/replace", methods=["POST"])
 @check_session_validity
+@with_workflow_mutation_lease
 def replace_workflow(workflow_id):
     """Replace an existing workflow's graph from JSON, in place.
 

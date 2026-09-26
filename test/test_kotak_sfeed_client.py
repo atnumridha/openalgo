@@ -147,6 +147,17 @@ def test_a_touch_line_tick_carries_hsm_field_names(client):
     }
 
 
+def test_native_trade_time_survives_quote_lite_and_depth_normalization(client):
+    """A feed arrival clock cannot stand in for the broker's trade time."""
+    assert client._to_quote(scrip(4, last_trade_time=1700000001))["ltt"] == 1700000001
+    assert client._to_depth(scrip(8, last_trade_time=1700000002))["ltt"] == 1700000002
+    lite = {"type": "scrip_lite", "exchange_segment": "nse_cm",
+            "instrument_token": "11536", "last_traded_price": 2135.0,
+            "close_price": 2110.0, "last_trade_time": 1700000003}
+    assert client._to_quote_lite(lite)["ltt"] == 1700000003
+    assert "ltt" not in client._to_quote(scrip(4, last_trade_time=0))
+
+
 def test_depth_is_padded_to_the_five_levels_the_adapter_merges(client):
     """The adapter merges bids/asks level by level over range(5)."""
     depth = client._to_depth(scrip(8))

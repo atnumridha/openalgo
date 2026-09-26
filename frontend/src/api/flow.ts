@@ -12,6 +12,7 @@ export interface Workflow {
   id: number
   name: string
   description: string | null
+  broker_connection_id: string | null
   nodes: Node[]
   edges: Edge[]
   is_active: boolean
@@ -99,6 +100,7 @@ export async function createWorkflow(data: {
   description?: string
   nodes?: Node[]
   edges?: Edge[]
+  broker_connection_id?: string | null
 }): Promise<Workflow> {
   const response = await webClient.post(`${FLOW_API_BASE}/workflows`, data)
   return response.data
@@ -114,6 +116,7 @@ export async function updateWorkflow(
     description?: string
     nodes?: Node[]
     edges?: Edge[]
+    broker_connection_id?: string | null
   }
 ): Promise<Workflow & { needs_reactivate?: boolean }> {
   // needs_reactivate is set when the saved graph changed the trigger config of a
@@ -158,6 +161,7 @@ export async function deactivateWorkflow(id: number): Promise<{ status: string; 
  */
 export async function executeWorkflow(id: number): Promise<{
   status: string
+  readiness?: string
   message: string
   execution_id?: number
   logs?: ExecutionLog[]

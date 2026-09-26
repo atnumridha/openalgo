@@ -92,3 +92,26 @@ def test_non_dataframe_from_broker_is_reported_as_an_error(broker, malformed):
         "status": "error",
         "message": "Invalid data format returned from broker",
     }
+
+
+def test_kotak_mcx_history_uses_connection_scoped_live_candles(monkeypatch):
+    from services import kotak_mcx_candles
+
+    monkeypatch.setattr(kotak_mcx_candles, "is_kotak_api_key", lambda _key: True)
+    monkeypatch.setattr(kotak_mcx_candles, "connection_id_for_api_key", lambda _key: "kotak-1")
+    monkeypatch.setattr(kotak_mcx_candles, "get_kotak_mcx_history", lambda **_kwargs: {
+        "status": "collecting_history", "readiness": "Collecting history", "data": [],
+    })
+    monkeypatch.setattr(history_service, "get_auth_token_broker", lambda *_args, **_kwargs: (
+        "token", "feed", "kotak",
+    ))
+    monkeypatch.setattr(history_service, "get_history_with_auth", lambda *_args, **_kwargs: (
+        _ for _ in ()).throw(AssertionError("unsupported Kotak MCX historical API called"))
+    )
+
+    success, response, code = history_service.get_history(
+        symbol="SILVERM30NOV26FUT", exchange="MCX", interval="5m",
+        start_date="2026-09-25", end_date="2026-09-25", api_key="key",
+    )
+    assert (success, code) == (False, 202)
+    assert response["readiness"] == "Collecting history"

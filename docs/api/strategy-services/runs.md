@@ -104,6 +104,7 @@ Each object in `data`:
 | strategy_id | integer | Owning strategy |
 | mode | string | `live` or `sandbox`, fixed for the life of the run |
 | broker | string | Broker the run was bound to, snapshotted at start. `sandbox` for a sandbox run |
+| broker_connection_id | string or null | Explicit broker connection pinned to this run, including sandbox data ownership |
 | started_at | string | ISO 8601 UTC |
 | stopped_at | string or null | ISO 8601 UTC, `null` while the run is still open |
 | stop_reason | string or null | Why the run ended |

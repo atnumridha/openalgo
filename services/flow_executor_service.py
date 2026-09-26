@@ -59,6 +59,16 @@ BRANCHING_NODE_TYPES = (
     "varCondition",
 )
 
+
+def workflow_requires_bar_evidence(nodes: list[dict]) -> bool:
+    """Detect current intraday bar inputs even after a Flow graph is renamed."""
+    return any(
+        node.get("type") == "barOffset"
+        and str((node.get("data") or {}).get("interval", "")).lower() in {"5m", "15m"}
+        and str((node.get("data") or {}).get("offsetBars", 0)).strip() == "0"
+        for node in nodes
+    )
+
 # Nodes that place, change or cancel something at the broker. An unresolved
 # {{variable}} in one of their order-defining fields is treated as a failure
 # rather than being allowed to fall back to a default -- see
@@ -348,6 +358,9 @@ class WorkflowContext:
         # Which workflow this run belongs to, so a subscription it opens can be
         # released when that workflow is deactivated or deleted.
         self.workflow_id = workflow_id
+        self.execution_id: int | None = None
+        self.requires_bar_evidence = False
+        self.broker_connection_id: str | None = None
 
     def set_variable(self, name: str, value: Any):
         """Store a variable"""
@@ -626,6 +639,56 @@ class NodeExecutor:
         # unless a handler raised, so a broker rejection returned HTTP 200
         # "Workflow executed successfully".
         self.errors: list[dict] = []
+        self.readiness_status: str | None = None
+        self.readiness_label: str | None = None
+        self.readiness_message: str | None = None
+
+    def broker_connection_ready(self, owner: str, connection_id: str) -> bool:
+        """Require the workflow's exact, active broker connection for new entries.
+
+        Historical candles may still be readable after the account session
+        expires. They are not evidence that a fresh broker-pinned sandbox entry
+        can be monitored or exited, so entry nodes fail closed while exits keep
+        their independent path.
+        """
+        if not owner or not connection_id:
+            return False
+        try:
+            from sqlalchemy import text as sql_text
+
+            from database import auth_db
+
+            with auth_db.engine.connect() as connection:
+                return bool(connection.execute(sql_text(
+                    "SELECT 1 FROM api_keys ak JOIN broker_connections bc "
+                    "ON bc.id = ak.broker_connection_id AND bc.user_id = ak.user_id "
+                    "WHERE ak.user_id = :owner AND bc.id = :connection_id "
+                    "AND bc.status IN ('connected', 'authenticated') "
+                    "AND bc.is_revoked = 0 LIMIT 1"
+                ), {"owner": owner, "connection_id": connection_id}).scalar_one_or_none())
+        except Exception:
+            logger.exception("Could not verify pinned Flow broker connection")
+            return False
+
+    def history_readiness(self, response: dict | None, node_data: dict) -> dict | None:
+        """Preserve collector readiness without turning warmup into a node failure."""
+        if not isinstance(response, dict):
+            return None
+        status = response.get("status")
+        labels = {
+            "collecting_history": "Collecting history",
+            "data_unavailable": "Data unavailable",
+            "risk_blocked": "Risk blocked",
+        }
+        if status == "success" and response.get("readiness") == "Ready":
+            self.readiness_label = "Ready"
+            return None
+        if status not in labels:
+            return None
+        result = {**response, "readiness": response.get("readiness") or labels[status]}
+        self.store_output(node_data, result)
+        self.log(result.get("message") or result["readiness"], "warning")
+        return result
 
     def strategy_tag(self, node_data: dict) -> str:
         """Strategy label for an order node.
@@ -634,6 +697,24 @@ class NodeExecutor:
         `strategy` for the structure type (straddle / iron_condor / custom).
         """
         return self.get_str(node_data, "strategyTag", "") or self.default_strategy
+
+    def history_instrument(self, symbol: str, exchange: str) -> tuple[str, str] | None:
+        """Resolve no-spot underlyings to the current quoteable future.
+
+        MCX workflow templates intentionally store stable roots such as GOLDM
+        rather than an expiring symbol. Historical-data nodes need the same
+        runtime resolution used by option-symbol discovery.
+        """
+        from services.option_symbol_service import NO_SPOT_EXCHANGES, resolve_underlying_quote
+
+        venue = str(exchange or "").upper()
+        if venue not in NO_SPOT_EXCHANGES:
+            return symbol, exchange
+        resolved = resolve_underlying_quote(symbol, venue)
+        if not resolved:
+            self.log(f"No current futures contract is available for {symbol} on {venue}", "error")
+            return None
+        return resolved
 
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
@@ -1964,6 +2045,10 @@ class NodeExecutor:
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         interval = self.get_str(node_data, "interval", "5m")
+        instrument = self.history_instrument(symbol, exchange)
+        if instrument is None:
+            return {"status": "error", "message": f"No current contract for {symbol} on {exchange}"}
+        symbol, exchange = instrument
         start_date = self.get_str(node_data, "startDate", "")
         end_date = self.get_str(node_data, "endDate", "")
         # The panel offers a "Days" control, which was previously ignored -
@@ -1987,6 +2072,9 @@ class NodeExecutor:
             start_date=start_date,
             end_date=end_date,
         )
+        readiness = self.history_readiness(result, node_data)
+        if readiness is not None:
+            return readiness
         if isinstance(result, dict) and result.get("data"):
             result = {**result, "data": trim_records(result["data"])}
         self.log("History data received")
@@ -2046,6 +2134,296 @@ class NodeExecutor:
         self.store_output(node_data, result)
         return result
 
+    def execute_strategy_module_run(self, node_data: dict) -> dict:
+        """Start an existing Strategy Module strategy through its normal gates.
+
+        Flow performs signal analysis; Strategy Module remains the sole owner
+        of contract resolution, sandbox/live mode, risk admission, order
+        dispatch, stops, targets, recovery, and lifecycle notifications.
+        """
+        from database.auth_db import get_username_by_apikey
+        from database.strategy_module_db import get_run, get_strategy
+        from services.strategy_module import engine
+
+        strategy_id = self.get_int(node_data, "strategyId", 0)
+        mode = self.get_str(node_data, "mode", "").lower()
+        if strategy_id <= 0:
+            return {"status": "error", "message": "strategyId must be a positive integer"}
+        if mode not in {"sandbox", "live"}:
+            return {"status": "error", "message": "mode must be sandbox or live"}
+        from services.strategy_module.starter_workflows import WORKFLOW_SPECS
+
+        known_starters = {f"{name} Workflow" for name, *_ in WORKFLOW_SPECS}
+        if (
+            self.default_strategy in known_starters or self.context.requires_bar_evidence
+        ) and node_data.get("barEvidence") is None:
+            return {"status": "error", "message": "Current candle evidence is unavailable; reinstall the starter workflow"}
+        username = get_username_by_apikey(self.client.api_key)
+        if not username:
+            return {"status": "error", "message": "The workflow API key has no owner"}
+        if not self.get_str(node_data, "brokerOwner", "") or self.get_str(node_data, "brokerOwner", "") != username:
+            return {"status": "error", "message": "Broker owner does not match the workflow API key"}
+        strategy = get_strategy(strategy_id, username)
+        if strategy is None:
+            return {"status": "error", "message": "Strategy is unavailable for this broker owner"}
+        workflow_connection = self.context.broker_connection_id
+        if (
+            not workflow_connection
+            or not getattr(strategy, "broker_connection_id", None)
+            or workflow_connection != strategy.broker_connection_id
+        ):
+            return {"status": "error", "message": "Workflow and strategy broker connection do not match"}
+        if getattr(strategy, "strategy_kind", "batch") != "batch":
+            return {"status": "error", "message": "Strategy Module Run requires a batch strategy"}
+        active_run_id = getattr(strategy, "current_run_id", None)
+        if active_run_id:
+            active_run = get_run(active_run_id)
+            if (
+                active_run is None
+                or getattr(active_run, "broker_connection_id", None) != workflow_connection
+                or getattr(active_run, "mode", None) != mode
+            ):
+                return {"status": "error", "message": "Active run broker connection or mode does not match"}
+
+        evidence = node_data.get("barEvidence")
+        if evidence is None:
+            return {"status": "error", "message": "Current candle evidence is required for entry"}
+        if evidence is not None:
+            from database.flow_db import claim_execution_bar
+            from services.indicator_service import validate_current_bar_set
+
+            exchange = self.get_str(node_data, "marketHoursExchange", "")
+            if not isinstance(evidence, dict) or not exchange:
+                return {"status": "error", "message": "Current candle evidence is unavailable"}
+            bars = {}
+            for interval in ("5m", "15m"):
+                names = evidence.get(interval)
+                if not isinstance(names, (list, tuple)) or len(names) != 2:
+                    return {"status": "error", "message": "Current candle evidence is incomplete"}
+                bars[interval] = tuple(self.context.get_variable(name) for name in names)
+            bar_start = validate_current_bar_set(bars, exchange)
+            if bar_start is None:
+                return {"status": "error", "message": "Current completed 5/15-minute candles are unavailable or unaligned"}
+            if not self.broker_connection_ready(username, workflow_connection):
+                return {"status": "risk_blocked", "readiness": "Risk blocked",
+                        "message": "Pinned broker connection is unavailable; reconnect before new entries"}
+            if self.context.workflow_id is None or self.context.execution_id is None:
+                return {"status": "error", "message": "Current candle claim cannot be recorded"}
+            claim = claim_execution_bar(
+                self.context.execution_id, self.context.workflow_id, bar_start
+            )
+            if claim != "claimed":
+                message = (
+                    "This completed candle already triggered the workflow"
+                    if claim == "duplicate"
+                    else "Current candle claim cannot be verified"
+                )
+                return {"status": "error", "message": message}
+            # Final status persistence rewrites the full trace. Keep the
+            # durable claim in that trace too, including failed starts.
+            self.logs.append(
+                {
+                    "time": datetime.now().isoformat(),
+                    "message": "Current candle claimed for strategy entry",
+                    "level": "info",
+                    "bar_claim": bar_start.isoformat(),
+                }
+            )
+
+        started = engine.start_run(
+            strategy_id,
+            username,
+            mode,
+            trigger_source=f"flow:{self.context.workflow_id}",
+        )
+        if not started.ok:
+            result = {
+                "status": "error",
+                "strategy_id": strategy_id,
+                "mode": mode,
+                "message": started.error or "Strategy did not start",
+                "legs": started.legs,
+            }
+            self.log(f"Strategy Module start refused: {result['message']}", "error")
+            return result
+
+        result = {
+            "status": "success",
+            "strategy_id": strategy_id,
+            "mode": mode,
+            "run_id": started.run_id,
+        }
+        self.log(f"Strategy Module run {started.run_id} started in {mode} mode")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_strategy_signal(self, node_data: dict) -> dict:
+        """Route a pinned Flow signal to the strategy's owning engine."""
+        from database.auth_db import get_username_by_apikey
+        from database.strategy_module_db import get_run, get_strategy
+        from services.strategy_module import engine, signals
+
+        strategy_id = self.get_int(node_data, "strategyId", 0)
+        action = self.get_str(node_data, "action", "").lower()
+        mode = self.get_str(node_data, "mode", "").lower()
+        owner = self.get_str(node_data, "brokerOwner", "")
+        if strategy_id <= 0 or action not in {"start", "stop", *signals.SIGNAL_ACTIONS}:
+            return {"status": "error", "message": "Invalid strategy signal action or strategyId"}
+        if mode not in {"sandbox", "live"}:
+            return {"status": "error", "message": "mode must be explicitly sandbox or live"}
+        if not owner or owner != get_username_by_apikey(self.client.api_key):
+            return {"status": "error", "message": "Broker owner does not match the workflow API key"}
+        strategy = get_strategy(strategy_id, owner)
+        if strategy is None:
+            return {"status": "error", "message": "Strategy is unavailable for this broker owner"}
+        workflow_connection = self.context.broker_connection_id
+        strategy_connection = getattr(strategy, "broker_connection_id", None)
+        if not workflow_connection or not strategy_connection or workflow_connection != strategy_connection:
+            return {"status": "error", "message": "Workflow and strategy broker connection do not match"}
+        active_run_id = getattr(strategy, "current_run_id", None)
+        active_run = get_run(active_run_id) if active_run_id else None
+        if active_run_id and (
+            active_run is None
+            or getattr(active_run, "broker_connection_id", None) != workflow_connection
+        ):
+            return {"status": "error", "message": "Active run broker connection does not match"}
+        kind = getattr(strategy, "strategy_kind", "batch")
+        if action in {"start", "stop"} and kind != "batch":
+            return {"status": "error", "message": "start/stop requires a batch strategy"}
+        if action in signals.SIGNAL_ACTIONS and kind != "signal":
+            return {"status": "error", "message": "Directional actions require a signal strategy"}
+
+        if action in {"start", "long_entry", "short_entry"}:
+            from database.flow_db import claim_execution_bar
+            from services.indicator_service import validate_current_bar_set
+
+            evidence = node_data.get("barEvidence")
+            exchange = self.get_str(node_data, "marketHoursExchange", "")
+            if not isinstance(evidence, dict) or not exchange:
+                return {"status": "error", "message": "Current candle evidence is required for entry"}
+            bars = {}
+            for interval in ("5m", "15m"):
+                names = evidence.get(interval)
+                if not isinstance(names, (list, tuple)) or len(names) != 2:
+                    return {"status": "error", "message": "Current candle evidence is incomplete"}
+                bars[interval] = tuple(self.context.get_variable(name) for name in names)
+            bar_start = validate_current_bar_set(bars, exchange)
+            if bar_start is None:
+                return {"status": "error", "message": "Current completed candles are unavailable"}
+            if not self.broker_connection_ready(owner, workflow_connection):
+                return {"status": "risk_blocked", "readiness": "Risk blocked",
+                        "message": "Pinned broker connection is unavailable; reconnect before new entries"}
+            if self.context.execution_id is None or self.context.workflow_id is None:
+                return {"status": "error", "message": "Current candle claim cannot be recorded"}
+            claim = claim_execution_bar(self.context.execution_id, self.context.workflow_id, bar_start)
+            if claim != "claimed":
+                return {"status": "error", "message": "Current candle already signalled or claim failed"}
+            self.logs.append({"time": datetime.now().isoformat(),
+                              "message": "Current candle claimed for strategy signal", "level": "info",
+                              "bar_claim": bar_start.isoformat()})
+
+        if action in signals.SIGNAL_ACTIONS:
+            actual_mode = (
+                active_run.mode
+                if action in {"long_exit", "short_exit"} and active_run is not None
+                else ("live" if strategy.live_enabled else "sandbox")
+            )
+            if actual_mode != mode:
+                return {"status": "error", "message": "Signal mode differs from the strategy execution mode"}
+            outcome = signals.handle_signal(
+                strategy, action,
+                leg_id=node_data.get("legId"),
+                symbol=self.get_str(node_data, "symbol", "") or None,
+                exchange=self.get_str(node_data, "exchange", "") or None,
+            )
+            if not outcome.ok:
+                return {"status": "error", "message": outcome.error or "Signal was refused"}
+            result = {"status": "success", "action": action, "strategy_id": strategy_id,
+                      "mode": mode, "run_id": outcome.run_id, "note": outcome.note}
+        elif action == "start":
+            outcome = engine.start_run(strategy_id, owner, mode, trigger_source=f"flow:{self.context.workflow_id}")
+            if not outcome.ok:
+                return {"status": "error", "message": outcome.error or "Strategy did not start"}
+            result = {"status": "success", "action": action, "strategy_id": strategy_id,
+                      "mode": mode, "run_id": outcome.run_id}
+        else:
+            run_id = getattr(strategy, "current_run_id", None)
+            if not run_id:
+                result = {"status": "success", "action": action, "strategy_id": strategy_id,
+                          "mode": mode, "run_id": None, "note": "already_stopped"}
+            else:
+                run = active_run
+                if run is None or getattr(run, "mode", None) != mode:
+                    return {"status": "error", "message": "Active run mode differs from the signal mode"}
+                stopped = engine.stop_run(run_id, owner, reason="flow")
+                if not stopped.get("ok"):
+                    return {"status": "error", "message": stopped.get("error") or "Strategy did not stop"}
+                result = {"status": "success", "action": action, "strategy_id": strategy_id,
+                          "mode": mode, "run_id": run_id, "stop_pending": stopped.get("stop_pending", False)}
+        self.store_output(node_data, result)
+        return result
+
+    def execute_opening_range(self, node_data: dict, now: datetime | None = None) -> dict:
+        """Read a complete first-N-minute range from one exchange session."""
+        from zoneinfo import ZoneInfo
+
+        from database.market_calendar_db import get_effective_session_window
+        from services.indicator_service import (
+            _market_bar_time,
+            fetch_history_cached,
+            history_window,
+        )
+
+        symbol = self.context.interpolate(self.get_str(node_data, "symbol", ""))
+        exchange = self.get_str(node_data, "exchange", "")
+        minutes = self.get_int(node_data, "rangeMinutes", 0)
+        if not symbol or not exchange or not 1 <= minutes <= 60:
+            return {"status": "error", "message": "Opening range requires symbol, exchange and 1-60 minutes"}
+        instrument = self.history_instrument(symbol, exchange)
+        if instrument is None:
+            return {"status": "error", "message": "No current contract for opening range"}
+        symbol, exchange = instrument
+        moment = _market_bar_time(now or datetime.now(ZoneInfo("Asia/Kolkata")))
+        venue = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}.get(exchange.upper(), exchange.upper())
+        window = get_effective_session_window(moment.date(), venue)
+        if not window:
+            return {"status": "error", "message": "Exchange session is unavailable"}
+        start = datetime.fromtimestamp(window["start_ms"] / 1000, ZoneInfo("Asia/Kolkata"))
+        range_end = start + timedelta(minutes=minutes, seconds=5)
+        if moment < range_end:
+            return {"status": "error", "message": "Opening range is still forming"}
+        first, last = history_window(lookback_bars=minutes + 5, interval="1m")
+        history = fetch_history_cached(self.client, symbol, exchange, "1m", first, last,
+                                       self.get_str(node_data, "source", "api"), now=moment)
+        readiness = self.history_readiness(history, node_data)
+        if readiness is not None:
+            return readiness
+        history_error = self._history_error(history, symbol, "1m", self.get_str(node_data, "source", "api"))
+        if history_error:
+            return {"status": "error", "message": history_error}
+        by_time = {}
+        for bar in (history or {}).get("data") or []:
+            stamp = _market_bar_time(bar.get("timestamp"))
+            if stamp is not None and start <= stamp < start + timedelta(minutes=minutes):
+                by_time[stamp] = bar
+        expected = [start + timedelta(minutes=i) for i in range(minutes)]
+        if any(stamp not in by_time for stamp in expected):
+            return {"status": "error", "message": "Opening range candles are incomplete"}
+        selected = [by_time[stamp] for stamp in expected]
+        try:
+            highs = [float(bar["high"]) for bar in selected]
+            lows = [float(bar["low"]) for bar in selected]
+            if not all(math.isfinite(high) and math.isfinite(low) and 0 < low <= high
+                       for high, low in zip(highs, lows, strict=True)):
+                raise ValueError("invalid prices")
+        except (KeyError, TypeError, ValueError):
+            return {"status": "error", "message": "Opening range candles contain invalid prices"}
+        result = {"status": "success", "symbol": symbol, "exchange": exchange,
+                  "start": start.isoformat(), "end": (start + timedelta(minutes=minutes)).isoformat(),
+                  "high": max(highs), "low": min(lows), "minutes": minutes}
+        self.store_output(node_data, result)
+        return result
+
     def execute_prior_period_ohlc(self, node_data: dict) -> dict:
         """Execute Prior Period OHLC node.
 
@@ -2069,6 +2447,10 @@ class NodeExecutor:
         source = self.get_str(node_data, "source", "api")
         if not symbol:
             return {"status": "error", "message": "Symbol is required"}
+        instrument = self.history_instrument(symbol, exchange)
+        if instrument is None:
+            return {"status": "error", "message": f"No current contract for {symbol} on {exchange}"}
+        symbol, exchange = instrument
 
         interval = "1h" if period == "previous_hour" else "D"
         lookback_days = (
@@ -2081,6 +2463,9 @@ class NodeExecutor:
         result = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
+        readiness = self.history_readiness(result, node_data)
+        if readiness is not None:
+            return readiness
         history_error = self._history_error(result, symbol, interval, source)
         if history_error:
             self.log(history_error, "error")
@@ -2132,6 +2517,10 @@ class NodeExecutor:
         offset_bars = clamp_bars(self.get_int(node_data, "offsetBars", 0) + 1, "offset bars") - 1
         if not symbol:
             return {"status": "error", "message": "Symbol is required"}
+        instrument = self.history_instrument(symbol, exchange)
+        if instrument is None:
+            return {"status": "error", "message": f"No current contract for {symbol} on {exchange}"}
+        symbol, exchange = instrument
 
         lookback_bars = offset_bars + 5
         start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
@@ -2139,6 +2528,9 @@ class NodeExecutor:
         result = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
+        readiness = self.history_readiness(result, node_data)
+        if readiness is not None:
+            return readiness
         history_error = self._history_error(result, symbol, interval, source)
         if history_error:
             self.log(history_error, "error")
@@ -2167,12 +2559,13 @@ class NodeExecutor:
         self.store_output(node_data, output)
         return output
 
-    def execute_indicator(self, node_data: dict) -> dict:
+    def execute_indicator(self, node_data: dict, now: datetime | None = None) -> dict:
         """Execute Indicator node - any openalgo.ta indicator over a symbol's
         history, or nested on top of another Indicator node's output series
         when `sourceSeries` is set.
         """
         from services.indicator_service import (
+            completed_history_records,
             compute_indicator,
             fetch_history_cached,
             history_window,
@@ -2297,17 +2690,29 @@ class NodeExecutor:
         source = self.get_str(node_data, "source", "api")
         if not symbol:
             return {"status": "error", "message": "Symbol is required"}
+        instrument = self.history_instrument(symbol, exchange)
+        if instrument is None:
+            return {"status": "error", "message": f"No current contract for {symbol} on {exchange}"}
+        symbol, exchange = instrument
 
         start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
         self.log(f"Computing {indicator_name} for {symbol} ({interval}, {lookback_bars} bars)")
         history = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
+        readiness = self.history_readiness(history, node_data)
+        if readiness is not None:
+            return readiness
         history_error = self._history_error(history, symbol, interval, source)
         if history_error:
             self.log(history_error, "error")
             return {"status": "error", "message": history_error}
-        records = trim_records((history or {}).get("data") or [])
+        # Exclude an unfinished final candle before enforcing the history cap.
+        # Otherwise a 200-period indicator receives only 199 completed bars
+        # when the broker returns 200 closed bars plus the forming candle.
+        records = trim_records(completed_history_records((history or {}).get("data") or [], interval, now))
+        if not records:
+            return {"status": "error", "message": "No completed candles available for indicator"}
         try:
             output = compute_indicator(
                 records,
@@ -4350,6 +4755,12 @@ def execute_node_chain(
         result = executor.execute_history(node_data)
     elif node_type == "strategyPnl":
         result = executor.execute_strategy_pnl(node_data)
+    elif node_type == "strategyModuleRun":
+        result = executor.execute_strategy_module_run(node_data)
+    elif node_type == "strategySignal":
+        result = executor.execute_strategy_signal(node_data)
+    elif node_type == "openingRange":
+        result = executor.execute_opening_range(node_data)
     elif node_type == "priorPeriodOhlc":
         result = executor.execute_prior_period_ohlc(node_data)
     elif node_type == "barOffset":
@@ -4485,6 +4896,17 @@ def execute_node_chain(
             result = executor.execute_not_gate(node_data, input_results)
     else:
         executor.log(f"Unknown node type: {node_type}", "warning")
+
+    if isinstance(result, dict) and result.get("status") in {
+        "collecting_history", "data_unavailable", "risk_blocked"
+    }:
+        status = result["status"]
+        priority = {"collecting_history": 1, "data_unavailable": 2, "risk_blocked": 3}
+        if priority[status] >= priority.get(executor.readiness_status, 0):
+            executor.readiness_status = status
+            executor.readiness_label = result.get("readiness") or status.replace("_", " ").title()
+            executor.readiness_message = result.get("message") or executor.readiness_label
+        return
 
     # A node that reported failure must not silently feed its children. Without
     # this, a rejected entry order still let the hedge leg place and the "trade
@@ -4646,6 +5068,7 @@ def execute_workflow(
 
         logs = []
         context = WorkflowContext(workflow_id=workflow_id)
+        context.execution_id = execution.id
 
         if webhook_data:
             context.set_variable("webhook", webhook_data)
@@ -4656,12 +5079,15 @@ def execute_workflow(
                 raise Exception("API key required for workflow execution")
 
             client = get_flow_client(api_key)
+            context.broker_connection_id = getattr(workflow, "broker_connection_id", None)
+            client.broker_connection_id = context.broker_connection_id
             executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
             logger.info(f"Starting workflow: {workflow.name}")
             executor.log(f"Starting workflow: {workflow.name}")
 
             nodes = workflow.nodes or []
             edges = workflow.edges or []
+            context.requires_bar_evidence = workflow_requires_bar_evidence(nodes)
 
             # Find trigger node
             trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
@@ -4708,9 +5134,20 @@ def execute_workflow(
                     "logs": logs,
                 }
 
+            if executor.readiness_status:
+                update_execution_status(execution.id, executor.readiness_status, logs=logs)
+                return {
+                    "status": executor.readiness_status,
+                    "readiness": executor.readiness_label,
+                    "message": executor.readiness_message,
+                    "execution_id": execution.id,
+                    "logs": logs,
+                }
+
             update_execution_status(execution.id, "completed", logs=logs)
             return {
                 "status": "success",
+                "readiness": executor.readiness_label,
                 "message": "Workflow executed successfully",
                 "execution_id": execution.id,
                 "logs": logs,

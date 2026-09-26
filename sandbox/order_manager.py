@@ -715,40 +715,11 @@ class OrderManager:
                         )
                         cached_quote = None
 
-                    # Use cached quote from earlier check (already fetched above)
+                    # Route every immediate attempt through the same
+                    # executable-book checks as the polling worker. A crossed
+                    # last trade alone cannot establish a sandbox fill.
                     if cached_quote:
-                        ltp = Decimal(str(cached_quote.get("ltp", 0)))
-
-                        if price_type == "LIMIT":
-                            # Marketable LIMIT: fill at LTP (market price), not limit price
-                            # In real exchanges, a marketable limit order gets price improvement
-                            # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
-                            if ltp > 0:
-                                exec_engine._execute_order(order, ltp)
-                                logger.info(
-                                    f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
-                                )
-                            else:
-                                logger.warning(
-                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
-                                )
-                        elif price_type in ["SL", "SL-M"]:
-                            # SL/SL-M with trigger already met: execute at LTP
-                            if ltp > 0:
-                                exec_engine._execute_order(order, ltp)
-                                logger.info(
-                                    f"{price_type} order {orderid} executed at LTP {ltp} (trigger already met)"
-                                )
-                            else:
-                                logger.warning(
-                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
-                                )
-                        else:
-                            # MARKET order: process normally (fills at bid/ask or LTP)
-                            exec_engine._process_order(order, cached_quote)
-                            logger.info(
-                                f"Market order {orderid} executed immediately"
-                            )
+                        exec_engine._process_order(order, cached_quote)
                     else:
                         logger.warning(
                             f"Could not fetch quote for {symbol} on {exchange}, order remains open"

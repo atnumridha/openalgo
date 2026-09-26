@@ -73,6 +73,11 @@ function StatusIcon({ status }: { status: string | null }) {
       return <Loader2 className="h-4 w-4 animate-spin text-primary" />
     case 'pending':
       return <Clock className="h-4 w-4 text-muted-foreground" />
+    case 'collecting_history':
+    case 'data_unavailable':
+      return <AlertTriangle className="h-4 w-4 text-amber-500" />
+    case 'risk_blocked':
+      return <XCircle className="h-4 w-4 text-red-500" />
     default:
       return <AlertCircle className="h-4 w-4 text-muted-foreground" />
   }
@@ -281,12 +286,12 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
               <StatusIcon status={workflow.last_execution_status} />
               <span>
                 {workflow.last_execution_status
-                  ? `Last: ${workflow.last_execution_status}`
+                  ? `Last: ${{collecting_history: 'Collecting history', data_unavailable: 'Data unavailable', risk_blocked: 'Risk blocked'}[workflow.last_execution_status] || workflow.last_execution_status}`
                   : 'No executions'}
               </span>
             </div>
-            <span className="text-xs text-muted-foreground">
-              {new Date(workflow.updated_at).toLocaleDateString()}
+            <span className="text-xs text-muted-foreground" title="Workflow last edited">
+              Edited {new Date(workflow.updated_at).toLocaleDateString()}
             </span>
           </div>
         </CardContent>

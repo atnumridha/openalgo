@@ -8,6 +8,23 @@ import time
 
 from dotenv import load_dotenv
 
+# ``wars`` and its whatsapp-rust dependencies initialise their Rust logger the
+# first time any extension using the shared Rust logging stack is imported.
+# Configure the noisy, non-actionable multi-device replay targets immediately
+# after loading .env, before Flask imports brokers or websocket adapters.  An
+# explicit operator setting always wins.
+WHATSAPP_RUST_LOG_DEFAULT = (
+    "error"
+    ",wacore::send=off"
+    ",whatsapp_rust::message=off"
+    ",wacore_libsignal::protocol::session_cipher=off"
+)
+
+
+def configure_whatsapp_rust_logging() -> None:
+    """Install the production WhatsApp Rust log filter unless overridden."""
+    os.environ.setdefault("RUST_LOG", WHATSAPP_RUST_LOG_DEFAULT)
+
 # Placeholder values shipped in .sample.env. OpenAlgo detects these on startup
 # and rotates them to fresh random secrets on first run. Coordinated with the
 # install/*.sh scripts which use the same strings as their sed targets.
@@ -668,6 +685,7 @@ def _ensure_fernet_salt(env_path: str) -> None:
     # confirming the DB doesn't look like a previous-rotation orphan.
     try:
         import base64
+
         from cryptography.fernet import Fernet, InvalidToken
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -837,6 +855,7 @@ def _migrate_fernet_db(env_path: str, pepper: str, new_salt: str) -> None:
     """
     try:
         import base64
+
         from cryptography.fernet import Fernet, InvalidToken
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -1153,6 +1172,10 @@ def load_and_check_env_variables() -> None:
 
     # Load environment variables from the .env file with override=True to ensure values are updated
     load_dotenv(dotenv_path=env_path, override=True)
+
+    # Must happen before app.py imports Flask blueprints, broker adapters, or
+    # any other extension that may initialise Rust's global logger.
+    configure_whatsapp_rust_logging()
 
     # Detect the publicly-known sample APP_KEY/API_KEY_PEPPER values and rotate
     # them to fresh random secrets on first run. Silent no-op for any user

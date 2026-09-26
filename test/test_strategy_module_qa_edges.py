@@ -21,6 +21,8 @@ it has, so fixing the defect turns the marker into a failure that says so.
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -41,6 +43,46 @@ from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.symbol_resolver import ResolvedLeg
 
 USER = "sm_qa_edges_user"
+
+
+@pytest.fixture(autouse=True)
+def coherent_exchange_session(monkeypatch):
+    """The synthetic tape also needs a valid, completed session calendar."""
+    from database import market_calendar_db
+
+    def current_window(_day, _exchange):
+        now = datetime.now(UTC)
+        return {
+            "start_ms": int((now - timedelta(minutes=10)).timestamp() * 1000),
+            "end_ms": int((now + timedelta(hours=2)).timestamp() * 1000),
+        }
+
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", current_window)
+
+
+@pytest.fixture(autouse=True)
+def funded_synthetic_account(monkeypatch):
+    """Exercise the real governor with complete synthetic broker facts."""
+    from services.strategy_module import portfolio_governor as governor
+
+    def facts(_user, _strategy, resolved, _key, mode, **_kwargs):
+        return governor.EntryFacts(
+            mode=mode, available_cash=Decimal("10000000"),
+            session_capital=Decimal("10000000"), open_cash_positions=0,
+            open_nifty_option_positions=0, open_sensex_option_positions=0,
+            open_mcx_option_positions=0, open_derivative_positions=0,
+            # These tests exercise order/fill edges, not admission counting.
+            # Dedicated governor tests cover the one-position option cap.
+            entry_nifty_option_positions=0,
+            entry_derivative_positions=0,
+            entry_cash_risk=Decimal("0"), entry_option_lot_risk=Decimal("100"),
+            entry_risk=Decimal("100"), open_risk=Decimal("0"),
+            estimated_debit=Decimal("1000"), minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"), consecutive_stopped_runs=0,
+            has_option_entry=True, intraday=False, entry_exchanges=("NSE",),
+        )
+
+    monkeypatch.setattr(governor, "build_entry_facts", facts)
 
 CE = "NIFTY28MAY2624000CE"
 PE = "NIFTY28MAY2624000PE"
@@ -121,6 +163,14 @@ def clean_slate():
         # another suite's run.
         for run_id in list(state.active_run_ids()):
             state.clear_run_state(run_id)
+        from services.strategy_module import portfolio_governor as governor
+
+        store.db_session.query(store.SmRiskReservation).filter_by(user_id=USER).delete()
+        store.db_session.commit()
+        with governor._admission_registry_lock:
+            for scope in list(governor._entry_reservations):
+                if scope.startswith(f"{USER}|"):
+                    governor._entry_reservations.pop(scope, None)
         store.clear_strategy_module_cache()
 
     purge()
@@ -559,7 +609,10 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
         done = _start(sid).run_id
         # Filled, or the stop is refused: there is no confirmed quantity to
         # square off and the run stays open by design.
-        engine.apply_fill(done, 1, 100.0, is_entry=True)
+        entry_row = next(row for row in store.list_orders(done) if row["kind"] == "entry")
+        order_events._apply_update(
+            entry_row["broker_order_id"], _event(entry_row["broker_order_id"], avg=100.0)
+        )
         engine.stop_run(done, USER, "manual")
         exit_row = max(store.list_orders(done), key=lambda row: row["id"])
         order_events._apply_update(
@@ -568,36 +621,22 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
         )
     broker.clear()
 
-    # A third opens anyway, and is squared off on its first tick even though
-    # this run itself has lost nothing.
-    run_id = _start(sid).run_id
-    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
-    broker.clear()
-
-    engine.process_tick(CE, "NFO", 100.0)
-
-    pending_run = store.get_run(run_id)
-    assert pending_run.stop_reason is None
-    assert pending_run.stop_requested_reason == "daily_loss_limit"
-    assert pending_run.stopped_at is None
-    assert broker.actions == ["BUY"], "the open position was squared off"
-
-    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
-    order_events._apply_update(
-        exit_row["broker_order_id"],
-        _event(exit_row["broker_order_id"], avg=100.0),
-    )
-
-    stopped_run = store.get_run(run_id)
-    assert stopped_run.stop_reason == "daily_loss_limit"
-    assert stopped_run.stopped_at is not None
+    # The current entry governor refuses a third run before any new order.
+    attempted = _start(sid)
+    assert attempted.ok is False
+    assert attempted.run_id is None
+    assert "session" in (attempted.error or "").lower()
+    assert broker.orders == []
 
 
 def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
     """The other half: the limit must not fire early."""
     sid = _make(_config(daily_loss_limit_inr=1000))
     first = _start(sid).run_id
-    engine.apply_fill(first, 1, 100.0, is_entry=True)
+    entry_row = next(row for row in store.list_orders(first) if row["kind"] == "entry")
+    order_events._apply_update(
+        entry_row["broker_order_id"], _event(entry_row["broker_order_id"], avg=100.0)
+    )
     engine.stop_run(first, USER, "manual")
     exit_row = max(store.list_orders(first), key=lambda row: row["id"])
     order_events._apply_update(
@@ -910,7 +949,9 @@ def test_synchronous_sandbox_target_lifecycle_preserves_reason_and_final_figures
     assert event_kinds.count("run_stopped") == 1
     target_event = next(event for event in events if event["kind"] == "overall_target_hit")
     payload = target_event["payload"]
-    assert payload == {
+    assert {key: value for key, value in payload.items() if key not in {
+        "native_quote_at", "quote_age_seconds", "recorded_at"
+    }} == {
         "trigger_total": 513.0,
         "reason": "overall_target",
         "threshold": 500.0,
@@ -940,6 +981,9 @@ def test_synchronous_sandbox_target_lifecycle_preserves_reason_and_final_figures
             },
         ],
     }
+    assert payload["native_quote_at"] is None
+    assert payload["quote_age_seconds"] is None
+    assert datetime.fromisoformat(payload["recorded_at"]).tzinfo is not None
     assert sum(leg["mtm"] for leg in payload["legs"]) == pytest.approx(513.0)
     assert sum(leg["mtm"] for leg in payload["legs"]) == pytest.approx(
         payload["trigger_total"]
@@ -1306,13 +1350,8 @@ def test_a_leg_already_on_its_way_out_is_not_sent_a_second_exit(broker):
     assert len(broker.orders) == 1
 
 
-def test_an_exit_whose_audit_row_could_not_be_written_still_blocks_a_second_one(broker):
-    """The order reached the broker. Whether the row was written is our problem.
-
-    ``record_order`` swallows its own failures and returns ``None``. The guard
-    reads ``exit_order_id``, which is then ``None``, so the next rule to fire
-    sends the same exit again and the position flips instead of closing.
-    """
+def test_an_exit_whose_audit_row_could_not_be_written_never_reaches_broker(broker):
+    """Without a durable exit intent, no broker order may be dispatched."""
     sid, run_id = _two_leg_run(broker)
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     engine.apply_fill(run_id, 2, 50.0, is_entry=True)
@@ -1322,7 +1361,7 @@ def test_an_exit_whose_audit_row_could_not_be_written_still_blocks_a_second_one(
         engine._exit_legs(run_id, strategy, [1], "exit_sl", "sandbox", "k", USER)
         engine._exit_legs(run_id, strategy, [1], "exit_target", "sandbox", "k", USER)
 
-    assert len(broker.orders) == 1
+    assert broker.orders == []
 
 
 def test_a_refused_exit_can_be_retried_rather_than_looking_like_a_duplicate(broker):
@@ -1385,6 +1424,7 @@ def _signal_strategy(**overrides):
     config.update(overrides)
     created, error = store.create_strategy(USER, config)
     assert error is None, error
+    assert store.set_automation_state(created["id"], USER, "armed") == (True, None)
     return store.get_strategy(created["id"], USER)
 
 
@@ -1546,13 +1586,8 @@ def test_a_signal_run_survives_going_flat_so_the_day_stays_one_run(broker):
     assert len(store.list_runs(strategy.id)) == 1
 
 
-def test_an_exit_alert_on_a_flat_strategy_still_opens_a_run(broker):
-    """Characterisation. ``_day_run`` runs before anything checks there is a position.
-
-    A stale alert for a strategy that traded nothing today leaves it reading as
-    ``running`` with an empty run behind it, and the end-of-day job has already
-    been and gone. Harmless to the book, misleading on the dashboard.
-    """
+def test_an_exit_alert_on_a_flat_strategy_does_not_open_a_run(broker):
+    """A stale exit alert is a no-op and must not create phantom run state."""
     strategy = _signal_strategy()
 
     result = signals.handle_signal(strategy, "long_exit", leg_id=1)
@@ -1560,8 +1595,8 @@ def test_an_exit_alert_on_a_flat_strategy_still_opens_a_run(broker):
     assert result.note == "no_matching_position"
     assert broker.orders == []
     refreshed = store.get_strategy(strategy.id, USER)
-    assert refreshed.status == "running"
-    assert refreshed.current_run_id is not None
+    assert refreshed.status == "stopped"
+    assert refreshed.current_run_id is None
 
 
 # ===========================================================================

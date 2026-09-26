@@ -21,6 +21,7 @@ import io
 import os
 import re
 import sys
+from datetime import datetime
 
 import pytest
 
@@ -314,6 +315,7 @@ class _FakeClient:
         return {"status": "success", "results": []}
 
 
+@pytest.mark.usefixtures("fixed_expiry_clock")
 class TestALegReachesTheBrokerAsBuilt:
     """The end of the chain: what the editor builds is what gets placed.
 
@@ -503,7 +505,20 @@ class TestOneExpiryRuleForTheRunAndThePicker:
 
 
 @pytest.fixture
-def leg_contracts_client(monkeypatch):
+def fixed_expiry_clock(monkeypatch):
+    """The listed fixture contracts are anchored to August 2026."""
+    from services import flow_node_contracts
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 24, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(flow_node_contracts, "datetime", FixedDateTime)
+
+
+@pytest.fixture
+def leg_contracts_client(monkeypatch, fixed_expiry_clock):
     """The /flow/api/option-strikes endpoint with the broker calls stubbed.
 
     Auth and live market data are not what these check; the endpoint's job is

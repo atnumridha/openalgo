@@ -202,6 +202,20 @@ export function NodePalette({ onDragStart, onAdd }: NodePaletteProps) {
       icon: <Square className="h-3.5 w-3.5 text-red-500" />,
       color: 'bg-red-500/10',
     },
+    {
+      type: 'strategyModuleRun',
+      label: 'Strategy Module Run',
+      description: 'Start a guarded strategy',
+      icon: <Zap className="h-3.5 w-3.5 text-emerald-500" />,
+      color: 'bg-emerald-500/10',
+    },
+    {
+      type: 'strategySignal',
+      label: 'Strategy Signal',
+      description: 'Start, stop, enter or exit',
+      icon: <Zap className="h-3.5 w-3.5 text-emerald-500" />,
+      color: 'bg-emerald-500/10',
+    },
   ]
 
   const conditions = [
@@ -324,6 +338,13 @@ export function NodePalette({ onDragStart, onAdd }: NodePaletteProps) {
       type: 'barOffset',
       label: 'Bar Offset',
       description: 'OHLCV N bars back',
+      icon: <History className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'openingRange',
+      label: 'Opening Range',
+      description: 'Completed session opening high and low',
       icon: <History className="h-3.5 w-3.5 text-cyan-500" />,
       color: 'bg-cyan-500/10',
     },

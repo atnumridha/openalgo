@@ -21,6 +21,7 @@ import pytest
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
 from services.strategy_module import ack_reconciliation, engine, recovery, state
+from services.strategy_module import live_authorization as authz
 from services.strategy_module import scheduler as sched
 from services.strategy_module.engine import StartResult
 from services.strategy_module.order_dispatch import DispatchResult
@@ -83,6 +84,7 @@ def _purge():
 
 @pytest.fixture(autouse=True)
 def clean_slate():
+    authz.revoke(USER)
     store.init_db()
     _purge()
     # Paused: jobs are installed and dated exactly as in production, and none of
@@ -90,6 +92,7 @@ def clean_slate():
     sched.shutdown()
     sched.start(paused=True)
     yield
+    authz.revoke(USER)
     sched.shutdown()
     _purge()
 
@@ -452,7 +455,24 @@ def test_a_live_start_is_refused_and_recorded_when_live_is_not_enabled():
 def test_a_live_start_goes_ahead_once_live_is_enabled():
     sid = _make(_config(scheduler=_scheduler_config(default_mode="live")))
     store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
 
+    with patch.object(engine, "start_run", return_value=StartResult(ok=True, run_id=9)) as run:
+        sched.run_scheduled_start(sid)
+
+    run.assert_called_once_with(sid, USER, "live", trigger_source="scheduler")
+
+
+def test_a_live_start_requires_current_session_authorization():
+    sid = _make(_config(scheduler=_scheduler_config(default_mode="live")))
+    store.set_live_enabled(sid, USER, True)
+
+    with patch.object(engine, "start_run") as run:
+        sched.run_scheduled_start(sid)
+
+    run.assert_not_called()
+
+    authz.grant(USER)
     with patch.object(engine, "start_run", return_value=StartResult(ok=True, run_id=9)) as run:
         sched.run_scheduled_start(sid)
 
@@ -1180,3 +1200,69 @@ def test_the_stop_job_releases_its_scoped_sessions_even_when_the_engine_raises()
         sched.run_scheduled_stop(sid)
 
     release.assert_called_once()
+
+
+@pytest.mark.parametrize("automation_state", ["closing", "close_failed"])
+@pytest.mark.parametrize("mode,live_enabled", [("live", True), ("live", False), ("sandbox", True)])
+def test_pending_stops_refused_by_sandbox_control_still_reconcile(
+    automation_state, mode, live_enabled
+):
+    """A refused sandbox control cannot starve an existing live stop request."""
+    sid = _make()
+    strategy = store.get_strategy(sid, USER)
+    strategy.live_enabled = live_enabled
+    store.db_session.commit()
+    store.set_automation_state(sid, USER, automation_state)
+    run = store.create_run(sid, mode, "test-broker")
+    run_id = run.id
+    store.set_strategy_status(sid, "running", run_id)
+    store.record_order(
+        run_id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "open",
+            "broker_order_id": "LIVE-CONTROL-PENDING",
+            "position_ref": "live-control-owner",
+        },
+    )
+    store.request_run_stop(run_id, "scheduler")
+    assert recovery.recover_run(run_id).ok
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(
+            engine.order_dispatch,
+            "cancel_order",
+            return_value=DispatchResult(
+                ok=True, broker_order_id="LIVE-CONTROL-PENDING", response={}
+            ),
+        ),
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "LIVE-CONTROL-PENDING",
+                    "order_status": "cancelled",
+                    "filled_quantity": 0,
+                    "average_price": 0,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+        ),
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        sched.reconcile_pending_stops()
+
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    assert store.get_strategy(sid, USER).automation_state != "armed"

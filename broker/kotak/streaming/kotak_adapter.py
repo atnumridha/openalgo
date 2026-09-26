@@ -30,6 +30,12 @@ _SCRIP_OPS = {
 }
 
 
+def _native_trade_timestamp(parsed_data):
+    """The broker's trade time, or None when this packet has no such fact."""
+    value = parsed_data.get("ltt")
+    return value if value not in (None, "", 0) else None
+
+
 def _data_center_from(auth_parts):
     """The account's data centre, or "" for a token issued before it was stored.
 
@@ -246,11 +252,18 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Work on a copy to avoid mutating the caller's dict
             parsed_data = parsed_data.copy()
+            # A partial quote merge can retain yesterday's `ltt`. Record the
+            # timestamp from THIS packet before any cached state is merged.
+            packet_trade_time = _native_trade_timestamp(parsed_data)
 
             # Extract key identifiers - following AliceBlue pattern
             token = str(parsed_data.get("tk", ""))
             broker_exchange = parsed_data.get("e", "UNKNOWN")
             ltp = parsed_data.get("ltp")
+            # Cached LTP from a partial frame must not be treated as a new trade.
+            packet_has_ltp = bool(ltp and float(ltp) > 0)
+            packet_has_depth = "bids" in parsed_data and "asks" in parsed_data
+            packet_has_volume = "volume" in parsed_data and parsed_data.get("volume") is not None
 
             # **CRITICAL FIX**: Check if this is depth data (has bids/asks) or LTP data
             has_depth_data = "bids" in parsed_data and "asks" in parsed_data
@@ -464,7 +477,6 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if mode == 1 and has_ltp_data:
                         publish_data = {
                             "ltp": float(ltp),
-                            "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                         }
                     elif mode == 2:
                         # Same contract point as mode 3 below: a quote payload
@@ -474,7 +486,6 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # volume - until the instrument's first trade of the day.
                         publish_data = {
                             "ltp": effective_ltp,
-                            "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                             "volume": parsed_data.get("volume", 0),
                             "open": parsed_data.get("open", 0.0),
                             "high": parsed_data.get("high", 0.0),
@@ -523,6 +534,12 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         }
                     else:
                         continue
+                    if packet_trade_time is not None and packet_has_ltp:
+                        publish_data["ltt"] = packet_trade_time
+                    else:
+                        publish_data["market_time_missing"] = True
+                    publish_data["book_fresh"] = packet_has_depth
+                    publish_data["volume_fresh"] = packet_has_volume
                     publish_data.update(
                         {
                             "symbol": symbol,

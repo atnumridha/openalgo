@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 
 import dotenv
 import pytest
+import pytz
 
 # Match the repository test harness before importing application modules.
 dotenv.load_dotenv = lambda *args, **kwargs: False
@@ -26,14 +29,30 @@ os.environ.setdefault("API_KEY_PEPPER", "0" * 64)
 os.environ.setdefault("APP_KEY", "test-only-app-key")
 REPO_ROOT = Path(__file__).resolve().parents[2] / "openalgo"
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "test"))
+
+import test_strategy_module_qa_edges as qa  # noqa: E402
 
 from database import strategy_module_db as store  # noqa: E402
-from services.strategy_module import engine, order_events, signals, state  # noqa: E402
+from services.strategy_module import (  # noqa: E402
+    engine,
+    order_events,
+    portfolio_governor,
+    signals,
+    state,
+)
 from services.strategy_module.order_dispatch import DispatchResult  # noqa: E402
-from test import test_strategy_module_qa_edges as qa  # noqa: E402
 
 
 def _purge() -> None:
+    for key in list(portfolio_governor._entry_reservations):
+        if key == qa.USER or key.startswith(f"{qa.USER}|"):
+            portfolio_governor._entry_reservations.pop(key, None)
+            portfolio_governor._reservation_cash_baselines.pop(key, None)
+    store.db_session.query(store.SmRiskReservation).filter_by(user_id=qa.USER).delete(
+        synchronize_session=False
+    )
+    store.db_session.commit()
     for row in store.list_strategies(qa.USER):
         for run in store.list_runs(row["id"]):
             state.clear_run_state(run["id"])
@@ -49,6 +68,41 @@ def _purge() -> None:
 
 @pytest.fixture(autouse=True)
 def isolated_strategy_state(monkeypatch: pytest.MonkeyPatch):
+    from database import auth_db, market_calendar_db
+    from services import quotes_service
+
+    zone = pytz.timezone("Asia/Kolkata")
+    today = datetime.now(zone).date()
+    session_now = zone.localize(datetime(today.year, today.month, today.day, 10, 30))
+    monkeypatch.setattr(portfolio_governor, "_facts_now", lambda: session_now)
+    monkeypatch.setattr(portfolio_governor, "_decision_now", lambda: session_now)
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", lambda day, _exchange: {
+        "start_ms": int(zone.localize(datetime(day.year, day.month, day.day, 9, 15)).timestamp() * 1000),
+        "end_ms": int(zone.localize(datetime(day.year, day.month, day.day, 15, 30)).timestamp() * 1000),
+    })
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("qa-token", "sandbox"))
+    monkeypatch.setattr(portfolio_governor, "_sandbox_account", lambda _user: (Decimal("10000000"), []))
+    monkeypatch.setattr(quotes_service, "get_quotes", lambda *_args, **_kwargs: (
+        True, {"data": {"bid": 99.5, "ask": 100, "bid_qty": 10000,
+                        "ask_qty": 10000, "timestamp": session_now.isoformat()}}, 200,
+    ))
+    original_leg = qa._leg
+    original_signal_legs = qa._signal_legs
+
+    def admissible_leg(*args, **kwargs):
+        if len(args) < 4 and kwargs.get("target_pts") is None:
+            kwargs["target_pts"] = 40
+        return original_leg(*args, **kwargs)
+
+    def admissible_signal_legs():
+        legs = original_signal_legs()
+        for leg in legs:
+            leg.setdefault("sl_pts", 20)
+            leg.setdefault("target_pts", 40)
+        return legs
+
+    monkeypatch.setattr(qa, "_leg", admissible_leg)
+    monkeypatch.setattr(qa, "_signal_legs", admissible_signal_legs)
     store.db_session.remove()
     store.init_db()
     _purge()
@@ -97,7 +151,9 @@ def test_fill_between_exit_claim_and_classification_cannot_finalize_without_an_e
 ) -> None:
     """A fill in the two-lock window must be exited or leave the run managed."""
     sid = qa._make()
-    run_id = qa._start(sid).run_id
+    started = qa._start(sid)
+    assert started.ok, started.error
+    run_id = started.run_id
     broker.clear()
     original_claim = state.claim_leg_exit
     injected = False
@@ -355,7 +411,7 @@ def test_rowless_outgoing_retry_does_not_rewrite_live_entry_bookkeeping(
     _assert_live_short_is_exitable(strategy_id, broker)
 
 
-def test_second_flip_is_retry_neutral_while_the_first_outgoing_side_is_unsettled(
+def test_second_flip_respects_position_cap_while_the_first_outgoing_side_is_unsettled(
     broker: qa.Broker,
 ) -> None:
     strategy = qa._signal_strategy()
@@ -366,14 +422,18 @@ def test_second_flip_is_retry_neutral_while_the_first_outgoing_side_is_unsettled
     signals.handle_signal(strategy, "short_entry", leg_id=1)
     engine.apply_fill(run_id, 1, 95.0, is_entry=True)
     superseded = state.get_run_state(run_id)["legs"]["1"]["superseded"]
+    current = _live_identity(run_id)
     broker.clear()
 
     result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "long_entry", leg_id=1)
 
-    assert result.ok is True
-    assert result.note == "flip_pending"
+    assert result.ok is False
+    rejected = store.list_events(strategy_id, kind="portfolio_governor_rejected")
+    assert rejected[-1]["payload"]["code"] == "position_limit"
     assert broker.orders == []
+    assert _live_identity(run_id) == current
     assert state.get_run_state(run_id)["legs"]["1"]["superseded"] == superseded
+    _assert_live_short_is_exitable(strategy_id, broker)
 
 
 def test_position_mismatch_warning_runs_after_the_run_lock_is_released(
@@ -402,10 +462,11 @@ def test_position_mismatch_warning_runs_after_the_run_lock_is_released(
     assert lock_states == [False]
 
 
-def test_reentrant_opposite_entries_share_one_atomic_flip_claim(
+@pytest.mark.timeout(5)
+def test_reentrant_opposite_entry_refuses_promptly_without_duplicating_flip(
     broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two short alerts racing a filled long may send one flip, not a hybrid."""
+    """A synchronous nested entry must leave the outer flip as the sole owner."""
     strategy = qa._signal_strategy()
     strategy_id = strategy.id
     signals.handle_signal(strategy, "long_entry", leg_id=1)
@@ -436,12 +497,16 @@ def test_reentrant_opposite_entries_share_one_atomic_flip_claim(
     )
     live = state.get_run_state(run_id)["legs"]["1"]
     assert first_result.ok is True
-    assert nested_result.ok is True and nested_result.note == "flip_pending"
+    assert nested_result.ok is False
+    rejected = store.list_events(strategy_id, kind="portfolio_governor_rejected")
+    assert rejected[-1]["payload"]["code"] == "entry_in_progress"
     assert broker.actions == ["SELL", "SELL"]
     assert len(entries) == 2
     assert live["position_ref"] == entries[-1]["position_ref"]
     assert live["superseded"]["position_ref"] == original_entry["position_ref"]
     assert live["superseded"]["exit_kind"] == "exit_signal"
+    engine.apply_fill(run_id, 1, 95.0, is_entry=True)
+    _assert_live_short_is_exitable(strategy_id, broker)
 
 
 def test_rejected_replacement_cannot_hide_and_duplicate_the_superseded_position(

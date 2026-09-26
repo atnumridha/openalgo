@@ -1,9 +1,14 @@
 # database/flow_db.py
 
+import hashlib
 import logging
 import os
 import secrets
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import wraps
+from pathlib import Path
+from threading import RLock, local
 
 from cachetools import TTLCache
 from sqlalchemy import (
@@ -15,8 +20,10 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -43,6 +50,69 @@ else:
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
+
+
+_workflow_lease_registry_lock = RLock()
+_workflow_lease_locks = {}
+_workflow_lease_context = local()
+
+
+@contextmanager
+def workflow_mutation_lease(workflow_id):
+    """Serialize one workflow's graph and lifecycle across threads/workers.
+
+    SQLite is the supported deployment store. An OS lease survives transaction
+    commits, is released on process death, and permits nested service/storage
+    calls on the owning thread. Do not silently provide process-only safety
+    for an unsupported/shared remote database.
+    """
+    if type(workflow_id) is not int or workflow_id <= 0:
+        raise ValueError("Workflow ID must be a positive integer")
+    bind = db_session.bind
+    database_path = bind.url.database
+    if bind.dialect.name != "sqlite" or not database_path or database_path == ":memory:":
+        raise RuntimeError("Flow lifecycle mutation requires a file-backed SQLite database")
+    database_path = Path(database_path).resolve()
+    scope = f"{database_path}:{workflow_id}"
+    with _workflow_lease_registry_lock:
+        lock = _workflow_lease_locks.setdefault(scope, RLock())
+    with lock:
+        held = getattr(_workflow_lease_context, "held", None)
+        if held is None:
+            held = _workflow_lease_context.held = set()
+        if scope in held:
+            yield
+            return
+        import fcntl
+
+        lock_dir = database_path.parent / ".flow-lifecycle-locks"
+        lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(scope.encode()).hexdigest()
+        fd = os.open(lock_dir / lock_name, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.add(scope)
+            # Discard read snapshots taken before a competing edit completed.
+            # Nested calls must not expire their enclosing operation's rows.
+            db_session.expire_all()
+            yield
+        finally:
+            held.discard(scope)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+
+def with_workflow_mutation_lease(function):
+    """Cover read/check/write plus trigger side effects as one lifecycle unit."""
+
+    @wraps(function)
+    def guarded(workflow_id, *args, **kwargs):
+        with workflow_mutation_lease(workflow_id):
+            return function(workflow_id, *args, **kwargs)
+
+    return guarded
 
 
 def generate_webhook_token():
@@ -95,6 +165,7 @@ class FlowWorkflow(Base):
     api_key = Column(
         String(255), nullable=True
     )  # Stored when workflow is activated, used for webhook execution
+    broker_connection_id = Column(String(36), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -102,6 +173,7 @@ class FlowWorkflow(Base):
     executions = relationship(
         "FlowWorkflowExecution", back_populates="workflow", cascade="all, delete-orphan"
     )
+    bar_claims = relationship("FlowWorkflowBarClaim", cascade="all, delete-orphan")
 
 
 class FlowWorkflowExecution(Base):
@@ -121,6 +193,20 @@ class FlowWorkflowExecution(Base):
     workflow = relationship("FlowWorkflow", back_populates="executions")
 
 
+class FlowWorkflowBarClaim(Base):
+    """One durable entry claim per workflow and completed candle."""
+
+    __tablename__ = "flow_workflow_bar_claims"
+
+    id = Column(Integer, primary_key=True)
+    workflow_id = Column(Integer, ForeignKey("flow_workflows.id"), nullable=False)
+    execution_id = Column(Integer, nullable=False)
+    bar_start = Column(String(40), nullable=False)
+    claimed_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+
+    __table_args__ = (UniqueConstraint("workflow_id", "bar_start", name="uq_flow_workflow_bar"),)
+
+
 def init_db():
     """Initialize the database"""
     from database.db_init_helper import init_db_with_logging
@@ -129,6 +215,22 @@ def init_db():
 
     # Migrate: Add api_key column if it doesn't exist (for existing databases)
     _migrate_add_api_key_column()
+    _migrate_add_broker_connection_column()
+
+
+def _migrate_add_broker_connection_column():
+    """Keep older Flow tables readable after adding explicit connection scope."""
+    try:
+        from sqlalchemy import inspect, text
+
+        if "flow_workflows" not in inspect(engine).get_table_names():
+            return
+        columns = {col["name"] for col in inspect(engine).get_columns("flow_workflows")}
+        if "broker_connection_id" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN broker_connection_id VARCHAR(36)"))
+    except Exception:
+        logger.exception("Could not add flow_workflows.broker_connection_id; run the Flow migration")
 
 
 def _migrate_add_api_key_column():
@@ -165,11 +267,12 @@ def _migrate_add_api_key_column():
 # --- Workflow CRUD Operations ---
 
 
-def create_workflow(name, description=None, nodes=None, edges=None):
+def create_workflow(name, description=None, nodes=None, edges=None, broker_connection_id=None):
     """Create a new workflow"""
     try:
         workflow = FlowWorkflow(
-            name=name, description=description, nodes=nodes or [], edges=edges or []
+            name=name, description=description, nodes=nodes or [], edges=edges or [],
+            broker_connection_id=broker_connection_id,
         )
         db_session.add(workflow)
         db_session.commit()
@@ -232,6 +335,33 @@ def get_all_workflows():
         return []
 
 
+def get_workflows_for_strategy(strategy_id: int):
+    """Find explicit execution links, including exits, for strict admission checks.
+
+    Keep exit-only/shared rows visible so the validator can refuse them rather
+    than accidentally ignoring an ambiguous or foreign protective path.
+    """
+    from services.strategy_module.workflow_link import STRATEGY_EXECUTION_NODE_TYPES
+
+    if type(strategy_id) is not int:
+        return []
+    matches = []
+    for workflow in get_all_workflows():
+        nodes = workflow.nodes
+        if not isinstance(nodes, list):
+            continue
+        for node in nodes:
+            if (not isinstance(node, dict) or type(node.get("type")) is not str
+                    or node["type"] not in STRATEGY_EXECUTION_NODE_TYPES):
+                continue
+            data = node.get("data")
+            if isinstance(data, dict) and type(data.get("strategyId")) is int:
+                if data["strategyId"] == strategy_id:
+                    matches.append(workflow)
+                    break
+    return matches
+
+
 def get_active_workflows():
     """Get all active workflows"""
     try:
@@ -241,6 +371,7 @@ def get_active_workflows():
         return []
 
 
+@with_workflow_mutation_lease
 def update_workflow(workflow_id, **kwargs):
     """Update workflow fields"""
     try:
@@ -259,6 +390,7 @@ def update_workflow(workflow_id, **kwargs):
             "webhook_enabled",
             "webhook_auth_type",
             "api_key",
+            "broker_connection_id",
         ]
         for field in allowed_fields:
             if field in kwargs:
@@ -283,6 +415,7 @@ def update_workflow(workflow_id, **kwargs):
         return None
 
 
+@with_workflow_mutation_lease
 def delete_workflow(workflow_id):
     """Delete workflow and its executions"""
     try:
@@ -471,6 +604,53 @@ def get_execution(execution_id):
     except Exception as e:
         logger.exception(f"Error getting execution {execution_id}: {str(e)}")
         return None
+
+
+def claim_execution_bar(execution_id: int, workflow_id: int, bar_start: datetime) -> str:
+    """Atomically claim one completed bar, including across worker processes."""
+    if bar_start.tzinfo is None:
+        return "unavailable"
+    canonical_stamp = bar_start.astimezone(UTC).isoformat()
+    try:
+        current = db_session.query(FlowWorkflowExecution).filter_by(id=execution_id).first()
+        if current is None or current.workflow_id != workflow_id or current.status != "running":
+            return "unavailable"
+        db_session.add(
+            FlowWorkflowBarClaim(
+                workflow_id=workflow_id,
+                execution_id=execution_id,
+                bar_start=canonical_stamp,
+            )
+        )
+        db_session.flush()
+        current.logs = [
+            *(current.logs or []),
+            {
+                "time": datetime.now(UTC).isoformat(),
+                "message": "Current candle claimed for strategy entry",
+                "level": "info",
+                "bar_claim": bar_start.isoformat(),
+            },
+        ]
+        db_session.commit()
+        return "claimed"
+    except IntegrityError:
+        db_session.rollback()
+        try:
+            existing = (
+                db_session.query(FlowWorkflowBarClaim.id)
+                .filter_by(workflow_id=workflow_id, bar_start=canonical_stamp)
+                .first()
+            )
+            return "duplicate" if existing else "unavailable"
+        except Exception:
+            db_session.rollback()
+            logger.exception("Could not verify completed Flow bar conflict")
+            return "unavailable"
+    except Exception:
+        logger.exception("Could not claim completed Flow bar")
+        db_session.rollback()
+        return "unavailable"
 
 
 # Defence in depth for the route's own clamp: a negative limit reaches SQLite as

@@ -30,6 +30,7 @@ from database.user_db import (  # Import the function
 )
 from extensions import socketio
 from limiter import limiter  # Import the limiter instance
+from services.strategy_module import live_authorization
 from utils.config import build_external_url
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
@@ -1325,6 +1326,8 @@ def logout():
 
     # Wipe the browser session before teardown so a revocation or notification
     # failure cannot leave the user stuck in a half-logged-in state.
+    if username:
+        live_authorization.revoke(username)
     session.clear()
 
     if was_logged_in and username:

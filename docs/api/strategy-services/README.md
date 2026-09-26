@@ -116,6 +116,74 @@ The public webhook is limited by the route in front of the pipeline.
 that guard and the declared-size 413 run before the validation pipeline,
 neither preflight refusal writes a durable webhook audit row.
 
+## Automated strategy safety workflow
+
+The Strategy Module is the deterministic execution boundary for automated
+strategies. Flow and AI can analyse markets and produce a signal, but neither
+can bypass strategy validation, the live-entry gates, or protective exits.
+Use this operator sequence for every new automation:
+
+1. **Install the recommended sandbox starter pack** from the Strategies page.
+   It creates six stopped, sandbox-only, live-disabled, unscheduled templates.
+   Installation does not start a run, enable live trading, activate a Flow, or
+   rotate tokens for templates that already exist. Copy a webhook token when a
+   template is newly created: it is displayed once only.
+2. **Configure the producer.** Build and review a deterministic Flow, or use
+   AI/Agent assistance to analyse the market and draft an inactive Flow. The
+   Flow or AI signal producer must send a supported lifecycle or signal action
+   to the selected Strategy Module strategy. AI does analysis and signals;
+   OpenAlgo's deterministic application validates and controls execution.
+3. **Validate in sandbox first.** Keep the strategy sandbox-only while you
+   verify signal shape, contract resolution, stops, targets, and the audit
+   trail. Sandbox entries do not need live authorization or live broker-risk
+   facts.
+4. **Review WhatsApp lifecycle notices and the event audit.** Pair WhatsApp if
+   you want notices for material events such as a run started, a governor
+   decision, a protective stop, recovery failure, or the kill switch. These
+   notices are best effort; a delivery failure never blocks trading.
+5. **Open the two separate live gates only when ready.** Enable `live_enabled`
+   on the individual strategy, then explicitly authorize live automation for
+   the current trading session in the Strategies page. A strategy must satisfy
+   both gates before a new live entry can be sent.
+6. **Monitor and retain the kill switch.** Watch runs, orders, events, and
+   WhatsApp notices. Revoke authorization or lock the strategy's webhook to
+   stop new automated entries; use the kill switch when immediate inbound
+   signal blocking is required.
+
+### Session live authorization
+
+Live authorization is short-lived and per session. It is held for the current
+trading-session day only and is reset on the next session/day boundary, logout,
+process restart, successful broker reauthentication or reconnection, or a
+username or account change. It is not a replacement for the durable
+per-strategy `live_enabled` setting. Revocation blocks new live entries immediately;
+**exits remain allowed after revocation**, including protective stops, targets,
+manual closes, and reconciliation.
+
+### Portfolio governor defaults
+
+The portfolio governor evaluates only new Strategy Module live entries. It
+does not govern manual orders, generic Flow orders, baskets, or split orders,
+and it never rejects an exit. The initial operator limits are:
+
+- **3 max positions:** at most two cash positions and one NIFTY options
+  position.
+- **4% combined risk:** configured open risk across the portfolio may not
+  exceed 4% of available cash.
+- **20% cash reserve:** a proposed entry must leave at least 20% of available
+  cash uncommitted. This makes the effective maximum estimated debit 80%,
+  subject to every other governor gate.
+- **Long-option minimum-lot max 3%:** configured risk for a minimum long
+  option lot may not exceed 3% of available cash; cash-trade risk is limited
+  to 1.5%.
+- **Intraday 09:20-15:00 IST:** new intraday entries are admitted only in this
+  window; new option entries stop at 14:45 IST.
+
+The governor also requires protective risk and at least 1.5 reward-to-risk,
+fails closed when funds, positions, quotes, or risk facts are unavailable, and
+applies a **4% daily-loss lock**, a **3-stop session lock**, and **2 stops => 30-minute cooldown** protections. Sandbox entries remain independent of these
+live-entry checks.
+
 ## Vocabularies
 
 Most of these tuples live in `database/strategy_module_db.py`. The four the request schemas validate against, `RUN_MODES`, `STRATEGY_STATUSES`, `EVENT_KINDS` and `EVENT_SEVERITIES`, are imported from there by `restx_api/strategy_schema.py`, so those four cannot drift apart from the store. Products, price types, quantity modes, universe tabs and leg segments are configuration vocabularies owned by `blueprints/strategy_module.py`, because the store has no opinion on a leg's shape: legs are a JSON column.
@@ -166,7 +234,7 @@ A run started through this API records `manual`: an API-key start is a person as
 
 ### Order kinds
 
-`entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`, `exit_signal`
+`entry`, `protective_stop`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`, `exit_signal`
 
 ### Event kinds an operator must not ignore
 
@@ -225,9 +293,9 @@ Only. Neither a strategy nor a leg carries a price, so a `LIMIT`, `SL` or `SL-M`
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `sandbox_comparison_summary`, `run_stop_failed`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
-Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
+Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`, `order_outcome_unknown`, `live_protection_unverified`, `protective_stop_uncovered`, `protective_stop_verified`, `protective_stop_failed`
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 

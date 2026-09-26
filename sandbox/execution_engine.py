@@ -440,51 +440,48 @@ class ExecutionEngine:
             execution_price = None
 
             if order.price_type == "MARKET":
-                # Market orders execute immediately at bid/ask (more realistic)
-                # BUY: Execute at ask price (pay seller's asking price)
-                # SELL: Execute at bid price (receive buyer's bid price)
-                # If bid/ask is 0, fall back to LTP
-                should_execute = True
+                # A last trade is not an executable price. Keep the order open
+                # until its current book side is available.
                 if order.action == "BUY":
-                    execution_price = ask if ask > 0 else ltp
+                    should_execute = ask > 0
+                    execution_price = ask
                 else:  # SELL
-                    execution_price = bid if bid > 0 else ltp
+                    should_execute = bid > 0
+                    execution_price = bid
 
             elif order.price_type == "LIMIT":
-                # Limit BUY: Execute if LTP <= Limit Price, fill at limit price
-                # Limit SELL: Execute if LTP >= Limit Price, fill at limit price
-                # In real exchanges, limit orders sit on the book at the limit price
-                # and fill at that price when the market crosses through
-                if order.action == "BUY" and ltp <= order.price:
+                # A last trade crossing a limit does not prove that an
+                # executable counterparty exists at that price.
+                if order.action == "BUY" and ask > 0 and ask <= order.price:
                     should_execute = True
-                    execution_price = order.price  # Fill at limit price
-                elif order.action == "SELL" and ltp >= order.price:
+                    execution_price = ask
+                elif order.action == "SELL" and bid > 0 and bid >= order.price:
                     should_execute = True
-                    execution_price = order.price  # Fill at limit price
+                    execution_price = bid
 
             elif order.price_type == "SL":
                 # Stop Loss Limit order
                 # SL BUY: When LTP >= trigger price, order activates. Execute at LTP if LTP <= limit price
                 # SL SELL: When LTP <= trigger price, order activates. Execute at LTP if LTP >= limit price
                 if order.action == "BUY" and ltp >= order.trigger_price:
-                    if ltp <= order.price:
+                    if ask > 0 and ask <= order.price:
                         should_execute = True
-                        execution_price = ltp  # Execute at current market price (LTP)
+                        execution_price = ask
                 elif order.action == "SELL" and ltp <= order.trigger_price:
-                    if ltp >= order.price:
+                    if bid > 0 and bid >= order.price:
                         should_execute = True
-                        execution_price = ltp  # Execute at current market price (LTP)
+                        execution_price = bid
 
             elif order.price_type == "SL-M":
                 # Stop Loss Market order
                 # BUY: Execute at market when LTP >= trigger price
                 # SELL: Execute at market when LTP <= trigger price
                 if order.action == "BUY" and ltp >= order.trigger_price:
-                    should_execute = True
-                    execution_price = ltp
+                    should_execute = ask > 0
+                    execution_price = ask
                 elif order.action == "SELL" and ltp <= order.trigger_price:
-                    should_execute = True
-                    execution_price = ltp
+                    should_execute = bid > 0
+                    execution_price = bid
 
             # Execute the order if conditions are met
             if should_execute:
@@ -525,27 +522,17 @@ class ExecutionEngine:
             if order.price_type == "SL-M":
                 logger.info(
                     f"SL-M order {order.orderid} triggered at LTP {ltp} "
-                    f"(trigger={order.trigger_price}) - executing at market"
+                    f"(trigger={order.trigger_price}) - awaiting executable book"
                 )
-                self._execute_order(order, ltp)
-                return
-
-            # SL: triggered - check whether the limit price is also
-            # satisfiable right now, same tick.
-            limit_met = (order.action == "BUY" and ltp <= order.price) or (
-                order.action == "SELL" and ltp >= order.price
-            )
-            if limit_met:
-                logger.info(
-                    f"SL order {order.orderid} triggered and limit satisfied at LTP {ltp} "
-                    f"(trigger={order.trigger_price}, limit={order.price}) - executing"
-                )
-                self._execute_order(order, ltp)
+                order.order_status = "open"
+                order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
+                db_session.commit()
+                self._publish_order_update_event(order, order_status="open")
                 return
 
             logger.info(
                 f"SL order {order.orderid} triggered at LTP {ltp} "
-                f"(trigger={order.trigger_price}) but limit {order.price} not yet "
+                f"(trigger={order.trigger_price}); awaiting executable quote at limit {order.price} "
                 f"satisfiable - now resting open in the regular book"
             )
             order.order_status = "open"

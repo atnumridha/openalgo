@@ -42,14 +42,14 @@ Actions    placeOrder · smartOrder · optionsOrder · optionsMultiOrder ·
 Conditions positionCheck · fundCheck · priceCondition · varCondition ·
            timeWindow · timeCondition · andGate · orGate · notGate
 Data       getQuote · multiQuotes · getDepth · history · indicator ·
-           priorPeriodOhlc · barOffset · strategyPnl · openPosition ·
+           priorPeriodOhlc · barOffset · openingRange · strategyPnl · openPosition ·
            getOrderStatus ·
            orderBook · tradeBook · positionBook · holdings · funds · margin ·
            symbol · optionSymbol · expiry · intervals · optionChain ·
            syntheticFuture · holidays · timings · calendar
 Streaming  subscribeLtp · subscribeQuote · subscribeDepth · unsubscribe
 Utility    log · telegramAlert · whatsappAlert · variable · mathExpression ·
-           httpRequest · delay · waitUntil · group
+           httpRequest · strategyModuleRun · strategySignal · delay · waitUntil · group
 ```
 
 ### Capabilities Flow does NOT have
@@ -1847,6 +1847,65 @@ redacted, so a token in a query parameter is not written to the execution log.
   }
 }
 ```
+
+#### strategyModuleRun - Strategy Module Run
+
+Starts an existing Strategy Module batch strategy through the normal Strategy
+Module lifecycle. Flow supplies the deterministic signal; Strategy Module still
+owns contract resolution, portfolio-governor admission, sandbox/live mode,
+orders, stops, targets, recovery, and lifecycle notifications.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `strategyId` | positive integer | - | Required; the API-key owner must own the strategy. |
+| `brokerOwner` | string | - | Required; exact username for the workflow API key. |
+| `mode` | `"sandbox"` \| `"live"` | - | Required. Live still requires strategy opt-in and current-session authorization. |
+| `marketHoursExchange` | exchange | - | Required for current completed-candle evidence. |
+| `barEvidence` | object | - | Required: current and previous 5-minute and 15-minute candle variable names, as for `strategySignal` below. |
+| `outputVariable` | string | `"strategyRun"` | Contains status, strategy id, mode and run id/error. |
+
+The workflow, strategy, and any active run must carry the same saved
+`broker_connection_id`. Legacy workflows with missing pins cannot start a run.
+
+```json
+{
+  "id": "run_strategy",
+  "type": "strategyModuleRun",
+  "position": { "x": 100, "y": 300 },
+  "data": { "strategyId": 7, "brokerOwner": "owner", "mode": "sandbox",
+            "marketHoursExchange": "NSE_INDEX",
+            "barEvidence": { "5m": ["bar5Current", "bar5Previous"],
+                             "15m": ["bar15Current", "bar15Previous"] },
+            "outputVariable": "strategyRun" }
+}
+```
+
+#### strategySignal - Strategy Signal
+
+Dispatches one explicit action to an existing Strategy Module strategy. Batch
+strategies accept `start` and `stop`. Signal strategies accept `long_entry`,
+`long_exit`, `short_entry`, and `short_exit`. An exit is never converted into an
+entry. The workflow must have a saved `broker_connection_id` equal to the
+strategy's connection ID; `brokerOwner` must match its API-key username.
+
+| Field | Type | Notes |
+|---|---|---|
+| `strategyId` | positive integer | Existing strategy owned by the workflow API key. |
+| `brokerOwner` | string | Exact API-key username. |
+| `mode` | `"sandbox"` or `"live"` | Required. Directional signals must match the strategy's configured mode. |
+| `action` | string | One of the six actions above. |
+| `legId` | positive integer | Optional directional leg selector. |
+| `marketHoursExchange` | exchange | Required for entries. |
+| `barEvidence` | object | Required for entries: `{"5m":["currentVar","previousVar"],"15m":["currentVar","previousVar"]}`. Candles must be current and complete. The bar is claimed durably before dispatch; repeat entries for that bar are refused. Stops and exits need no candle evidence. |
+
+#### openingRange - Opening Range
+
+Reads the first `rangeMinutes` one-minute candles of the current exchange
+session for `symbol` and `exchange`. It requires every minute and waits until
+the final candle has closed and settled. The output contains `high`, `low`,
+`start`, `end`, `symbol`, `exchange`, and `minutes`. `rangeMinutes` must be an
+integer from 1 through 60. For MCX roots, Flow resolves the current futures
+contract before reading history; unavailable history returns an error.
 
 #### delay - Delay
 

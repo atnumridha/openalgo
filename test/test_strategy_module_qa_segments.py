@@ -30,7 +30,8 @@ docstring says what the module does and what it should do instead. They are
 strict, so fixing the defect turns the marker red rather than passing silently.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -45,6 +46,50 @@ from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.symbol_resolver import lot_size_for, resolve_leg, resolve_quantity
 
 USER = "qa_segment_user"
+
+
+@pytest.fixture(autouse=True)
+def coherent_exchange_session(monkeypatch):
+    """Give the governor a complete session calendar for the fake market."""
+    from database import market_calendar_db
+
+    def current_window(_day, _exchange):
+        now = datetime.now(UTC)
+        return {
+            "start_ms": int((now - timedelta(minutes=10)).timestamp() * 1000),
+            "end_ms": int((now + timedelta(hours=2)).timestamp() * 1000),
+        }
+
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", current_window)
+
+
+@pytest.fixture(autouse=True)
+def funded_synthetic_account(monkeypatch):
+    """Supply complete fake account facts while retaining real governor rules."""
+    from services.strategy_module import portfolio_governor as governor
+
+    def facts(_user, _strategy, resolved, _key, mode, **_kwargs):
+        venues = tuple(sorted({str(leg.get("exchange") or "NSE") for leg in resolved}))
+        option = any(leg.get("segment") == "options" for leg in resolved)
+        cash = sum(leg.get("segment") == "cash" for leg in resolved)
+        return governor.EntryFacts(
+            mode=mode, available_cash=Decimal("10000000"),
+            session_capital=Decimal("10000000"), open_cash_positions=0,
+            open_nifty_option_positions=0, open_sensex_option_positions=0,
+            open_mcx_option_positions=0, open_derivative_positions=0,
+            entry_cash_positions=cash,
+            entry_nifty_option_positions=int(option and "NFO" in venues),
+            entry_sensex_option_positions=int(option and "BFO" in venues),
+            entry_mcx_option_positions=int(option and "MCX" in venues),
+            entry_derivative_positions=int(option), entry_cash_risk=Decimal("100"),
+            entry_option_lot_risk=Decimal("100"), entry_risk=Decimal("100"),
+            open_risk=Decimal("0"), estimated_debit=Decimal("1000"),
+            minimum_reward_risk=Decimal("2"), session_pnl=Decimal("0"),
+            consecutive_stopped_runs=0, has_option_entry=option,
+            intraday=False, entry_exchanges=venues,
+        )
+
+    monkeypatch.setattr(governor, "build_entry_facts", facts)
 
 # ---------------------------------------------------------------------------
 # The market: master contract, expiry calendars and tape, all in memory
@@ -364,6 +409,14 @@ def clean_slate():
         # already populated with somebody else's legs.
         for run_id in list(state.active_run_ids()):
             state.clear_run_state(run_id)
+        from services.strategy_module import portfolio_governor as governor
+
+        store.db_session.query(store.SmRiskReservation).filter_by(user_id=USER).delete()
+        store.db_session.commit()
+        with governor._admission_registry_lock:
+            for scope in list(governor._entry_reservations):
+                if scope.startswith(f"{USER}|"):
+                    governor._entry_reservations.pop(scope, None)
         store.clear_strategy_module_cache()
 
     purge()
@@ -438,6 +491,7 @@ def _signal_strategy(legs, **overrides):
     sid = _make(
         _config("MULTI", "NSE", legs, strategy_kind="signal", direction="both", **overrides)
     )
+    assert store.set_automation_state(sid, USER, "armed") == (True, None)
     return store.get_strategy(sid, USER)
 
 

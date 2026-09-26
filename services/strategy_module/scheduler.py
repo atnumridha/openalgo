@@ -59,6 +59,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from database import strategy_module_db as store
+from services.strategy_module import live_authorization
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -84,6 +86,11 @@ JOB_PREFIX = "strategy:"
 # lets that run self-heal without creating one timer or thread per run.
 PENDING_STOP_RECONCILE_JOB_ID = "strategy-pending-stop-reconcile"
 PENDING_STOP_RECONCILE_SECONDS = 5
+CRITICAL_ALERT_JOB_ID = "strategy-critical-whatsapp-outbox"
+CRITICAL_ALERT_POLL_SECONDS = 15
+CONNECTION_ALERT_JOB_ID = "strategy-broker-data-status"
+COMPARISON_POLL_JOB_ID = "strategy-sandbox-comparison-observer"
+COMPARISON_REPORT_JOB_ID = "strategy-sandbox-comparison-session-summary"
 
 _DAY_TO_CRON = {
     "MON": "mon",
@@ -143,7 +150,40 @@ def start(paused: bool = False) -> BackgroundScheduler:
             name="Strategy pending-stop reconciliation",
             replace_existing=True,
         )
+        # One bounded worker, reconstructed at startup. No thread/timer per
+        # event and no WhatsApp I/O on an order or exit path.
+        _scheduler.add_job(
+            func=deliver_critical_alerts,
+            trigger=IntervalTrigger(seconds=CRITICAL_ALERT_POLL_SECONDS, timezone=IST),
+            id=CRITICAL_ALERT_JOB_ID,
+            name="Critical strategy WhatsApp outbox",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            func=check_broker_data_status,
+            trigger=IntervalTrigger(minutes=5, timezone=IST),
+            id=CONNECTION_ALERT_JOB_ID,
+            name="Pinned strategy broker data status",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            func=poll_sandbox_comparisons,
+            trigger=IntervalTrigger(seconds=15, timezone=IST),
+            id=COMPARISON_POLL_JOB_ID,
+            name="Read-only sandbox profit-rule observations",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            func=report_sandbox_comparisons,
+            trigger=IntervalTrigger(minutes=30, timezone=IST),
+            id=COMPARISON_REPORT_JOB_ID,
+            name="Sandbox comparison session summary",
+            replace_existing=True,
+        )
         _scheduler.start(paused=paused)
+        if not paused:
+            check_broker_data_status()
+            report_sandbox_comparisons()
         logger.info("Strategy module scheduler started (timezone %s, paused=%s)", IST, paused)
         return _scheduler
 
@@ -167,6 +207,62 @@ def shutdown() -> None:
 def get_scheduler() -> BackgroundScheduler | None:
     """The shared scheduler, or None when :func:`start` has not been called."""
     return _scheduler
+
+
+def check_broker_data_status() -> None:
+    """Record only meaningful feed failure/recovery changes for WhatsApp."""
+    try:
+        from services.strategy_module.connection_alerts import check_active_connections
+
+        check_active_connections()
+    except Exception:
+        logger.exception("Could not check pinned strategy broker data status")
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
+
+
+def poll_sandbox_comparisons() -> None:
+    """Continue shadow observations after the strategy's actual exit."""
+    try:
+        from services.strategy_module.comparison_lifecycle import poll_pending_comparisons
+
+        poll_pending_comparisons()
+    except Exception:
+        logger.exception("Could not poll sandbox comparison observations")
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
+
+
+def report_sandbox_comparisons() -> None:
+    """Queue one durable WhatsApp report per completed strategy session."""
+    try:
+        from services.strategy_module.comparison_reporting import report_completed_sessions
+
+        report_completed_sessions()
+    except Exception:
+        logger.exception("Could not report sandbox comparison session")
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
+
+
+def deliver_critical_alerts() -> None:
+    """Drain one bounded outbox batch with scheduler-session cleanup."""
+    try:
+        from services.strategy_module.critical_alerts import process_due
+
+        process_due()
+    except Exception:
+        logger.exception("Could not deliver critical strategy alerts")
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 def _require_scheduler() -> BackgroundScheduler | None:
@@ -566,6 +662,21 @@ def run_scheduled_start(strategy_id: int) -> None:
             )
             return
 
+        if mode == "live":
+            allowed, error = live_authorization.require_live_entry(row.user_id)
+            if not allowed:
+                message = f"Scheduled live start refused: {error}"
+                logger.warning("%s (strategy %s)", message, strategy_id)
+                record_and_notify(
+                    strategy_id,
+                    row.user_id,
+                    "live_authorization_required",
+                    message,
+                    severity="warn",
+                    payload={"trigger_source": "scheduler", "mode": mode},
+                )
+                return
+
         from services.strategy_module import engine
 
         result = engine.start_run(strategy_id, row.user_id, mode, trigger_source="scheduler")
@@ -659,10 +770,26 @@ def reconcile_pending_stops() -> dict[str, int]:
         except Exception:
             logger.exception("Periodic open-run acknowledgement repair failed")
 
+        # Only sandbox scopes accepted by control recovery own their stop
+        # retry. Live-enabled strategies and any strategy with a non-sandbox
+        # run are refused before that path reaches stop_run, so their durable
+        # stops must remain in the ordinary pass.
+        open_runs = store.list_open_runs()
+        non_sandbox_ids = {run.strategy_id for run in open_runs if run.mode != "sandbox"}
+        controlled_ids = {
+            row.id
+            for row in store.db_session.query(store.SmStrategy.id)
+            .filter(
+                store.SmStrategy.automation_state.in_(("closing", "close_failed")),
+                store.SmStrategy.live_enabled.is_(False),
+            )
+            .all()
+            if row.id not in non_sandbox_ids
+        }
         pending_runs = [
             run.id
-            for run in store.list_open_runs()
-            if run.stop_requested_reason is not None
+            for run in open_runs
+            if run.stop_requested_reason is not None and run.strategy_id not in controlled_ids
         ]
         from services.strategy_module import engine
 
@@ -685,6 +812,16 @@ def reconcile_pending_stops() -> dict[str, int]:
                 result_counts["finalised"] += 1
             else:
                 result_counts["failed"] += 1
+        from services.strategy_module.recovery import recover_automation_controls
+
+        for control in recover_automation_controls():
+            result_counts["examined"] += 1
+            if control.close_pending:
+                result_counts["pending"] += 1
+            if not control.ok:
+                result_counts["failed"] += 1
+            elif not control.close_pending:
+                result_counts["finalised"] += 1
         return result_counts
     finally:
         from utils.db_sessions import remove_all_scoped_sessions

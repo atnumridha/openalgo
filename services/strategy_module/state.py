@@ -426,6 +426,8 @@ def release_order_exit(
             superseded["exit_order_id"] = None
             superseded["exit_claim_token"] = None
             superseded["exit_kind"] = None
+            if superseded.get("protective_stop_cancel_expected_order_id") == exit_order_id:
+                superseded.pop("protective_stop_cancel_expected_order_id", None)
             return "superseded"
         if leg.get("exit_order_id") == exit_order_id and (
             position_ref is None or leg.get("position_ref") == position_ref
@@ -433,6 +435,8 @@ def release_order_exit(
             leg["exit_order_id"] = None
             leg["exit_claim_token"] = None
             leg["exit_kind"] = None
+            if leg.get("protective_stop_cancel_expected_order_id") == exit_order_id:
+                leg.pop("protective_stop_cancel_expected_order_id", None)
             return "live"
         return None
 

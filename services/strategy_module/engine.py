@@ -27,10 +27,19 @@ first can be rejected for margin it would have had once the long leg existed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, risk_adapter, session, state
+from services.strategy_module import (
+    live_authorization,
+    order_dispatch,
+    portfolio_governor,
+    risk_adapter,
+    session,
+    state,
+)
 from services.strategy_module.audit_messages import leg_close_requested_message
 from services.strategy_module.symbol_resolver import resolve_leg
 from utils.logging import get_logger
@@ -103,20 +112,11 @@ def _emit(strategy_id: int, user_id: str, kind: str, message: str, **fields: Any
     a bookkeeping problem into an open position.
     """
     try:
-        row = store.record_event(strategy_id, user_id, kind, message, **fields)
-    except Exception:
-        logger.exception("Could not record event %s for strategy %s", kind, strategy_id)
-        return
+        from services.strategy_module.lifecycle_events import record_and_notify
 
-    # Push the row that was actually stored, so the live feed and the Events
-    # tab show the same thing with the same id rather than two near-copies.
-    try:
-        from services.strategy_module import broadcast
-
-        if row is not None:
-            broadcast.push_event(strategy_id, store.event_to_dict(row))
+        record_and_notify(strategy_id, user_id, kind, message, **fields)
     except Exception:
-        logger.exception("Could not push event %s for strategy %s", kind, strategy_id)
+        logger.exception("Could not emit event %s for strategy %s", kind, strategy_id)
 
 
 #: Runs whose risk has fired while no broker authorisation was available.
@@ -231,6 +231,21 @@ def _run_requires_management(run: dict[str, Any]) -> bool:
     )
 
 
+def _intraday_start_window_error(strategy: Any, now: datetime) -> str | None:
+    """Reject an immediate batch entry outside its configured intraday window."""
+
+    if str(getattr(strategy, "strategy_type", "intraday") or "intraday").lower() != "intraday":
+        return None
+    entry_time = getattr(strategy, "entry_time", None)
+    exit_time = getattr(strategy, "exit_time", None)
+    current = now.time().replace(tzinfo=None)
+    if (entry_time and current < entry_time) or (exit_time and current >= exit_time):
+        start = entry_time.strftime("%H:%M") if entry_time else "market open"
+        end = exit_time.strftime("%H:%M") if exit_time else "market close"
+        return f"This intraday strategy can start only between {start} and {end} IST"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Start
 # ---------------------------------------------------------------------------
@@ -251,6 +266,12 @@ def start_run(
     if mode not in store.RUN_MODES:
         return StartResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
+    if (
+        getattr(strategy_row, "current_run_id", None)
+        or str(getattr(strategy_row, "status", "") or "").lower() == "running"
+    ):
+        return StartResult(ok=False, error="This strategy is already running")
+
     # Batch only, which the public reference already states. A signal strategy
     # has no start: its run is opened by the first signal after the session
     # boundary, in signals._day_run. Running the batch lifecycle over signal
@@ -266,6 +287,12 @@ def start_run(
             ),
         )
 
+    window_error = _intraday_start_window_error(
+        strategy_row, portfolio_governor._decision_now()
+    )
+    if window_error:
+        return StartResult(ok=False, error=window_error)
+
     # Live is opt-in per strategy. Checked here as well as at every caller,
     # because this is the last point before real orders.
     if mode == "live" and not strategy_row.live_enabled:
@@ -273,11 +300,56 @@ def start_run(
             ok=False,
             error="This strategy is not enabled for live trading. Enable it first.",
         )
+    if mode == "live":
+        allowed, error = live_authorization.require_live_entry(user_id)
+        if not allowed:
+            _emit(
+                strategy_id,
+                user_id,
+                "live_authorization_required",
+                f"Live entry refused: {error}",
+                severity="warn",
+                mode=mode,
+            )
+            return StartResult(ok=False, error=error)
+
+    if store.has_unresolved_order_outcomes(user_id, mode):
+        return StartResult(
+            ok=False,
+            error="An order outcome is unknown; reconcile the broker account before new entries",
+        )
 
     strategy = store.strategy_to_dict(strategy_row)
     api_key = _api_key_for(user_id)
     if not api_key:
         return StartResult(ok=False, error="No API key is configured for this user")
+
+    run_broker = _broker_for(api_key, mode)
+    if mode == "live":
+        from services.strategy_module import live_protection
+
+        protection_error = live_protection.entry_block_reason(run_broker, strategy, api_key)
+        if protection_error:
+            _emit(
+                strategy_id,
+                user_id,
+                "live_protection_unverified",
+                protection_error,
+                severity="critical",
+                mode=mode,
+            )
+            return StartResult(ok=False, error=protection_error)
+    loss_refusal = strategy_session_entry_loss_reason(strategy, user_id, mode, run_broker)
+    if loss_refusal:
+        _emit(
+            strategy_id,
+            user_id,
+            "daily_loss_entry_rejected",
+            loss_refusal,
+            severity="warn",
+            mode=mode,
+        )
+        return StartResult(ok=False, error=loss_refusal)
 
     # Resolve everything before claiming anything. A leg that cannot be
     # resolved must not leave a half-started run behind, and resolution is the
@@ -285,14 +357,101 @@ def start_run(
     # chain, a master contract that has not been downloaded.
     resolved, failures = _resolve_all_legs(strategy, api_key)
     if failures:
+        _emit(
+            strategy_id,
+            user_id,
+            "contract_resolution_failed",
+            failures[0]["error"],
+            severity="warn",
+            mode=mode,
+            payload={"failures": failures},
+        )
         return StartResult(ok=False, error=failures[0]["error"], legs=failures)
     for leg in resolved:
         leg["position_ref"] = state.new_position_ref()
 
-    # One conditional UPDATE, not a read then a write. The UI, the scheduler
-    # and a webhook can all fire at the same instant.
-    if not store.claim_strategy_for_run(strategy_id):
-        return StartResult(ok=False, error="This strategy is already running")
+    if mode == "live":
+        allowed, error = live_authorization.require_live_entry(user_id)
+        if not allowed:
+            _emit(
+                strategy_id,
+                user_id,
+                "live_authorization_required",
+                f"Live entry refused: {error}",
+                severity="warn",
+                mode=mode,
+            )
+            return StartResult(ok=False, error=error)
+
+    governor_decision, admission = portfolio_governor.acquire_entry_admission(
+        user_id,
+        strategy,
+        resolved,
+        api_key,
+        mode,
+        portfolio_governor.GovernorPolicy(),
+        portfolio_governor._decision_now(),
+        authorization_check=(
+            (lambda: live_authorization.require_live_entry(user_id)) if mode == "live" else None
+        ),
+        broker=run_broker,
+    )
+    if not governor_decision.allowed:
+        if governor_decision.code == "live_authorization_required":
+            _emit(
+                strategy_id,
+                user_id,
+                "live_authorization_required",
+                f"Live entry refused: {governor_decision.message}",
+                severity="warn",
+                mode=mode,
+            )
+            return StartResult(ok=False, error=governor_decision.message)
+        _emit(
+            strategy_id,
+            user_id,
+            "portfolio_governor_rejected",
+            governor_decision.message,
+            severity="warn",
+            payload=governor_decision.as_payload(),
+        )
+        return StartResult(ok=False, error=governor_decision.message)
+
+    # The account admission lease serializes all entry owners. Re-read the
+    # durable session result here so a simultaneous trigger cannot use a fact
+    # collected before the previous entry finished.
+    try:
+        if store.has_unresolved_order_outcomes(user_id, mode):
+            if admission is not None:
+                admission.release()
+            return StartResult(
+                ok=False,
+                error="An order outcome is unknown; reconcile the broker account before new entries",
+            )
+        loss_refusal = strategy_session_entry_loss_reason(strategy, user_id, mode, run_broker)
+        if loss_refusal:
+            if admission is not None:
+                admission.release()
+            _emit(
+                strategy_id,
+                user_id,
+                "daily_loss_entry_rejected",
+                loss_refusal,
+                severity="warn",
+                mode=mode,
+            )
+            return StartResult(ok=False, error=loss_refusal)
+
+        # One conditional UPDATE, not a read then a write. The UI, the scheduler
+        # and a webhook can all fire at the same instant.
+        if not store.claim_strategy_for_run(strategy_id):
+            if admission is not None:
+                admission.release()
+            return StartResult(ok=False, error="This strategy is already running")
+    except BaseException:
+        if admission is not None:
+            admission.release()
+        raise
 
     run_id: int | None = None
     placement_progress: dict[str, set[str]] = {"dispatch_attempted": set()}
@@ -300,7 +459,7 @@ def start_run(
         run = store.create_run(
             strategy_id=strategy_id,
             mode=mode,
-            broker=_broker_for(api_key, mode),
+            broker=run_broker,
             trigger_source=trigger_source,
             webhook_event_id=webhook_event_id,
             resolved_expiries={
@@ -357,10 +516,39 @@ def start_run(
             user_id,
             placement_progress=placement_progress,
         )
+        if admission is not None:
+            resolved_by_id = {str(leg["leg_id"]): leg for leg in resolved}
+            snapshot = state.get_run_state(run_id) or {}
+            live_legs = snapshot.get("legs") or {}
+            accepted_exposures = [
+                {
+                    "leg_id": outcome["leg_id"],
+                    "position_ref": resolved_by_id[str(outcome["leg_id"])].get("position_ref"),
+                    "entry_order_id": outcome.get("entry_order_id"),
+                }
+                for outcome in placed
+                if (outcome["ok"] or outcome.get("unknown"))
+                and str((live_legs.get(str(outcome["leg_id"])) or {}).get("status"))
+                not in {"rejected", "cancelled"}
+            ]
+            admission.commit(
+                run_id,
+                accepted_exposures,
+            )
+            if mode == "live" and accepted_exposures:
+                _emit(
+                    strategy_id,
+                    user_id,
+                    "portfolio_governor_admitted",
+                    governor_decision.message,
+                    run_id=run_id,
+                    payload=governor_decision.as_payload(),
+                    mode=mode,
+                )
 
         # Every leg rejected means there is no position and nothing to manage.
         # Leaving the run open would show a running strategy holding nothing.
-        if not any(leg["ok"] for leg in placed):
+        if not any(leg["ok"] or leg.get("unknown") for leg in placed):
             finalised = _finalise(
                 run_id,
                 strategy_id,
@@ -392,6 +580,17 @@ def start_run(
                 legs=placed,
             )
 
+        if any(leg.get("unknown") for leg in placed):
+            return StartResult(
+                ok=False,
+                run_id=run_id,
+                error=(
+                    "One or more entry order outcomes are unknown. The run and exposure "
+                    "reservation remain pending; reconcile with the broker before new entries."
+                ),
+                legs=placed,
+            )
+
         return StartResult(ok=True, run_id=run_id, legs=placed)
     except Exception:
         logger.exception("Start failed for strategy %s", strategy_id)
@@ -406,6 +605,9 @@ def start_run(
         else:
             store.release_strategy(strategy_id)
         return StartResult(ok=False, error="Could not start the strategy")
+    finally:
+        if admission is not None:
+            admission.release()
 
 
 def _subscribe_run(run_id: int, resolved: list[dict[str, Any]]) -> None:
@@ -501,6 +703,9 @@ def _resolve_all_legs(
                 "position": position,
                 "symbol": outcome.symbol,
                 "exchange": outcome.exchange,
+                "segment": outcome.segment,
+                "lot_size": outcome.lotsize,
+                "underlying": outcome.underlying,
                 "lots": outcome.lots,
                 "quantity": outcome.quantity,
                 "expiry": outcome.expiry,
@@ -515,6 +720,8 @@ def _resolve_all_legs(
                 "target_pts": leg.get("target_pts"),
                 "trail": leg.get("trail") or {},
                 "risk_unit": leg.get("risk_unit") or "points",
+                "ltp": leg.get("ltp"),
+                "underlying_ltp": outcome.underlying_ltp,
             }
         )
 
@@ -545,6 +752,49 @@ def _record_acknowledgement(
     the shared scheduler revisits ordinary open runs if that first repair is
     interrupted; ambiguous ownership remains open and reserved.
     """
+    if result.unknown:
+        # A transport error after send is not a broker rejection. Keep the
+        # durable intent and omit any unconfirmed reference from the row.
+        fields = {"status": "unknown", "reject_reason": result.error}
+        recorded = bool(store.update_order(row_id, **fields) or store.update_order(row_id, **fields))
+        _emit(
+            strategy_id,
+            user_id,
+            "order_outcome_unknown",
+            (
+                f"Order outcome for leg {leg_id} is unknown after an attempted broker call. "
+                "Possible exposure remains reserved; inspect broker orders and positions "
+                "and reconcile this exact intent before any retry."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+            payload={"version": 1, "order_id": row_id, "run_id": run_id, "leg_id": leg_id},
+        )
+        if not recorded:
+            # The existing lost-ACK reconciler treats this intentionally
+            # non-accepted/non-rejected witness as unresolved exposure.
+            _emit(
+                strategy_id,
+                user_id,
+                "order_ack_unrecorded",
+                f"Unknown delivery for exact order row {row_id} could not be recorded",
+                run_id=run_id,
+                leg_id=leg_id,
+                severity="critical",
+                payload={
+                    "version": 1,
+                    "order_id": row_id,
+                    "run_id": run_id,
+                    "leg_id": leg_id,
+                    "broker_order_id": None,
+                    "accepted": None,
+                    "status": "unknown",
+                    "reject_reason": result.error,
+                },
+            )
+        return recorded
+
     fields = {
         "status": "open" if result.ok else "rejected",
         "broker_order_id": result.broker_order_id,
@@ -695,7 +945,12 @@ def _place_entries(
             product=strategy.get("product", "NRML"),
             strategy_name=strategy.get("name", ""),
             pricetype=strategy.get("pricetype", "MARKET"),
+            protective_stop_required=mode == "live",
+            protective_stop_loss_points=leg.get("sl_pts"),
         )
+        if mode == "live":
+            order["_strategy_broker"] = "kotak"
+            order["_strategy_connection_id"] = str(strategy.get("broker_connection_id") or "")
         # The intent is durable BEFORE the broker is called, not after. It used
         # to be recorded from the dispatch result, which meant a crash or a
         # database failure in the window between broker acceptance and the
@@ -757,7 +1012,9 @@ def _place_entries(
         # the failed-start path must retain it as possible exposure rather than
         # misclassifying it as an undispatched placeholder.
         dispatch_attempted.add(position_ref)
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, intent="entry"
+        )
 
         acknowledged = _record_acknowledgement(
             row_id, result, strategy["id"], user_id, run_id, leg["leg_id"]
@@ -772,8 +1029,12 @@ def _place_entries(
                     and leg_state.get("entry_status") == "pending"
                 ):
                     leg_state["entry_order_id"] = row_id
-                    leg_state["entry_status"] = "open" if result.ok else "rejected"
-                    leg_state["status"] = "open" if result.ok else "rejected"
+                    leg_state["entry_status"] = (
+                        "pending" if result.unknown else "open" if result.ok else "rejected"
+                    )
+                    leg_state["status"] = (
+                        "configured" if result.unknown else "open" if result.ok else "rejected"
+                    )
 
         # After the leg's own bookkeeping, never before it: the sandbox fills a
         # MARKET order inside the dispatch above, so the fill was published
@@ -783,26 +1044,29 @@ def _place_entries(
         if row_id is not None and result.ok:
             _replay_order_update(result.broker_order_id)
 
-        _emit(
-            strategy["id"],
-            user_id,
-            "leg_entry_placed" if result.ok else "leg_entry_rejected",
-            (
-                f"Entry {action} {leg['quantity']} {leg['symbol']} placed"
-                if result.ok
-                else f"Entry rejected on leg {leg['leg_id']}: {result.error}"
-            ),
-            run_id=run_id,
-            leg_id=leg["leg_id"],
-            severity="info" if result.ok else "warn",
-        )
+        if not result.unknown:
+            _emit(
+                strategy["id"],
+                user_id,
+                "leg_entry_placed" if result.ok else "leg_entry_rejected",
+                (
+                    f"Entry {action} {leg['quantity']} {leg['symbol']} placed"
+                    if result.ok
+                    else f"Entry rejected on leg {leg['leg_id']}: {result.error}"
+                ),
+                run_id=run_id,
+                leg_id=leg["leg_id"],
+                severity="info" if result.ok else "warn",
+            )
 
         outcomes.append(
             {
                 "leg_id": leg["leg_id"],
                 "ok": result.ok,
+                "unknown": result.unknown,
                 "symbol": leg["symbol"],
-                "broker_order_id": result.broker_order_id,
+                "entry_order_id": row_id,
+                "broker_order_id": None if result.unknown else result.broker_order_id,
                 "error": result.error,
                 # False when the broker accepted the order but its
                 # acknowledgement could not be persisted, so the caller can see
@@ -811,6 +1075,12 @@ def _place_entries(
                 "acknowledged": acknowledged,
             }
         )
+
+        # A lost reply can mean the first leg is already at the broker. Do
+        # not continue sending the rest of a basket while that exposure is
+        # unknowable; its durable intent and the run remain for reconciliation.
+        if result.unknown:
+            break
 
     return outcomes
 
@@ -899,7 +1169,7 @@ def apply_fill(
     """Record a fill, logging position mismatches after the run lock releases."""
     deferred_warnings: list[tuple[str, tuple[Any, ...]]] = []
     try:
-        return _apply_fill(
+        went_flat = _apply_fill(
             run_id,
             leg_id,
             avg_price,
@@ -912,6 +1182,15 @@ def apply_fill(
             allow_prior_order_correction,
             deferred_warnings,
         )
+        if is_entry and order_terminal and avg_price is not None:
+            try:
+                from services.strategy_module.comparison_lifecycle import attach_confirmed_entry
+
+                attach_confirmed_entry(run_id, leg_id)
+            except Exception:
+                # Shadow accounting cannot alter the trading/exit lifecycle.
+                logger.exception("Sandbox comparison could not attach to run %s", run_id)
+        return went_flat
     except _PositionRefMismatch as mismatch:
         logger.warning(
             "Ignoring a fill for position %s on leg %s: the live position is %s",
@@ -1202,6 +1481,30 @@ def _exit_legs(
     different strike, and exiting a contract the run does not hold would open a
     new position instead of closing one.
     """
+    blocked_exits: list[dict[str, Any]] = []
+    if mode == "live":
+        from services.strategy_module import live_protection
+
+        eligible_ids = []
+        for leg_id in leg_ids:
+            released, reason = live_protection.cancel_before_exit(run_id, leg_id, user_id)
+            if released:
+                eligible_ids.append(leg_id)
+            else:
+                blocked_exits.append({
+                    "leg_id": leg_id,
+                    "ok": False,
+                    "unknown": True,
+                    "error": reason or "Protective stop ownership is unresolved",
+                })
+                _emit(
+                    strategy["id"], user_id, "protective_stop_failed",
+                    reason or "Protective stop could not be reconciled before a competing exit",
+                    run_id=run_id, leg_id=leg_id, severity="critical", mode=mode,
+                )
+        leg_ids = eligible_ids
+        if not leg_ids:
+            return blocked_exits
     # Claim each leg under the state lock before anything is dispatched. The
     # guard used to test exit_order_id, which is not written until the order
     # comes back, so two rules firing on one leg both got through.
@@ -1266,6 +1569,9 @@ def _exit_legs(
             strategy_name=strategy.get("name", ""),
             pricetype=order_dispatch.EXIT_PRICETYPE,
         )
+        if mode == "live":
+            order["_strategy_broker"] = "kotak"
+            order["_strategy_connection_id"] = str(strategy.get("broker_connection_id") or "")
         # Recorded before dispatch, as entries are, so an exit that reaches the
         # broker is never invisible afterwards.
         row = store.record_order(
@@ -1284,24 +1590,41 @@ def _exit_legs(
             },
         )
         if row is None:
-            # The opposite decision to an entry, and deliberately so. An entry
-            # that cannot be recorded is not placed, because the cost of
-            # refusing is one leg not opened. An exit that cannot be recorded
-            # is placed anyway, because the cost of refusing is a position that
-            # stays open with a database outage between it and every attempt to
-            # close it. Getting flat wins; the audit row is what is lost.
+            # An exit without a durable intent cannot be sent safely: if its
+            # reply is lost and the fallback event also fails, recovery could
+            # send the same covering exit again. Keep the position managed and
+            # make a later stop retry after persistence is restored.
             _emit(
                 strategy["id"],
                 user_id,
-                "leg_exit_placed",
+                "exit_order_unrecorded",
                 (
-                    f"Exit for leg {leg['leg_id']} is being placed without an order row: "
-                    "it could not be written"
+                    f"Exit for leg {leg['leg_id']} was not placed because its order "
+                    "intent could not be written"
                 ),
                 run_id=run_id,
                 leg_id=leg["leg_id"],
                 severity="critical",
             )
+            claim_token = (
+                leg.get("claim_token")
+                if exit_owner == "superseded"
+                else leg.get("exit_claim_token")
+            )
+            if exit_owner == "superseded":
+                state.release_superseded_exit(run_id, leg["leg_id"], claim_token)
+            else:
+                state.release_leg_exit(run_id, leg["leg_id"], claim_token)
+            outcomes.append(
+                {
+                    "leg_id": leg["leg_id"],
+                    "ok": False,
+                    "position_ref": leg.get("position_ref"),
+                    "exit_owner": exit_owner,
+                    "error": "Could not record the exit intent before placing it",
+                }
+            )
+            continue
 
         # See the note in _place_entries: the id survives the dispatch, the
         # instance may not.
@@ -1366,12 +1689,14 @@ def _exit_legs(
                 continue
             exit_claim_id = row_id
 
-        result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+        result = order_dispatch.dispatch_order(
+            mode=mode, api_key=api_key, order=order, intent="exit"
+        )
 
         if row_id is not None:
             _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])
 
-        if not result.ok:
+        if result.rejected:
             # Release the claim so a later attempt is not mistaken for a
             # duplicate and skipped for the rest of the session.
             if exit_owner == "superseded":
@@ -1388,19 +1713,39 @@ def _exit_legs(
             else:
                 state.release_leg_exit(run_id, leg["leg_id"], exit_claim_id)
 
-        _emit(
-            strategy["id"],
-            user_id,
-            "leg_exit_placed" if result.ok else "leg_exit_rejected",
-            (
-                f"Exit {action} {quantity} {leg['symbol']} placed ({kind})"
-                if result.ok
-                else f"Exit rejected on leg {leg['leg_id']}: {result.error}"
-            ),
-            run_id=run_id,
-            leg_id=leg["leg_id"],
-            severity="info" if result.ok else "critical",
-        )
+        if not result.unknown or row_id is None:
+            _emit(
+                strategy["id"],
+                user_id,
+                (
+                    "order_outcome_unknown"
+                    if result.unknown
+                    else "leg_exit_placed" if result.ok else "leg_exit_rejected"
+                ),
+                (
+                    f"Exit {action} {quantity} {leg['symbol']} placed ({kind})"
+                    if result.ok
+                    else (
+                        f"Exit outcome unknown on leg {leg['leg_id']}: {result.error}"
+                        if result.unknown
+                        else f"Exit rejected on leg {leg['leg_id']}: {result.error}"
+                    )
+                ),
+                run_id=run_id,
+                leg_id=leg["leg_id"],
+                severity="info" if result.ok else "critical",
+                payload=(
+                    {
+                        "version": 1,
+                        "order_id": None,
+                        "run_id": run_id,
+                        "leg_id": leg["leg_id"],
+                        "position_ref": leg.get("position_ref"),
+                    }
+                    if result.unknown and row_id is None
+                    else None
+                ),
+            )
 
         if result.ok and row_id is not None:
             # The accepted acknowledgement and its audit event must precede a
@@ -1414,13 +1759,14 @@ def _exit_legs(
             {
                 "leg_id": leg["leg_id"],
                 "ok": result.ok,
+                "unknown": result.unknown,
                 "error": result.error,
                 "position_ref": leg.get("position_ref"),
                 "exit_owner": exit_owner,
             }
         )
 
-    return outcomes + unfilled
+    return blocked_exits + outcomes + unfilled
 
 
 def _cancel_and_reconcile_working_entries(
@@ -1703,6 +2049,36 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
 
     still_held = _run_requires_management(snapshot)
 
+    unresolved = [
+        row for row in store.list_orders(run_id) if str(row.get("status") or "").lower() == "unknown"
+    ]
+    unknown_events = store.list_order_unknown_events(run_id)
+    if unknown_events is None:
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "Unknown order evidence could not be checked; reconcile before any retry",
+            "exits": exits,
+        }
+    rowless_unknown = [
+        event
+        for event in unknown_events
+        if isinstance(event.get("payload"), dict)
+        and event["payload"].get("version") == 1
+        and event["payload"].get("order_id") is None
+    ]
+    if unresolved or rowless_unknown:
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": (
+                f"{len(unresolved) + len(rowless_unknown)} order outcome(s) remain unknown. "
+                "Reconcile broker orders "
+                "and positions before retrying the uncertain entry or covering exit."
+            ),
+            "exits": exits,
+        }
+
     # A run whose exits the broker refused is still holding those positions.
     # Finalising here would write stopped_at, release the strategy, drop the
     # live state and unsubscribe the prices, so the position would sit open for
@@ -1949,6 +2325,15 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         return False
 
     try:
+        if reason == "tick_stale":
+            _emit(
+                strategy_id,
+                user_id,
+                "stale_feed_stop",
+                "Run stopped because a subscribed market-data feed became stale",
+                run_id=run_id,
+                severity="critical",
+            )
         _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
         # The final figures, forced past the throttle: without it the page is
         # left frozen one tick short of the truth for the rest of the day.
@@ -1984,6 +2369,50 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
 # ---------------------------------------------------------------------------
 
 
+def handle_tick_source_event(event: Any) -> None:
+    """Stop every run subscribed to a symbol that has become terminally stale.
+
+    The feed emits one source transition per symbol. The durable run-finalise
+    compare-and-set remains the exactly-once boundary, so duplicate callbacks
+    or multiple stale legs cannot create duplicate material stop events.
+    """
+    from services.strategy_module.tick_feed import STALE
+
+    symbol = str(getattr(event, "symbol", "") or "")
+    exchange = str(getattr(event, "exchange", "") or "").upper()
+    if getattr(event, "source", None) != STALE or not symbol or not exchange:
+        return
+
+    for run_id in state.active_run_ids():
+        try:
+            snapshot = state.get_run_state(run_id)
+            if snapshot is None:
+                continue
+            affected = any(
+                str(leg.get("symbol") or "") == symbol
+                and str(leg.get("exchange") or "").upper() == exchange
+                for leg in (snapshot.get("legs") or {}).values()
+            )
+            if not affected:
+                continue
+            run_row = store.get_run(run_id)
+            if run_row is None or run_row.stopped_at is not None:
+                continue
+            strategy = store.get_strategy_unscoped(int(run_row.strategy_id))
+            if strategy is None:
+                logger.error(
+                    "Could not stop stale run %s: strategy %s is unavailable",
+                    run_id,
+                    run_row.strategy_id,
+                )
+                continue
+            stop_run(run_id, str(strategy.user_id), reason="tick_stale")
+        except Exception:
+            # One affected run must not prevent every other run on the same
+            # stale symbol from being stopped.
+            logger.exception("Could not stop run %s after stale market data", run_id)
+
+
 def process_tick(symbol: str, exchange: str, ltp: float) -> None:
     """Evaluate every run holding this instrument against one price.
 
@@ -2012,7 +2441,90 @@ def _daily_loss_limit(strategy: dict[str, Any]) -> float | None:
     return limit_value if limit_value > 0 else None
 
 
-def _session_banked_pnl(strategy: dict[str, Any], run_id: int) -> float | None:
+def strategy_session_entry_loss_reason(
+    strategy: dict[str, Any], user_id: str, mode: str, broker: str
+) -> str | None:
+    """Return a refusal for a spent or unreconciled strategy session budget.
+
+    The completed result comes from durable runs; the currently open run uses
+    its in-memory realized and mark-to-market values. Caller holds the account
+    admission lease for the final pre-dispatch check, never a run-state lock.
+    """
+    limit = _daily_loss_limit(strategy)
+    if limit is None:
+        return None
+
+    unavailable = "Strategy session P&L is unavailable; new entries are paused"
+    if mode == "live" and not broker:
+        return unavailable
+    execution_broker = "sandbox" if mode == "sandbox" else broker.lower()
+    since = session.session_started_at().astimezone(UTC).replace(tzinfo=None)
+    try:
+        runs = store.list_user_runs(
+            user_id,
+            limit=501,
+            since=since,
+            mode=mode,
+            broker=execution_broker,
+            strategy_id=int(strategy["id"]),
+        )
+        if runs is None or len(runs) >= 501:
+            return unavailable
+        total = Decimal("0")
+        realized_by_run: dict[int, Decimal] = {}
+        for run in runs:
+            if run.get("mode") != mode or int(run["strategy_id"]) != int(strategy["id"]):
+                return unavailable
+            if str(run.get("broker") or "").lower() != execution_broker:
+                return unavailable
+            started = datetime.fromisoformat(run["started_at"])
+            started_utc = (
+                started.astimezone(UTC).replace(tzinfo=None)
+                if started.tzinfo is not None
+                else started
+            )
+            if started_utc < since:
+                # A run spanning a session reset cannot be allocated to one
+                # day's budget without reconstructing its fills by time.
+                return unavailable
+            if run.get("stopped_at") is None:
+                snapshot = state.get_run_state(int(run["id"]))
+                if snapshot is None:
+                    return unavailable
+                realized = Decimal(str(snapshot["pnl_realized"]))
+                unrealized = Decimal(str(snapshot["pnl_unrealized"]))
+                if not realized.is_finite() or not unrealized.is_finite():
+                    return unavailable
+                realized_by_run[int(run["id"])] = realized
+                total += realized + unrealized
+            else:
+                realized = Decimal(str(run["pnl_realized"]))
+                if not realized.is_finite():
+                    return unavailable
+                realized_by_run[int(run["id"])] = realized
+                total += realized
+        if not store.filled_orders_have_usable_evidence(
+            [int(run["id"]) for run in runs],
+            completed_run_ids=[int(run["id"]) for run in runs if run.get("stopped_at")],
+            run_realized=realized_by_run,
+        ):
+            return unavailable
+        if total <= -Decimal(str(limit)):
+            return (
+                f"Daily loss limit reached: the session is down {abs(total):.2f} "
+                f"against a limit of {limit:.2f}"
+            )
+        return None
+    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+        return unavailable
+    except Exception:
+        logger.exception("Could not reconcile session P&L for strategy %s", strategy.get("id"))
+        return unavailable
+
+
+def _session_banked_pnl(
+    strategy: dict[str, Any], run_id: int, mode: str, broker: str
+) -> float | None:
     """What earlier runs banked this session, read outside the run lock.
 
     This is the only part of the daily-loss check that can touch the database,
@@ -2027,8 +2539,14 @@ def _session_banked_pnl(strategy: dict[str, Any], run_id: int) -> float | None:
     """
     if _daily_loss_limit(strategy) is None:
         return None
+    if mode == "live" and not broker:
+        return None
     return store.realized_pnl_since(
-        strategy["id"], session.session_started_at(), exclude_run_id=run_id
+        strategy["id"],
+        session.session_started_at(),
+        exclude_run_id=run_id,
+        mode=mode,
+        broker="sandbox" if mode == "sandbox" else broker,
     )
 
 
@@ -2046,8 +2564,10 @@ def _daily_loss_breached(
     Pure arithmetic on values already in memory. Safe to call under the lock.
     """
     limit_value = _daily_loss_limit(strategy)
-    if limit_value is None or banked is None:
+    if limit_value is None:
         return None
+    if banked is None:
+        return "Daily loss P&L is unavailable; the run must stop until it can be reconciled"
 
     live = float(run.get("pnl_total") or 0.0)
     day_total = banked + live
@@ -2083,7 +2603,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     # miss; a query held under the run lock stalls the hub, and a greenlet
     # waiting on that lock cannot yield. None when the strategy has no daily
     # limit, in which case no read happens at all.
-    banked_pnl = _session_banked_pnl(strategy, run_id)
+    banked_pnl = _session_banked_pnl(strategy, run_id, run_mode, str(run_row.broker or ""))
 
     # Everything inside this block is in-memory arithmetic. No order is placed,
     # no broker is called, nothing is emitted, and nothing reaches the database.
@@ -2151,38 +2671,22 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
         # started a fourth. overall_sl_mtm cannot express it: that one is reset
         # every time a run opens, which for a signal or scheduled strategy is
         # several times a day.
-        day_loss_reason = _daily_loss_breached(strategy, banked_pnl, run)
-        if day_loss_reason is not None:
-            stop_reason = "daily_loss_limit"
-            events.append(
-                (
-                    "overall_sl_hit",
-                    day_loss_reason,
-                    {"severity": "critical"},
-                )
-            )
-        elif aggregate.breached and aggregate.reason in _STOP_REASON_FOR_REASON:
-            stop_reason = _STOP_REASON_FOR_REASON[aggregate.reason]
-            if stop_reason == "overall_sl":
-                threshold = -abs(float(strategy["overall_sl_mtm"]))
-            elif stop_reason == "overall_target":
-                threshold = float(strategy["overall_target_mtm"])
-            else:
-                # A lock-profit breach is judged against the ratcheted floor
-                # returned by this exact aggregate evaluation, not merely the
-                # strategy's configured starting floor.
-                threshold = float(aggregate.lock_floor)
-            breach_payload = {
+        def breach_snapshot(reason: str, threshold: float) -> dict[str, Any]:
+            snapshot = {
                 "trigger_total": round(float(aggregate.total_pnl), 2),
-                "reason": stop_reason,
+                "reason": reason,
                 "threshold": round(threshold, 2),
+                "recorded_at": datetime.now(UTC).isoformat(),
+                # The three-argument tick callback does not carry a native
+                # timestamp or order book. Unknown is more honest than arrival
+                # time being presented as the broker's trade time.
+                "native_quote_at": None,
+                "quote_age_seconds": None,
                 "triggering_tick": {
                     "symbol": symbol,
                     "exchange": exchange,
                     "ltp": float(ltp),
                 },
-                # This is the exact latest-known mark set present during the
-                # decision. It deliberately carries no invented timestamps.
                 "legs": [
                     {
                         "symbol": str(leg.get("symbol") or ""),
@@ -2197,6 +2701,39 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                     if leg.get("status") == "open" or leg.get("realized_pnl")
                 ],
             }
+            if reason == "daily_loss_limit":
+                snapshot.update(
+                    banked_session_pnl=round(float(banked_pnl or 0.0), 2),
+                    session_total=round(float(banked_pnl or 0.0) + float(aggregate.total_pnl), 2),
+                    session_threshold=round(-float(_daily_loss_limit(strategy) or 0), 2),
+                )
+            return snapshot
+
+        day_loss_reason = _daily_loss_breached(strategy, banked_pnl, run)
+        if day_loss_reason is not None:
+            stop_reason = "daily_loss_limit"
+            day_limit = _daily_loss_limit(strategy)
+            events.append(
+                (
+                    "overall_sl_hit",
+                    day_loss_reason,
+                    {"severity": "critical", "payload": breach_snapshot(
+                        stop_reason, -float(day_limit or 0) - float(banked_pnl or 0)
+                    )},
+                )
+            )
+        elif aggregate.breached and aggregate.reason in _STOP_REASON_FOR_REASON:
+            stop_reason = _STOP_REASON_FOR_REASON[aggregate.reason]
+            if stop_reason == "overall_sl":
+                threshold = -abs(float(strategy["overall_sl_mtm"]))
+            elif stop_reason == "overall_target":
+                threshold = float(strategy["overall_target_mtm"])
+            else:
+                # A lock-profit breach is judged against the ratcheted floor
+                # returned by this exact aggregate evaluation, not merely the
+                # strategy's configured starting floor.
+                threshold = float(aggregate.lock_floor)
+            breach_payload = breach_snapshot(stop_reason, threshold)
             events.append(
                 (
                     {

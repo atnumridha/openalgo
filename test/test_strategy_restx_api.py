@@ -178,6 +178,15 @@ def post(client, path, **body):
     return client.post(f"/strategy/{path}", json=body)
 
 
+def test_session_automation_controls_are_not_api_key_routes(client, engine):
+    sid, _ = _make()
+    for path in (f"api/strategies/{sid}/automation/enable",
+                 f"api/strategies/{sid}/automation/disable",
+                 "api/automation/strategies/enable-all-sandbox"):
+        assert post(client, path).status_code == 404
+    assert engine.calls == []
+
+
 def _every_route(sid):
     """Every route with a body that should succeed on a running strategy."""
     return [
@@ -426,11 +435,7 @@ def test_restx_close_all_event_matches_the_browser_intent_contract(client, engin
     assert response.status_code == 200
     assert response.get_json()["stop_pending"] is True
 
-    event = next(
-        event
-        for event in store.list_events(sid)
-        if event["kind"] == "close_all_manual"
-    )
+    event = next(event for event in store.list_events(sid) if event["kind"] == "close_all_manual")
     assert event["message"] == "Operator requested closure of all held legs"
     assert "closed" not in event["message"].lower()
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
@@ -527,6 +532,23 @@ def test_runs_orders_and_events_are_scoped_to_the_strategy(client):
 
     events = post(client, "events", strategy_id=sid).get_json()["data"]
     assert [e["message"] for e in events] == ["mine"]
+
+
+@pytest.mark.parametrize(
+    "account_kind",
+    (
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
+    ),
+)
+def test_strategy_events_filter_refuses_account_only_authorization_events(client, account_kind):
+    sid, _token = _make()
+
+    response = post(client, "events", strategy_id=sid, kind=account_kind)
+
+    assert response.status_code == 400
+    assert response.get_json()["status"] == "error"
 
 
 def test_a_foreign_run_id_filter_leaks_nothing(client):

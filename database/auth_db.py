@@ -558,6 +558,12 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         db_session.add(auth_obj)
     db_session.commit()
 
+    # Keep the connection-scoped routing record in step with this successful
+    # broker login/logout. Otherwise a refreshed Kotak token can remain marked
+    # "expired" in broker_connections and every strategy correctly fails its
+    # exact-account safety gate despite the user having reauthenticated.
+    _sync_pinned_connection_session(name, broker, auth_token, bool(revoke))
+
     # CRITICAL: Clear ENTIRE auth_cache on token update to prevent stale token issues
     # This is necessary because get_auth_token_broker() uses a different cache key format
     # (sha256(api_key)_include_feed_token) than upsert_auth() uses (auth-{name}).
@@ -631,6 +637,50 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         logger.warning(f"Order-update adapter lifecycle failed for {name}/{broker}: {e}")
 
     return auth_obj.id
+
+
+def _sync_pinned_connection_session(name, broker, auth_token, revoked):
+    """Update only the API key's exact, non-revoked broker connection status.
+
+    Older installations can lack the connection tables/columns, so this is a
+    best-effort compatibility sync. It never creates or guesses a connection;
+    the strategy entry gate still requires the explicit API-key pin.
+    """
+    try:
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        if "broker_connections" not in inspector.get_table_names() or "api_keys" not in inspector.get_table_names():
+            return
+        api_key_columns = {column["name"] for column in inspector.get_columns("api_keys")}
+        connection_columns = {column["name"] for column in inspector.get_columns("broker_connections")}
+        if not {"broker_connection_id", "user_id"}.issubset(api_key_columns):
+            return
+        if not {"id", "user_id", "broker", "status", "is_revoked"}.issubset(connection_columns):
+            return
+
+        connected = bool(auth_token) and not revoked
+        status = "authenticated" if connected else "disconnected"
+        fields = "status=:status"
+        if connected and "last_verified_at" in connection_columns:
+            fields += ", last_verified_at=CURRENT_TIMESTAMP"
+        if "updated_at" in connection_columns:
+            fields += ", updated_at=CURRENT_TIMESTAMP"
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"UPDATE broker_connections SET {fields} "
+                    "WHERE id=(SELECT ak.broker_connection_id FROM api_keys ak "
+                    "WHERE ak.user_id=:owner) "
+                    "AND user_id=:owner AND lower(broker)=lower(:broker) AND is_revoked=0"
+                ),
+                {"owner": str(name), "broker": str(broker), "status": status},
+            )
+    except Exception:
+        # Auth persistence is authoritative. A schema mismatch must not break
+        # an otherwise successful interactive broker login; live automation
+        # remains fail-closed until the connection pin is reconciled.
+        logger.exception("Could not sync the pinned broker-connection session state")
 
 
 def get_auth_token(name, bypass_cache: bool = False):

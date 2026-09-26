@@ -15,7 +15,7 @@ export interface LogEntry {
 
 interface ExecutionLogPanelProps {
   logs: LogEntry[]
-  status: 'idle' | 'running' | 'success' | 'error'
+  status: 'idle' | 'running' | 'success' | 'error' | 'collecting_history' | 'data_unavailable' | 'risk_blocked'
   onClose: () => void
 }
 
@@ -28,6 +28,11 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
         return <CheckCircle2 className="h-4 w-4 text-green-500" />
       case 'error':
         return <XCircle className="h-4 w-4 text-red-500" />
+      case 'risk_blocked':
+        return <XCircle className="h-4 w-4 text-red-500" />
+      case 'collecting_history':
+      case 'data_unavailable':
+        return <AlertCircle className="h-4 w-4 text-amber-500" />
       default:
         return <Terminal className="h-4 w-4 text-muted-foreground" />
     }
@@ -41,6 +46,12 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
         return 'Completed'
       case 'error':
         return 'Failed'
+      case 'collecting_history':
+        return 'Collecting history'
+      case 'data_unavailable':
+        return 'Data unavailable'
+      case 'risk_blocked':
+        return 'Risk blocked'
       default:
         return 'Ready'
     }
@@ -86,6 +97,8 @@ export function ExecutionLogPanel({ logs, status, onClose }: ExecutionLogPanelPr
               status === 'running' && 'bg-amber-500/10 text-amber-500',
               status === 'success' && 'bg-green-500/10 text-green-500',
               status === 'error' && 'bg-red-500/10 text-red-500',
+              status === 'risk_blocked' && 'bg-red-500/10 text-red-500',
+              (status === 'collecting_history' || status === 'data_unavailable') && 'bg-amber-500/10 text-amber-500',
               status === 'idle' && 'bg-muted text-muted-foreground'
             )}
           >

@@ -17,13 +17,17 @@ import { useSocketContext } from '@/components/socket/SocketProvider'
 import { normalizeExpiryCode } from '@/lib/strategyContracts'
 import { useAuthStore } from '@/stores/authStore'
 import type {
+  AutomationControlResult,
   BrokerOrder,
   BrokerPosition,
   BrokerStrategyContext,
   BrokerTrade,
+  BulkAutomationResult,
   Checkpoint,
+  CriticalAlert,
   LegPosition,
   LegState,
+  LiveAuthorizationStatus,
   Order,
   ReconciledBrokerOrder,
   ReconciledBrokerTrade,
@@ -35,6 +39,7 @@ import type {
   StrategyStatus,
   StrategySummary,
   StrategyUpdatePayload,
+  StarterPackInstallResult,
   WebhookEvent,
 } from '@/types/strategy_module'
 import { derivativeExchangeFor, type ExpiryRank, resolveExpiryRank } from '@/types/strategy_module'
@@ -53,10 +58,14 @@ export const strategyQueryKeys = {
   list: (filters: StrategyListFilters) => [...strategyQueryKeys.strategies(), filters] as const,
   strategy: (id: number) => [...strategyQueryKeys.strategies(), id] as const,
   runs: (id: number) => [...strategyQueryKeys.strategy(id), 'runs'] as const,
+  profitComparisons: (id: number) => [...strategyQueryKeys.strategy(id), 'profit-comparisons'] as const,
   orders: (id: number) => [...strategyQueryKeys.strategy(id), 'orders'] as const,
   events: (id: number) => [...strategyQueryKeys.strategy(id), 'events'] as const,
   webhookEvents: (id: number) => [...strategyQueryKeys.strategy(id), 'webhook-events'] as const,
   checkpoints: (id: number) => [...strategyQueryKeys.strategy(id), 'checkpoints'] as const,
+  liveAuthorization: () => [...strategyQueryKeys.all, 'automation', 'live-authorization'] as const,
+  criticalAlerts: () => [...strategyQueryKeys.all, 'automation', 'critical-alerts'] as const,
+  sandboxResetPreview: () => [...strategyQueryKeys.all, 'sandbox-reset', 'preview'] as const,
   // The broker's own books, narrowed to this strategy. Keyed separately from
   // the local order rows because they answer a different question: what the
   // broker says happened, rather than what the engine asked for.
@@ -108,6 +117,40 @@ export async function listStrategies(
   return response.data.data ?? []
 }
 
+export async function getLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.get<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`
+  )
+  return response.data.live_authorization
+}
+
+export async function getCriticalAlerts(): Promise<CriticalAlert[]> {
+  const response = await webClient.get<{ data: CriticalAlert[] }>(
+    `${BASE}/automation/critical-alerts`
+  )
+  return response.data.data ?? []
+}
+
+export async function grantLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.post<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`,
+    { confirm: true }
+  )
+  return response.data.live_authorization
+}
+
+export async function revokeLiveAuthorization(): Promise<LiveAuthorizationStatus> {
+  const response = await webClient.delete<{ live_authorization: LiveAuthorizationStatus }>(
+    `${BASE}/automation/live-authorization`
+  )
+  return response.data.live_authorization
+}
+
+export async function installStarterPack(): Promise<StarterPackInstallResult> {
+  const response = await webClient.post<StarterPackInstallResult>(`${BASE}/automation/starter-pack`)
+  return response.data
+}
+
 export async function getStrategy(id: number): Promise<Strategy> {
   const response = await webClient.get<{ data: Strategy }>(`${BASE}/strategies/${id}`)
   return response.data.data
@@ -137,6 +180,78 @@ export async function updateStrategy(
 
 export async function deleteStrategy(id: number): Promise<void> {
   await webClient.delete(`${BASE}/strategies/${id}`)
+}
+
+export async function enableStrategyAutomation(id: number): Promise<AutomationControlResult> {
+  const response = await webClient.post<{ data: AutomationControlResult }>(
+    `${BASE}/strategies/${id}/automation/enable`
+  )
+  return response.data.data
+}
+
+export async function disableStrategyAutomation(id: number): Promise<AutomationControlResult> {
+  const response = await webClient.post<{ data: AutomationControlResult }>(
+    `${BASE}/strategies/${id}/automation/disable`
+  )
+  return response.data.data
+}
+
+export async function enableAllSandboxStrategies(): Promise<BulkAutomationResult> {
+  const response = await webClient.post<{ data: BulkAutomationResult }>(
+    `${BASE}/automation/strategies/enable-all-sandbox`
+  )
+  return response.data.data
+}
+
+export async function startAllSandboxStrategies(): Promise<BulkAutomationResult> {
+  const response = await webClient.post<{ data: BulkAutomationResult }>(
+    `${BASE}/strategies/start-all-sandbox`
+  )
+  return response.data.data
+}
+
+export async function startAllLiveStrategies(confirmation: string): Promise<BulkAutomationResult> {
+  const response = await webClient.post<{ data: BulkAutomationResult }>(
+    `${BASE}/strategies/start-all-live`,
+    { confirmation }
+  )
+  return response.data.data
+}
+
+export interface SandboxResetPreview {
+  session_start_utc: string
+  session_end_utc: string
+  run_count: number
+  order_count: number
+  trade_count: number
+  realised_pnl: number
+  funds_before: number | null
+  funds_after: number | null
+  blockers: string[]
+  version: string
+}
+
+export interface SandboxResetResult {
+  audit_id: number | null
+  run_count: number
+  order_count: number
+  trade_count: number
+  realised_pnl: number
+  funds_after: number | null
+  already_done: boolean
+  version: string
+}
+
+export async function previewSandboxReset(): Promise<SandboxResetPreview> {
+  const response = await webClient.get<{ data: SandboxResetPreview }>(`${BASE}/sandbox-reset/preview`)
+  return response.data.data
+}
+
+export async function executeSandboxReset(version: string): Promise<SandboxResetResult> {
+  const response = await webClient.post<{ data: SandboxResetResult }>(`${BASE}/sandbox-reset`, {
+    version,
+  })
+  return response.data.data
 }
 
 export interface StartedRun {
@@ -230,6 +345,36 @@ export async function unlockWebhook(id: number): Promise<void> {
 
 export async function listRuns(id: number): Promise<Run[]> {
   const response = await webClient.get<{ data: Run[] }>(`${BASE}/strategies/${id}/runs`)
+  return response.data.data ?? []
+}
+
+export interface ProfitComparisonProfile {
+  status: string
+  simulated_realized_pnl: number | null
+  peak_profit: number
+  max_drawdown: number
+  trigger_mark_pnl: number | null
+  exit_fill_quality: string | null
+  missed_fill: boolean
+}
+
+export interface ProfitComparison {
+  run_id: number
+  position_ref: string
+  symbol: string
+  exchange: string
+  entry_at: string
+  entry_timestamp_source: string
+  risk_budget: number
+  last_observed_at: string | null
+  fees: number | null
+  profiles: Record<'baseline' | 'early' | 'room', ProfitComparisonProfile>
+}
+
+export async function listProfitComparisons(id: number): Promise<ProfitComparison[]> {
+  const response = await webClient.get<{ data: ProfitComparison[] }>(
+    `${BASE}/strategies/${id}/profit-comparisons`
+  )
   return response.data.data ?? []
 }
 

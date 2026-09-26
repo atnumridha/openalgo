@@ -35,7 +35,27 @@ Flask app from booting; the /whatsapp UI surfaces a clear install hint instead.
 
 from __future__ import annotations
 
+import collections
 import os
+import queue
+import re
+import tempfile
+import threading
+import time
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any
+
+from database.whatsapp_db import (
+    clear_session_blob,
+    get_bot_config,
+    load_session_blob,
+    log_command,
+    save_session_blob,
+    update_bot_config,
+)
+from utils.env_check import WHATSAPP_RUST_LOG_DEFAULT
+from utils.logging import get_logger
 
 # Quiet wars / whatsapp-rust / wacore log spam from WhatsApp's multi-device
 # protocol. These are not actionable for the operator and contain no
@@ -66,35 +86,22 @@ import os
 # Default policy: error for everything, off for the three noisy targets.
 # Set RUST_LOG in the shell/.env to override for diagnostics (setdefault
 # means an explicit operator-set value always wins).
-_RUST_LOG_DEFAULT = (
-    "error"
-    ",wacore::send=off"
-    ",whatsapp_rust::message=off"
-    ",wacore_libsignal::protocol::session_cipher=off"
-)
-os.environ.setdefault("RUST_LOG", _RUST_LOG_DEFAULT)
-
-import collections
-import queue
-import re
-import tempfile
-import threading
-import time
-from collections.abc import Callable
-from datetime import datetime
-from typing import Any
-
-from database.whatsapp_db import (
-    clear_session_blob,
-    get_bot_config,
-    load_session_blob,
-    log_command,
-    save_session_blob,
-    update_bot_config,
-)
-from utils.logging import get_logger
+os.environ.setdefault("RUST_LOG", WHATSAPP_RUST_LOG_DEFAULT)
 
 logger = get_logger(__name__)
+
+_WARS_LOG_LEVELS = frozenset({"off", "error", "warn", "info", "debug", "trace"})
+
+
+def _wars_log_level() -> str:
+    """Return the native-client log level, quiet by default.
+
+    whatsapp-rust can replay stale multi-device messages when restoring a
+    session. Those native warnings do not indicate send failure, but can flood
+    OpenAlgo's terminal. Operators can opt back into diagnostics explicitly.
+    """
+    value = os.getenv("WHATSAPP_RUST_LOG_LEVEL", "off").strip().lower()
+    return value if value in _WARS_LOG_LEVELS else "off"
 
 # wars supports E.164 digit strings as JIDs anywhere a "to" is accepted.
 # We still normalize internally so cached lookups are stable.
@@ -406,7 +413,7 @@ class WhatsAppBotService:
         finalized = False
         try:
             wars = _import_wars()
-            wa = wars.WhatsApp(temp_db_path)
+            wa = wars.WhatsApp(temp_db_path, log_level=_wars_log_level())
             self._pair_wa = wa
             logger.info("WhatsApp pair: temp wars client created, registering handlers")
 
@@ -644,7 +651,7 @@ class WhatsAppBotService:
         wars = None
         try:
             wars = _import_wars()
-            wa = wars.WhatsApp.from_bytes(blob)
+            wa = wars.WhatsApp.from_bytes(blob, log_level=_wars_log_level())
             self._register_handlers(wa)
             try:
                 wa.connect()

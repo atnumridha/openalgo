@@ -120,3 +120,11 @@ def test_a_quantity_is_never_divided():
     data.setLongValues(SCRIP_INDEX["VOLUME"], 1500000)
 
     assert data.prepareData()["v"] == "1500000"
+
+
+def test_adapter_uses_native_trade_time_without_fabricating_one():
+    import websocket_proxy  # noqa: F401 - load adapter registry before direct adapter import
+    from broker.kotak.streaming.kotak_adapter import _native_trade_timestamp
+
+    assert _native_trade_timestamp({"ltt": "25/09/2026 12:15:00"}) == "25/09/2026 12:15:00"
+    assert _native_trade_timestamp({"timestamp": 1790318700000}) is None

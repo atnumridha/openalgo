@@ -11,17 +11,141 @@ on the loop would test the sleep, not the write.
 """
 
 import time
+from datetime import datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import checkpoint, order_events, recovery, state
+from services.strategy_module import (
+    checkpoint,
+    order_events,
+    portfolio_governor,
+    recovery,
+    state,
+)
+from services.strategy_module.portfolio_governor import EntryFacts, GovernorPolicy
 
 USER = "recovery_test_user"
 CE = "NIFTY28MAY2624000CE"
 PE = "NIFTY28MAY2624000PE"
+
+
+def test_automation_flatness_rejects_foreign_owner():
+    sid = _strategy()
+
+    flat, error = recovery.verify_automation_flatness(sid, "somebody-else")
+
+    assert not flat and error
+
+
+def test_automation_flatness_confirms_exact_durable_round_trip_without_mutation():
+    sid = _strategy()
+    rid = _run(sid)
+    _order(rid, position_ref="position-a", broker_order_id="entry-a", filled_qty=75)
+    _order(
+        rid,
+        kind="exit_close_all",
+        action="BUY",
+        position_ref="position-a",
+        broker_order_id="exit-a",
+        filled_qty=75,
+    )
+    store.finish_run_and_release_strategy(rid, sid, "manual")
+    before = store.list_orders(rid)
+
+    flat, error = recovery.verify_automation_flatness(sid, USER)
+
+    assert flat and error is None
+    assert store.list_orders(rid) == before
+    assert state.get_run_state(rid) is None
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        "open_run",
+        "residual",
+        "working_stopped_order",
+        "rowless_unknown",
+        "legacy_ack",
+        "missing_broker_id",
+        "wrong_exit_side",
+        "excess_exit",
+        "malformed_action",
+        "checkpoint_only",
+        "unmatched_checkpoint",
+    ],
+)
+def test_automation_flatness_never_trusts_stopped_at_over_uncertain_evidence(evidence):
+    sid = _strategy()
+    rid = _run(sid)
+    entry_id = _order(rid, position_ref="position-a", broker_order_id="entry-a", filled_qty=75)
+    if evidence != "residual":
+        _order(
+            rid,
+            kind="exit_close_all",
+            action="SELL" if evidence == "wrong_exit_side" else "BUY",
+            position_ref="position-a",
+            broker_order_id="exit-a",
+            filled_qty=75,
+        )
+    if evidence == "working_stopped_order":
+        _order(rid, status="open", position_ref="pending-position", broker_order_id="working-a")
+    elif evidence == "rowless_unknown":
+        store.record_event(
+            sid,
+            USER,
+            "order_outcome_unknown",
+            "unknown delivery",
+            run_id=rid,
+            payload={"version": 1, "order_id": None},
+        )
+    elif evidence == "legacy_ack":
+        store.record_event(sid, USER, "order_ack_unrecorded", "legacy accepted order", run_id=rid)
+    elif evidence == "missing_broker_id":
+        store.get_order(entry_id).broker_order_id = None
+        store.db_session.commit()
+    elif evidence == "malformed_action":
+        store.get_order(entry_id).action = "MALFORMED"
+        store.db_session.commit()
+    elif evidence == "excess_exit":
+        _order(
+            rid,
+            kind="exit_close_all",
+            action="BUY",
+            position_ref="position-a",
+            broker_order_id="exit-extra",
+            filled_qty=75,
+        )
+    elif evidence in {"checkpoint_only", "unmatched_checkpoint"}:
+        store.write_checkpoint(
+            rid,
+            {
+                "leg_state": {
+                    "2": _cp_leg(
+                        2,
+                        entry_order_id=999999,
+                        entry_status="complete",
+                        status="closed",
+                        exit_avg=90,
+                        position_ref="unmatched-position",
+                    ),
+                }
+            },
+        )
+        if evidence == "checkpoint_only":
+            store.db_session.query(store.SmStrategyOrder).filter_by(run_id=rid).delete()
+            store.db_session.commit()
+    if evidence != "open_run":
+        store.finish_run_and_release_strategy(rid, sid, "recovery_failed")
+
+    flat, error = recovery.verify_automation_flatness(sid, USER)
+
+    assert not flat and error
 
 
 def _leg(leg_id=1, position="S", sl_pts=20):
@@ -57,6 +181,8 @@ def clean_slate():
     store.init_db()
 
     def purge():
+        portfolio_governor._entry_reservations.clear()
+        portfolio_governor._reservation_cash_baselines.clear()
         for run_id in state.active_run_ids():
             state.clear_run_state(run_id)
         for row in store.list_strategies(USER):
@@ -86,8 +212,8 @@ def _strategy(name="Recovery test", legs=None, **overrides):
     return created["id"]
 
 
-def _run(strategy_id):
-    run = store.create_run(strategy_id, "sandbox", "sandbox")
+def _run(strategy_id, *, mode="sandbox"):
+    run = store.create_run(strategy_id, mode, mode)
     assert run is not None
     run_id = run.id
     store.set_strategy_status(strategy_id, "running", run_id)
@@ -279,6 +405,74 @@ def test_a_run_with_no_checkpoint_recovers_from_its_orders_alone():
     assert leg["sl_pts"] == 20
 
 
+def test_restart_reports_live_filled_position_without_verified_broker_stop():
+    sid = _strategy()
+    run_id = _run(sid, mode="live")
+    _order(
+        run_id, 1, "entry", action="SELL", status="complete",
+        avg=100.0, filled_qty=25, qty=75, position_ref="live-held",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert store.get_run(run_id).stopped_at is None
+    events = store.list_events(sid, kind="protective_stop_uncovered")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+    assert "Kotak protective stop" in events[0]["message"]
+
+
+def test_restart_counts_live_and_superseded_filled_owners_as_uncovered():
+    sid = _strategy()
+    run_id = _run(sid, mode="live")
+    _order(
+        run_id, kind="entry", action="BUY", status="complete", avg=100.0,
+        position_ref="outgoing-owner",
+    )
+    _order(
+        run_id, kind="entry", action="SELL", status="complete", avg=101.0,
+        position_ref="replacement-owner",
+    )
+
+    from services.strategy_module import engine, live_protection
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-kotak-key"),
+        patch.object(live_protection, "protect_entry_fill", return_value=None),
+        patch.object(
+            live_protection,
+            "verify_recovered_run",
+            return_value=["outgoing owner uncovered", "replacement owner uncovered"],
+        ),
+    ):
+        assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["superseded"]["qty"] == 75
+    events = store.list_events(sid, kind="protective_stop_uncovered")
+    assert len(events) == 1
+    assert "2 live position(s)" in events[0]["message"]
+
+
+def test_restart_reports_legacy_working_partial_fill_as_uncovered():
+    sid = _strategy()
+    run_id = _run(sid, mode="live")
+    _order(
+        run_id, kind="entry", action="SELL", qty=75, status="open",
+        filled_qty=25, avg=100.0,
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["qty"] == 25
+    events = store.list_events(sid, kind="protective_stop_uncovered")
+    assert len(events) == 1
+    assert events[0]["severity"] == "critical"
+
+
 def test_restart_binds_an_accepted_ack_event_to_its_exact_pending_entry_row():
     sid = _strategy()
     run_id = _run(sid)
@@ -320,6 +514,490 @@ def test_restart_binds_an_accepted_ack_event_to_its_exact_pending_entry_row():
     assert live["legs"]["1"]["entry_order_id"] == row_id
     assert live["legs"]["1"]["entry_status"] == "open"
     assert store.get_run(run_id).stopped_at is None
+
+
+def test_restart_inspects_broker_books_but_keeps_keyless_unknown_entry_reserved():
+    from services.strategy_module import engine
+
+    sid = _strategy()
+    run_id = _run(sid)
+    row_id = _order(
+        run_id,
+        1,
+        "entry",
+        status="unknown",
+        position_ref="lost-entry-reply",
+    )
+    # A same-symbol order is not an exact ownership key. Other surfaces can
+    # place identical orders and the current adapter forwards no unique tag.
+    lookalike = {
+        "orderid": "OTHER-ORDER",
+        "symbol": CE,
+        "exchange": "NFO",
+        "action": "SELL",
+        "quantity": 75,
+        "order_status": "complete",
+    }
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch(
+            "services.sandbox_service.sandbox_get_orderbook",
+            return_value=(
+                True,
+                {"status": "success", "data": {"orders": [lookalike], "statistics": {}}},
+                200,
+            ),
+        ) as book,
+        patch(
+            "services.sandbox_service.sandbox_get_positions",
+            return_value=(True, {"status": "success", "data": []}, 200),
+        ) as positions,
+    ):
+        recovered = recovery.recover_run(run_id)
+
+    assert book.call_count == 1
+    assert positions.call_count == 1
+    assert recovered.ok is True
+    assert store.get_order(row_id).status == "unknown"
+    assert store.get_order(row_id).broker_order_id is None
+    assert store.has_unresolved_order_outcomes(USER, "sandbox") is True
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_status"] == "pending"
+    assert store.get_run(run_id).stopped_at is None
+    events = store.list_events(sid, kind="order_outcome_unknown")
+    assert any("operator" in event["message"].lower() for event in events)
+
+
+def test_broker_snapshot_failure_does_not_finalize_unknown_exposure():
+    from services.strategy_module import engine, order_dispatch
+
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", status="unknown", position_ref="snapshot-failed")
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch.object(order_dispatch, "fetch_account_snapshot", side_effect=RuntimeError("down")),
+    ):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id)["legs"]["1"]["entry_status"] == "pending"
+    assert store.has_unresolved_order_outcomes(USER, "sandbox") is True
+
+
+def test_restart_keeps_keyless_unknown_exit_claim_and_prevents_cover_retry():
+    from services.strategy_module import engine
+
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        status="complete",
+        avg=100,
+        position_ref="held-position",
+        broker_order_id="ENTRY-1",
+    )
+    exit_id = _order(
+        run_id,
+        1,
+        "exit_sl",
+        action="BUY",
+        status="unknown",
+        position_ref="held-position",
+    )
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch(
+            "services.sandbox_service.sandbox_get_orderbook",
+            return_value=(
+                True,
+                {"status": "success", "data": {"orders": [], "statistics": {}}},
+                200,
+            ),
+        ) as book,
+        patch(
+            "services.sandbox_service.sandbox_get_positions",
+            return_value=(True, {"status": "success", "data": []}, 200),
+        ) as positions,
+    ):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert book.call_count == 1
+    assert positions.call_count == 1
+    assert state.get_run_state(run_id)["legs"]["1"]["exit_order_id"] == exit_id
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        stopped = engine.stop_run(run_id, USER, reason="overall_sl")
+    assert stopped["stop_pending"] is True
+    assert "reconcil" in stopped["error"].lower()
+    assert dispatch.call_count == 0
+    assert store.get_order(exit_id).status == "unknown"
+    assert store.get_run(run_id).stopped_at is None
+
+
+def test_restart_folds_exact_broker_status_for_unknown_order_with_confirmed_id():
+    from services.strategy_module import engine
+
+    sid = _strategy()
+    run_id = _run(sid)
+    row_id = _order(
+        run_id,
+        1,
+        "entry",
+        status="unknown",
+        position_ref="confirmed-owner",
+        broker_order_id="CONFIRMED-1",
+    )
+    broker_order = {
+        "orderid": "CONFIRMED-1",
+        "symbol": CE,
+        "exchange": "NFO",
+        "action": "SELL",
+        "quantity": 75,
+        "order_status": "complete",
+        "filled_quantity": 75,
+        "average_price": 100,
+    }
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch(
+            "services.sandbox_service.sandbox_get_orderbook",
+            return_value=(
+                True,
+                {"status": "success", "data": {"orders": [broker_order], "statistics": {}}},
+                200,
+            ),
+        ),
+        patch(
+            "services.sandbox_service.sandbox_get_positions",
+            return_value=(True, {"status": "success", "data": []}, 200),
+        ),
+        patch(
+            "services.sandbox_service.sandbox_get_order_status",
+            return_value=(True, {"status": "success", "data": broker_order}, 200),
+        ) as status,
+    ):
+        recovered = recovery.recover_run(run_id)
+
+    assert status.call_count == 1
+    assert recovered.ok is True
+    assert store.get_order(row_id).status == "complete"
+    assert store.has_unresolved_order_outcomes(USER, "sandbox") is False
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_status"] == "complete"
+    assert leg["status"] == "open"
+
+
+def test_restart_keeps_confirmed_live_id_unknown_when_tradebook_has_no_exact_fill():
+    from services.strategy_module import engine
+
+    sid = _strategy()
+    run_id = _run(sid, mode="live")
+    row_id = _order(
+        run_id,
+        1,
+        "entry",
+        status="unknown",
+        position_ref="possibly-part-filled",
+        broker_order_id="LIVE-123",
+    )
+    book_order = {
+        "orderid": "LIVE-123",
+        "symbol": CE,
+        "exchange": "NFO",
+        "action": "SELL",
+        "quantity": 75,
+        "order_status": "cancelled",
+    }
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch("database.auth_db.get_auth_token_broker", return_value=("tok", "kotak")),
+        patch(
+            "services.orderbook_service.get_orderbook_with_auth",
+            return_value=(True, {"status": "success", "data": {
+                "orders": [book_order], "statistics": {},
+            }}, 200),
+        ),
+        patch(
+            "services.positionbook_service.get_positionbook_with_auth",
+            return_value=(True, {"status": "success", "data": []}, 200),
+        ),
+        patch(
+            "services.tradebook_service.get_tradebook_with_auth",
+            return_value=(True, {"status": "success", "data": [
+                {"orderid": "OTHER", "quantity": 75, "average_price": 100},
+            ]}, 200),
+        ),
+    ):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert store.get_order(row_id).status == "unknown"
+    assert store.has_unresolved_order_outcomes(USER, "live") is True
+    assert store.get_run(run_id).stopped_at is None
+
+
+def test_restart_can_retry_exit_only_after_durable_intent_is_available():
+    from services.strategy_module import engine
+    from services.strategy_module.order_dispatch import DispatchResult
+
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        status="complete",
+        avg=100,
+        position_ref="rowless-exit-owner",
+        broker_order_id="ENTRY-1",
+    )
+    assert recovery.recover_run(run_id).ok is True
+    with (
+        patch.object(store, "record_order", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+    ):
+        pending_stop = engine.stop_run(run_id, USER, reason="overall_sl")
+    assert pending_stop["stop_pending"] is True
+    assert dispatch.call_count == 0
+    assert not store.list_events(sid, kind="order_outcome_unknown")
+    assert store.list_events(sid, kind="exit_order_unrecorded")
+    state.clear_run_state(run_id)
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id) is not None
+    assert store.has_unresolved_order_outcomes(USER, "sandbox") is False
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-api-key"),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(ok=False, error="broker refused"),
+        ) as dispatch_after_recovery,
+    ):
+        retried = engine.stop_run(run_id, USER, reason="overall_sl")
+    assert retried["stop_pending"] is True
+    assert dispatch_after_recovery.call_count == 1
+    assert [order["status"] for order in store.list_orders(run_id)][-1] == "rejected"
+
+
+def test_recovered_unfilled_entry_reserves_exposure_before_broker_state_catches_up(
+    monkeypatch,
+):
+    """A restart must not erase a working entry from the portfolio governor."""
+    from database import auth_db
+
+    sid = _strategy(legs=[_leg(position="B", sl_pts=10)])
+    run_id = _run(sid, mode="live")
+    entry_order_id = _order(
+        run_id,
+        1,
+        "entry",
+        action="BUY",
+        status="open",
+        position_ref="working-before-restart",
+    )
+
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok is True
+    assert state.get_run_state(run_id)["legs"]["1"]["entry_order_id"] == entry_order_id
+
+    # Model a fresh process: recovery restored the run, but the old in-memory
+    # admission lease no longer exists and broker funds/positions are still
+    # showing their pre-order values.
+    portfolio_governor._entry_reservations.clear()
+    portfolio_governor._reservation_cash_baselines.clear()
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "kotak"))
+    monkeypatch.setattr(
+        portfolio_governor,
+        "_quote_price",
+        lambda _leg, _token, _broker: Decimal("100"),
+    )
+    monkeypatch.setattr(
+        portfolio_governor,
+        "build_entry_facts",
+        lambda *_args, **_kwargs: EntryFacts(
+            intent="entry",
+            mode="live",
+            available_cash=Decimal("100000"),
+            session_capital=Decimal("100000"),
+            open_cash_positions=0,
+            open_nifty_option_positions=0,
+            entry_cash_positions=0,
+            entry_nifty_option_positions=1,
+            entry_cash_risk=Decimal("0"),
+            entry_option_lot_risk=Decimal("750"),
+            entry_risk=Decimal("750"),
+            open_risk=Decimal("0"),
+            estimated_debit=Decimal("7500"),
+            minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"),
+            consecutive_stopped_runs=0,
+            has_option_entry=True,
+            broker_quantities=(("NFO", CE, Decimal("0")),),
+        ),
+    )
+    now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 23, 10, 0))
+    from database import market_calendar_db
+
+    monkeypatch.setattr(
+        market_calendar_db,
+        "get_effective_session_window",
+        lambda _day, _exchange: {
+            "start_ms": int(now.replace(hour=9, minute=15).timestamp() * 1000),
+            "end_ms": int(now.replace(hour=15, minute=30).timestamp() * 1000),
+        },
+    )
+
+    decision, admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [
+            {
+                "leg_id": 2,
+                "position": "B",
+                "symbol": PE,
+                "exchange": "NFO",
+                "segment": "options",
+                "underlying": "NIFTY",
+                "quantity": 75,
+                "lot_size": 75,
+                "sl_pts": 10,
+                "target_pts": 20,
+                "risk_unit": "points",
+            }
+        ],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert decision.allowed is False
+    assert decision.code == "position_limit", decision
+    assert decision.metrics["open_nifty_option_positions"] == 1
+    assert decision.metrics["open_risk"] == Decimal("750")
+    assert decision.metrics["estimated_debit"] == Decimal("15000")
+    assert admission is None
+
+
+def test_duplicate_recovered_working_entries_for_one_instrument_fail_closed(
+    monkeypatch,
+):
+    """One visible net fill cannot settle two indistinguishable entry orders."""
+    from database import auth_db
+
+    sid = _strategy(
+        name="Duplicate recovered entries",
+        legs=[_leg(1, position="B", sl_pts=10), _leg(2, position="B", sl_pts=10)],
+    )
+    run_id = _run(sid, mode="live")
+    for leg_id in (1, 2):
+        _order(
+            run_id,
+            leg_id,
+            "entry",
+            action="BUY",
+            status="open",
+            position_ref=f"duplicate-working-{leg_id}",
+        )
+
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok is True
+    assert {
+        state.get_run_state(run_id)["legs"][str(leg_id)]["entry_status"] for leg_id in (1, 2)
+    } == {"open"}
+
+    portfolio_governor._entry_reservations.clear()
+    portfolio_governor._reservation_cash_baselines.clear()
+    monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "kotak"))
+    monkeypatch.setattr(
+        portfolio_governor,
+        "_quote_price",
+        lambda _leg, _token, _broker: Decimal("100"),
+    )
+    visible = {"quantity": Decimal("0"), "cash": Decimal("100000"), "positions": 0}
+
+    def broker_facts(*_args, **_kwargs):
+        return EntryFacts(
+            intent="entry",
+            mode="live",
+            available_cash=visible["cash"],
+            open_cash_positions=0,
+            open_nifty_option_positions=visible["positions"],
+            entry_cash_positions=1,
+            entry_nifty_option_positions=0,
+            entry_cash_risk=Decimal("500"),
+            entry_option_lot_risk=Decimal("0"),
+            entry_risk=Decimal("500"),
+            open_risk=Decimal("0"),
+            estimated_debit=Decimal("10000"),
+            minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"),
+            consecutive_stopped_runs=0,
+            has_option_entry=False,
+            broker_quantities=(("NFO", CE, visible["quantity"]),),
+        )
+
+    monkeypatch.setattr(portfolio_governor, "build_entry_facts", broker_facts)
+    proposed_cash_leg = {
+        "leg_id": 3,
+        "position": "B",
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "segment": "cash",
+        "quantity": 50,
+        "lot_size": 1,
+        "sl_pts": 10,
+        "target_pts": 20,
+        "risk_unit": "points",
+    }
+    now = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 23, 10, 0))
+
+    before_fill, before_fill_admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [proposed_cash_leg],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert before_fill.allowed is False
+    assert before_fill.code == "risk_missing"
+    assert before_fill_admission is None
+
+    # Only one of the two same-symbol orders can be represented by this net
+    # broker quantity and cash movement. The other must remain conservatively
+    # accounted for; without exact order attribution, another entry is refused.
+    visible.update(quantity=Decimal("75"), cash=Decimal("92500"), positions=1)
+    after_one_fill, after_one_fill_admission = portfolio_governor.acquire_entry_admission(
+        USER,
+        store.get_strategy_unscoped(sid),
+        [proposed_cash_leg],
+        "api-key",
+        "live",
+        GovernorPolicy(),
+        now,
+    )
+
+    assert after_one_fill.allowed is False
+    assert after_one_fill.code == "risk_missing"
+    assert after_one_fill_admission is None
 
 
 def test_legacy_unstructured_ack_event_keeps_possible_exposure_open_and_reserved():

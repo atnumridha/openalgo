@@ -58,14 +58,21 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from database import strategy_module_db as store
 from services.strategy_module import state
+from services.strategy_module.lifecycle_events import record_and_notify
 from utils.db_sessions import remove_all_scoped_sessions
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from services.strategy_module.automation_control import ControlResult
 
 __all__ = [
     "RecoveredRun",
@@ -75,6 +82,8 @@ __all__ = [
     "order_is_working",
     "recover_all",
     "recover_run",
+    "recover_automation_controls",
+    "verify_automation_flatness",
 ]
 
 
@@ -137,7 +146,7 @@ _WORKING_STATUSES = frozenset(
 
 #: Statuses that still count as pending rather than as a live order at the
 #: exchange. Cosmetic only: both are "working".
-_PENDING_STATUSES = frozenset({"pending", "queued", "validation_pending", "transit"})
+_PENDING_STATUSES = frozenset({"pending", "unknown", "queued", "validation_pending", "transit"})
 
 
 def normalise_order_status(raw: Any) -> str:
@@ -245,6 +254,266 @@ class _ManagedRecoveryError(RuntimeError):
     """Persisted exposure exists but cannot be represented safely in memory."""
 
 
+def _safe_account_snapshot(mode: str, api_key: str) -> Any | None:
+    """A failed broker read must not turn possible exposure into a flat run."""
+    from services.strategy_module import order_dispatch
+
+    try:
+        return order_dispatch.fetch_account_snapshot(mode=mode, api_key=api_key)
+    except Exception:
+        logger.exception("Could not inspect account books for unknown order")
+        return None
+
+
+def verify_automation_flatness(strategy_id: int, user_id: str) -> tuple[bool, str | None]:
+    """Prove this owner's durable strategy history flat without placing orders.
+
+    A terminal run flag is necessary but insufficient: older recovery can
+    finish malformed runs. Read rows strictly (no helpers that turn read
+    failures into empty books), retain every uncertainty witness, and reuse
+    the existing recovery fold only after exact ownership and quantity checks.
+    Account snapshots cannot attribute positions to a strategy and are never
+    used to erase missing or ambiguous evidence here.
+    """
+    try:
+        with Session(store.engine) as session:
+            strategy = session.scalar(
+                select(store.SmStrategy).where(
+                    store.SmStrategy.id == strategy_id,
+                    store.SmStrategy.user_id == user_id,
+                )
+            )
+            if strategy is None:
+                return False, "Strategy not found"
+            if strategy.current_run_id is not None:
+                return False, "The strategy still owns an unresolved run"
+            config = {
+                str(leg.get("id") or leg.get("leg_id") or index): leg
+                for index, leg in enumerate(strategy.legs or [], start=1)
+                if isinstance(leg, dict)
+            }
+            runs = session.scalars(
+                select(store.SmStrategyRun)
+                .where(
+                    store.SmStrategyRun.strategy_id == strategy_id,
+                )
+                .order_by(store.SmStrategyRun.id)
+            ).all()
+            for run in runs:
+                if run.stopped_at is None:
+                    return False, f"Run {run.id} is not durably stopped"
+                orders = [
+                    store.order_to_dict(row)
+                    for row in session.scalars(
+                        select(store.SmStrategyOrder)
+                        .where(store.SmStrategyOrder.run_id == run.id)
+                        .order_by(store.SmStrategyOrder.id)
+                    )
+                ]
+                by_id = {order["id"]: order for order in orders}
+                witnesses = session.scalars(
+                    select(store.SmStrategyEvent).where(
+                        store.SmStrategyEvent.run_id == run.id,
+                        store.SmStrategyEvent.kind.in_(
+                            (
+                                "order_ack_unrecorded",
+                                "order_outcome_unknown",
+                                "exit_order_unrecorded",
+                            )
+                        ),
+                    )
+                ).all()
+                for event in witnesses:
+                    _verify_flat_witness(event, by_id, strategy_id, user_id)
+                _verify_flat_order_groups(orders)
+                for order in orders:
+                    broker_id = order.get("broker_order_id")
+                    if (
+                        broker_id
+                        and session.scalar(
+                            select(store.SmStrategyOrder.id)
+                            .where(
+                                store.SmStrategyOrder.broker_order_id == broker_id,
+                                store.SmStrategyOrder.id != order["id"],
+                            )
+                            .limit(1)
+                        )
+                        is not None
+                    ):
+                        raise ValueError(f"Order {order['id']} has ambiguous broker ownership")
+                checkpoint_row = session.scalar(
+                    select(store.SmStrategyCheckpoint)
+                    .where(
+                        store.SmStrategyCheckpoint.run_id == run.id,
+                    )
+                    .order_by(
+                        store.SmStrategyCheckpoint.ts.desc(), store.SmStrategyCheckpoint.id.desc()
+                    )
+                )
+                checkpoint = store.checkpoint_to_dict(checkpoint_row) if checkpoint_row else {}
+                _verify_flat_checkpoint(checkpoint, by_id)
+                rebuilt = _rebuild_state(
+                    run.id, strategy_id, orders, checkpoint, config, stopping=True
+                )
+                if any(
+                    _position_requires_management(leg)
+                    or leg.get("superseded")
+                    or leg.get("exit_order_id")
+                    for leg in rebuilt["legs"].values()
+                ):
+                    return False, f"Run {run.id} still has durable exposure"
+                live = state.get_run_state(run.id)
+                if live is not None:
+                    from services.strategy_module.engine import _run_requires_management
+
+                    if _run_requires_management(live):
+                        return False, f"Run {run.id} still has in-flight exposure"
+            if store.has_unresolved_order_outcomes(user_id, "sandbox"):
+                return False, "An account order outcome remains unresolved"
+        return True, None
+    except Exception as exc:
+        logger.warning("Cannot prove strategy %s flat: %s", strategy_id, exc)
+        return False, f"Durable flatness could not be confirmed: {exc}"
+
+
+def _verify_flat_witness(event, by_id: dict, strategy_id: int, user_id: str) -> None:
+    payload = event.payload
+    if (
+        event.strategy_id != strategy_id
+        or event.user_id != user_id
+        or not isinstance(payload, dict)
+        or payload.get("version") != 1
+        or type(payload.get("order_id")) is not int
+    ):
+        raise ValueError("An unmatched or rowless order witness remains unresolved")
+    order = by_id.get(payload["order_id"])
+    if (
+        order is None
+        or payload.get("run_id") != event.run_id
+        or payload.get("leg_id") != order["leg_id"]
+        or event.leg_id != order["leg_id"]
+    ):
+        raise ValueError("An order witness does not match its exact durable owner")
+    if order_is_working(order["status"]):
+        raise ValueError("A witnessed order remains pending or unknown")
+    if event.kind == "order_outcome_unknown":
+        # Exact terminal broker evidence may resolve a formerly unknown row;
+        # account-wide absence and a rowless event may not.
+        if not order.get("broker_order_id"):
+            raise ValueError("Unknown delivery has no exact terminal broker evidence")
+        return
+    accepted = payload.get("accepted")
+    if (
+        type(accepted) is not bool
+        or payload.get("status") != ("open" if accepted else "rejected")
+        or payload.get("broker_order_id") != order.get("broker_order_id")
+        or (accepted and not order.get("broker_order_id"))
+        or (not accepted and normalise_order_status(order["status"]) != "rejected")
+    ):
+        raise ValueError("A broker acknowledgement remains unmatched")
+
+
+def _verify_flat_order_groups(orders: list[dict]) -> None:
+    groups: dict[tuple, list[dict]] = {}
+    for order in orders:
+        if (
+            order.get("kind") not in store.ORDER_KINDS
+            or order.get("action") not in {"BUY", "SELL"}
+            or not order.get("symbol")
+            or not order.get("exchange")
+            or type(order.get("qty")) is not int
+            or order["qty"] <= 0
+        ):
+            raise ValueError("An order has malformed identity or quantity")
+        if order_is_working(order["status"]):
+            raise ValueError("A durable order is still working or unknown")
+        filled = order.get("filled_qty")
+        if filled is not None and (type(filled) is not int or not 0 <= filled <= order["qty"]):
+            raise ValueError("An order has malformed filled quantity")
+        if (order_is_filled(order["status"]) or filled) and not order.get("broker_order_id"):
+            raise ValueError("A fill has no exact broker order identity")
+        groups.setdefault((order["leg_id"], order.get("position_ref")), []).append(order)
+    for group in groups.values():
+        entries = [order for order in group if order["kind"] == "entry"]
+        if len(entries) != 1:
+            raise ValueError("Position entry ownership is missing or ambiguous")
+        entry = entries[0]
+        net = 0
+        for order in group:
+            if (order["symbol"], order["exchange"], order.get("product")) != (
+                entry["symbol"],
+                entry["exchange"],
+                entry.get("product"),
+            ):
+                raise ValueError("Position orders name different instruments or products")
+            if order is not entry and order["action"] == entry["action"]:
+                raise ValueError("A position exit has the entry side")
+            filled = order.get("filled_qty") or (
+                order["qty"] if order_is_filled(order["status"]) else 0
+            )
+            net += filled if order["action"] == "BUY" else -filled
+        if net:
+            raise ValueError("A durable position has residual or excess exit quantity")
+
+
+def _verify_flat_checkpoint(checkpoint: dict, by_id: dict) -> None:
+    legs = checkpoint.get("leg_state", {})
+    if not isinstance(legs, dict):
+        raise ValueError("Checkpoint legs are malformed")
+    for leg in legs.values():
+        if not isinstance(leg, dict):
+            raise ValueError("Checkpoint position is malformed")
+        for position in (leg, leg.get("superseded")):
+            if position is None:
+                continue
+            if not isinstance(position, dict):
+                raise ValueError("Checkpoint outgoing position is malformed")
+            entry = by_id.get(position.get("entry_order_id"))
+            if (
+                entry is None
+                or entry["kind"] != "entry"
+                or entry.get("position_ref") != position.get("position_ref")
+            ):
+                raise ValueError("Checkpoint exposure has no matching durable entry")
+            exit_id = position.get("exit_order_id")
+            if exit_id is not None and (
+                exit_id not in by_id
+                or by_id[exit_id]["kind"] == "entry"
+                or by_id[exit_id].get("position_ref") != position.get("position_ref")
+            ):
+                raise ValueError("Checkpoint exit has no matching durable owner")
+
+
+def recover_automation_controls(user_id: str | None = None) -> list[ControlResult]:
+    """Retry only durably closing controls; never re-arm a disabled strategy."""
+    from services.strategy_module.automation_control import disable_and_close
+
+    try:
+        with Session(store.engine) as session:
+            query = (
+                select(
+                    store.SmStrategy.id,
+                    store.SmStrategy.user_id,
+                    store.SmStrategy.automation_state,
+                    store.SmStrategy.automation_state_updated_at,
+                )
+                .where(
+                    store.SmStrategy.automation_state.in_(("closing", "close_failed")),
+                )
+                .order_by(store.SmStrategy.id)
+            )
+            if user_id is not None:
+                query = query.where(store.SmStrategy.user_id == user_id)
+            owners = session.execute(query).all()
+    except Exception:
+        logger.exception("Could not read pending automation controls; admission remains blocked")
+        return []
+    return [
+        disable_and_close(strategy_id, owner, expected_control_state=(control_state, changed_at))
+        for strategy_id, owner, control_state, changed_at in owners
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
@@ -273,7 +542,6 @@ def recover_all() -> dict[int, set[tuple[str, str]]]:
 
     if not run_ids:
         logger.info("Strategy recovery: no open run to recover")
-        return resumed
 
     failed = 0
     try:
@@ -283,6 +551,11 @@ def recover_all() -> dict[int, set[tuple[str, str]]]:
                 resumed[run_id] = set(result.symbols)
             elif result.finalised:
                 failed += 1
+        recover_automation_controls()
+        # A recovered control may have synchronously finished its run. Do not
+        # subscribe it again after the stop engine released its live state.
+        resumed = {run_id: symbols for run_id, symbols in resumed.items()
+                   if state.get_run_state(run_id) is not None}
     finally:
         # Startup runs outside any Flask app context, so teardown_appcontext
         # never fires for the sessions this bound.
@@ -374,6 +647,7 @@ def _recover_run(run_id: int) -> RecoveredRun:
     # it, and worker/session cleanup can then detach it before recovery reaches
     # the stop facts again.
     strategy_id = int(run_row.strategy_id)
+    run_mode = str(run_row.mode)
     stopped_at = run_row.stopped_at
     stop_requested_reason = run_row.stop_requested_reason
     if stopped_at is not None:
@@ -391,7 +665,89 @@ def _recover_run(run_id: int) -> RecoveredRun:
             "be linked to exact order rows; possible exposure remains reserved"
         )
 
+    unknown_witnesses = store.list_order_unknown_events(run_id)
+    if unknown_witnesses is None:
+        raise _ManagedRecoveryError("Unknown order outcomes could not be checked")
+    rowless = [
+        event
+        for event in unknown_witnesses
+        if isinstance(event.get("payload"), dict)
+        and event["payload"].get("version") == 1
+        and event["payload"].get("order_id") is None
+    ]
+    if rowless:
+        from services.strategy_module import engine
+
+        strategy = store.get_strategy_unscoped(strategy_id)
+        api_key = engine._api_key_for(str(strategy.user_id)) if strategy is not None else None
+        if api_key:
+            _safe_account_snapshot(run_mode, api_key)
+        raise _ManagedRecoveryError(
+            f"{len(rowless)} unknown order delivery event(s) have no durable order row; "
+            "operator broker reconciliation is required before any covering retry"
+        )
+
     orders = store.list_orders(run_id)
+    unknown_orders = [
+        order for order in orders if str(order.get("status") or "").strip().lower() == "unknown"
+    ]
+    if unknown_orders:
+        # Inspect both authoritative account books before any retry decision.
+        # This adapter does not forward a per-intent broker tag, so a keyless
+        # order cannot be identified from symbol/side/quantity or absence in
+        # the orderbook. The durable unknown row and its account entry hold
+        # remain until an operator reconciles exact broker evidence.
+        from services.strategy_module import engine, order_dispatch, order_events
+
+        strategy = store.get_strategy_unscoped(strategy_id)
+        api_key = engine._api_key_for(str(strategy.user_id)) if strategy is not None else None
+        snapshot = (
+            _safe_account_snapshot(run_mode, api_key)
+            if api_key
+            else None
+        )
+        if api_key:
+            for order in unknown_orders:
+                broker_id = str(order.get("broker_order_id") or "").strip()
+                if not broker_id:
+                    continue
+                try:
+                    fact = order_dispatch.fetch_order_status(
+                        mode=run_mode, api_key=api_key, broker_order_id=broker_id
+                    )
+                    if (
+                        fact.ok
+                        and fact.order is not None
+                        and str(fact.order.get("orderid") or "").strip() == broker_id
+                    ):
+                        order_events.apply_order_snapshot(broker_id, fact.order)
+                except Exception:
+                    logger.exception("Could not reconcile unknown broker order %s", broker_id)
+        orders = store.list_orders(run_id)
+        unknown_orders = [
+            order
+            for order in orders
+            if str(order.get("status") or "").strip().lower() == "unknown"
+        ]
+        if unknown_orders:
+            _record_event(
+                strategy_id,
+                "order_outcome_unknown",
+                (
+                    f"Run {run_id} has {len(unknown_orders)} order outcome(s) with unknown "
+                    "broker delivery. Broker orders and positions were inspected, but no "
+                    "reliable per-intent matching key is available. Operator reconciliation "
+                    "is required before retry or new entry."
+                    if snapshot is not None and snapshot.orders_ok and snapshot.positions_ok
+                    else (
+                        f"Run {run_id} has {len(unknown_orders)} order outcome(s) with unknown "
+                        "broker delivery. Broker orders or positions could not be verified. "
+                        "Operator reconciliation is required before retry or new entry."
+                    )
+                ),
+                run_id=run_id,
+                severity="critical",
+            )
     checkpoint = store.latest_checkpoint(run_id) or {}
     config_legs = _config_legs(strategy_id)
 
@@ -454,6 +810,66 @@ def _recover_run(run_id: int) -> RecoveredRun:
         )
 
     state.hydrate_run_state(run_id, rebuilt)
+    if run_mode == "live":
+        held: list[dict[str, Any]] = []
+        for leg in rebuilt["legs"].values():
+            if (
+                leg.get("status") == "open"
+                and leg.get("entry_status") == "complete"
+                and (_positive_whole(leg.get("qty")) or 0) > 0
+            ):
+                held.append(leg)
+            # _as_superseded keeps only a proven, open outgoing owner and
+            # deliberately omits the primary leg's status/entry-status fields.
+            outgoing = leg.get("superseded")
+            if isinstance(outgoing, dict) and (_positive_whole(outgoing.get("qty")) or 0) > 0:
+                held.append(outgoing)
+        if held:
+            from services.strategy_module import engine, live_protection
+
+            strategy_row = store.get_strategy_unscoped(strategy_id)
+            api_key = engine._api_key_for(str(strategy_row.user_id)) if strategy_row else None
+            if api_key:
+                orders_by_position = {
+                    row.get("position_ref"): row
+                    for row in store.list_orders(run_id)
+                    if row.get("kind") == "protective_stop"
+                    and row.get("position_ref")
+                    and row.get("status") in {"pending", "unknown", "open"}
+                }
+                for primary in rebuilt["legs"].values():
+                    owners = [primary]
+                    outgoing = primary.get("superseded")
+                    if isinstance(outgoing, dict):
+                        owners.append({**primary, **outgoing, "status": "open"})
+                    for owner in owners:
+                        if (
+                            owner.get("status") != "open"
+                            or (_positive_whole(owner.get("qty")) or 0) <= 0
+                            or owner.get("position_ref") in orders_by_position
+                        ):
+                            continue
+                        entry_order_id = owner.get("entry_order_id")
+                        if entry_order_id is not None and owner.get("position_ref"):
+                            live_protection.protect_entry_fill(
+                                run_id, primary["leg_id"], str(owner["position_ref"]),
+                                entry_order_id=int(entry_order_id), entry_is_terminal=True,
+                            )
+            issues = live_protection.verify_recovered_run(run_id, api_key) if api_key else [
+                "active Kotak connection is unavailable"
+            ]
+            if issues:
+                _record_event(
+                    strategy_id,
+                    "protective_stop_uncovered",
+                    (
+                        f"Run {run_id} recovered with {len(issues)} live position(s) whose "
+                        "Kotak protective stop could not be verified. Inspect broker orders "
+                        "and positions before further action."
+                    ),
+                    run_id=run_id,
+                    severity="critical",
+                )
     _record_event(
         strategy_id,
         "recovery_succeeded",
@@ -928,20 +1344,19 @@ def _rebuild_legacy_leg(
     # fill the engine applies to live state and the row may not have caught up.
     # It can never downgrade, so a rejected order stays rejected.
     entry_status = normalise_order_status(entry["status"]) if entry else None
+    reported_entry_qty = _positive_whole(entry.get("filled_qty")) if entry else None
     terminal_partial = bool(
-        entry is not None
-        and order_is_dead(entry["status"])
-        and _positive_whole(entry.get("filled_qty")) is not None
+        entry is not None and order_is_dead(entry["status"]) and reported_entry_qty is not None
     )
     entry_dead = entry is not None and order_is_dead(entry["status"]) and not terminal_partial
     entry_filled = (
-        terminal_partial
+        reported_entry_qty is not None
         or (entry is not None and order_is_filled(entry["status"]))
         or (not entry_dead and _checkpoint_says_entry_filled(cp_leg))
     )
 
-    if terminal_partial:
-        qty = _positive_whole(entry.get("filled_qty")) or qty
+    if reported_entry_qty is not None:
+        qty = min(qty or reported_entry_qty, reported_entry_qty)
 
     exit_dead = exit_order is not None and order_is_dead(exit_order["status"])
     exit_working = exit_order is not None and order_is_working(exit_order["status"])
@@ -1295,6 +1710,6 @@ def _record_event(
     try:
         row = store.get_strategy_unscoped(strategy_id)
         user_id = row.user_id if row else ""
-        store.record_event(strategy_id, user_id, kind, message, run_id=run_id, severity=severity)
+        record_and_notify(strategy_id, user_id, kind, message, run_id=run_id, severity=severity)
     except Exception:
         logger.exception("Could not record %s for strategy %s", kind, strategy_id)

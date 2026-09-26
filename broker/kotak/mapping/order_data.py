@@ -163,6 +163,13 @@ def transform_order_data(orders):
             "product": order.get("prod", ""),
             "orderid": order.get("nOrdNo", ""),
             "order_status": order.get("ordSt", ""),
+            # Strategy protection reconciliation needs the broker's actual
+            # cumulative fill facts before it can safely replace/cancel a
+            # resting stop. These fields are also present on Kotak order-feed
+            # updates under the same native names.
+            "filled_quantity": int(order.get("fldQty", 0) or 0),
+            "pending_quantity": int(order.get("unFldSz", 0) or 0),
+            "average_price": order.get("avgPrc", 0.0),
             "timestamp": order.get("ordEntTm", ""),
         }
 

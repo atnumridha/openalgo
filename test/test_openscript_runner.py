@@ -1742,7 +1742,10 @@ def test_the_signatures_two_other_callers_import_are_these():
         run_config.is_product: "(value: str) -> bool",
     }
     for function, written in contract.items():
-        assert str(inspect.signature(function)) == written, function.__name__
+        # Python 3.13 renders pathlib.Path's implementation module as
+        # pathlib._local.Path; it is still the same public Path type.
+        rendered = str(inspect.signature(function)).replace("pathlib._local.Path", "pathlib.Path")
+        assert rendered == written, function.__name__
 
 
 def test_one_start_reaches_the_real_service_and_the_real_settings(tmp_path, monkeypatch, settings):

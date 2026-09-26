@@ -29,6 +29,26 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _executable_quote(market_data: dict) -> dict | None:
+    """Return the current top of book, never replacing missing sides with LTP."""
+    try:
+        ltp = float(market_data.get("ltp") or 0)
+        depth = market_data.get("depth") or {}
+        buys = depth.get("buy") or market_data.get("bids") or []
+        sells = depth.get("sell") or market_data.get("asks") or []
+        buy = buys[0]
+        sell = sells[0]
+        bid = float(buy.get("price") or 0)
+        ask = float(sell.get("price") or 0)
+        bid_qty = int(buy.get("quantity", buy.get("qty", 0)))
+        ask_qty = int(sell.get("quantity", sell.get("qty", 0)))
+    except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+        return None
+    if ltp <= 0 or bid <= 0 or ask <= bid or bid_qty <= 0 or ask_qty <= 0:
+        return None
+    return {"ltp": ltp, "bid": bid, "ask": ask, "bid_qty": bid_qty, "ask_qty": ask_qty}
+
+
 class WebSocketExecutionEngine:
     """
     Event-driven execution engine that uses WebSocket market data
@@ -383,7 +403,7 @@ class WebSocketExecutionEngine:
 
             for order_id in order_ids:
                 try:
-                    self._check_and_execute_order(order_id, Decimal(str(ltp)))
+                    self._check_and_execute_order(order_id, market_data)
                 except Exception as e:
                     logger.exception(f"Error processing order {order_id}: {e}")
 
@@ -494,7 +514,7 @@ class WebSocketExecutionEngine:
             self._subscribe_ws_symbols(subscribe_user, [(symbol, exchange)])
             logger.debug(f"Subscribed {symbol_key} for GTT {gtt.gtt_id}")
 
-    def _check_and_execute_order(self, order_id: str, ltp: Decimal):
+    def _check_and_execute_order(self, order_id: str, market_data: dict):
         """
         Check if an order should execute at the current LTP and execute if conditions are met.
         """
@@ -516,12 +536,17 @@ class WebSocketExecutionEngine:
                     self.notify_order_completed(order_id, "", None)
                 return
 
-            # Create a mock quote for the execution engine's _process_order method
-            quote = {
-                "ltp": float(ltp),
-                "bid": float(ltp),  # Use LTP as bid/ask fallback
-                "ask": float(ltp),
-            }
+            # A trigger-pending stop only needs LTP to move into the regular
+            # book. A fill needs the executable side of a real book.
+            quote = _executable_quote(market_data)
+            if quote is None:
+                if order.order_status != "trigger pending":
+                    return
+                quote = {"ltp": float(market_data.get("ltp") or 0)}
+            if order.order_status != "trigger pending":
+                available = quote["ask_qty"] if order.action == "BUY" else quote["bid_qty"]
+                if available < int(order.quantity):
+                    return
 
             # Use the existing execution engine's order processing logic
             self._execution_engine._process_order(order, quote)
@@ -673,7 +698,7 @@ class WebSocketExecutionEngine:
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = subscribe_to_symbols(
-                username=user_id, broker=broker_name, symbols=symbol_payload, mode="LTP"
+                username=user_id, broker=broker_name, symbols=symbol_payload, mode="Depth"
             )
             if not success:
                 logger.warning(
@@ -705,7 +730,7 @@ class WebSocketExecutionEngine:
 
             symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
             success, response, status_code = unsubscribe_from_symbols(
-                username=user_id, broker=broker_name, symbols=symbol_payload, mode="LTP"
+                username=user_id, broker=broker_name, symbols=symbol_payload, mode="Depth"
             )
             if not success:
                 logger.warning(

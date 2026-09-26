@@ -110,7 +110,7 @@ Each object in `data`:
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `sandbox_comparison_summary`, `run_stop_failed`, `live_authorization_required`, `portfolio_governor_admitted`, `portfolio_governor_rejected`, `stale_feed_stop`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
 `run_stop_requested` says the stop intent is durable and new signal entries are
 gated; it is not proof of flatness. `run_stopped` is the terminal transition
@@ -123,7 +123,14 @@ run remains open and managed for a retry.
 flip is still held under its exact `position_ref`, remains managed, and can be
 targeted by another exit even though the replacement side is also live.
 
-Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
+Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`, `order_outcome_unknown`, `live_protection_unverified`, `protective_stop_uncovered`, `protective_stop_verified`, `protective_stop_failed`
+
+`live_protection_unverified` means a live entry was refused because this checkout
+has no verified broker-held stop lifecycle for that instrument. The strategy
+placed no entry. `protective_stop_uncovered` is critical: recovery found a
+filled live position but cannot verify a matching broker-held stop. The
+operator must inspect broker orders and positions. Neither event claims that a
+stop order was placed or that a stop trigger guarantees an exit price.
 
 Manual close events describe accepted intent only. `close_all_manual` uses
 `Operator requested closure of all held legs`, and `leg_close_manual` uses

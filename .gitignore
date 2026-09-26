@@ -51,6 +51,10 @@ db/strategy_encryption.key
 # DB backup files (created by upgrade/rotate_pepper.py and other migrations)
 db/backups/
 
+# Cross-worker Flow lifecycle leases (runtime metadata, not repository data)
+db/.flow-lifecycle-locks/
+db/.sandbox-admission-locks/
+
 # CSV Files (except specific data files)
 *.csv
 !symbols.csv

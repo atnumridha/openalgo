@@ -16,8 +16,10 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
+from datetime import UTC, datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -94,6 +96,7 @@ def create_flow_workflows_table(engine):
             webhook_enabled BOOLEAN DEFAULT 0,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
             api_key VARCHAR(255),
+            broker_connection_id VARCHAR(36),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -114,6 +117,7 @@ def create_flow_workflows_table(engine):
             webhook_enabled BOOLEAN DEFAULT FALSE,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
             api_key VARCHAR(255),
+            broker_connection_id VARCHAR(36),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
@@ -158,6 +162,19 @@ def add_api_key_column(engine):
         conn.commit()
 
     print("  [OK] flow_workflows.api_key added")
+    return True
+
+
+def add_broker_connection_column(engine):
+    """Add connection scope to existing Flow workflows without changing rows."""
+    if not table_exists(engine, "flow_workflows"):
+        return True
+    if column_exists(engine, "flow_workflows", "broker_connection_id"):
+        print("  [SKIP] flow_workflows.broker_connection_id already present")
+        return True
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN broker_connection_id VARCHAR(36)"))
+    print("  [OK] flow_workflows.broker_connection_id added")
     return True
 
 
@@ -248,6 +265,67 @@ def create_flow_workflow_executions_table(engine):
         conn.commit()
 
     print("  [OK] flow_workflow_executions table created")
+    return True
+
+
+def create_flow_bar_claims_table(engine):
+    """Create the unique cross-worker bar claim and backfill retained logs."""
+    if not table_exists(engine, "flow_workflow_bar_claims"):
+        if "sqlite" in str(engine.url):
+            ddl = """
+                CREATE TABLE flow_workflow_bar_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workflow_id INTEGER NOT NULL REFERENCES flow_workflows(id),
+                    execution_id INTEGER NOT NULL,
+                    bar_start VARCHAR(40) NOT NULL,
+                    claimed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_flow_workflow_bar UNIQUE (workflow_id, bar_start)
+                )
+            """
+        else:
+            ddl = """
+                CREATE TABLE flow_workflow_bar_claims (
+                    id SERIAL PRIMARY KEY,
+                    workflow_id INTEGER NOT NULL REFERENCES flow_workflows(id),
+                    execution_id INTEGER NOT NULL,
+                    bar_start VARCHAR(40) NOT NULL,
+                    claimed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_flow_workflow_bar UNIQUE (workflow_id, bar_start)
+                )
+            """
+        with engine.begin() as conn:
+            conn.execute(text(ddl))
+        print("  [CREATE] flow_workflow_bar_claims created")
+
+    if not table_exists(engine, "flow_workflow_executions"):
+        return True
+    with engine.begin() as conn:
+        rows = conn.execute(text("SELECT id, workflow_id, logs FROM flow_workflow_executions WHERE logs IS NOT NULL"))
+        for execution_id, workflow_id, raw_logs in rows:
+            try:
+                logs = json.loads(raw_logs) if isinstance(raw_logs, str) else raw_logs
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(logs, list):
+                continue
+            for log in logs:
+                if not isinstance(log, dict) or not log.get("bar_claim"):
+                    continue
+                try:
+                    stamp = datetime.fromisoformat(str(log["bar_claim"]).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if stamp.tzinfo is None:
+                    continue
+                conn.execute(
+                    text("""
+                        INSERT INTO flow_workflow_bar_claims (workflow_id, execution_id, bar_start)
+                        VALUES (:workflow_id, :execution_id, :bar_start)
+                        ON CONFLICT (workflow_id, bar_start) DO NOTHING
+                    """),
+                    {"workflow_id": workflow_id, "execution_id": execution_id,
+                     "bar_start": stamp.astimezone(UTC).isoformat()},
+                )
     return True
 
 
@@ -342,7 +420,7 @@ def status(engine):
     print("-" * 40)
 
     applied = True
-    for table in ("flow_workflows", "flow_workflow_executions", FLOW_JOBSTORE_TABLE):
+    for table in ("flow_workflows", "flow_workflow_executions", "flow_workflow_bar_claims", FLOW_JOBSTORE_TABLE):
         present = table_exists(engine, table)
         print(f"  {table:<26} {'present' if present else 'MISSING'}")
         applied = applied and present
@@ -350,6 +428,9 @@ def status(engine):
     if table_exists(engine, "flow_workflows"):
         present = column_exists(engine, "flow_workflows", "api_key")
         print(f"  {'flow_workflows.api_key':<26} {'present' if present else 'MISSING'}")
+        applied = applied and present
+        present = column_exists(engine, "flow_workflows", "broker_connection_id")
+        print(f"  {'flow_workflows.broker_connection_id':<26} {'present' if present else 'MISSING'}")
         applied = applied and present
 
     if table_exists(engine, "flow_workflow_executions"):
@@ -407,7 +488,9 @@ def main():
         print("Creating tables...")
         create_flow_workflows_table(engine)
         add_api_key_column(engine)
+        add_broker_connection_column(engine)
         create_flow_workflow_executions_table(engine)
+        create_flow_bar_claims_table(engine)
         backfill_execution_started_at(engine)
         create_apscheduler_jobstore_table(engine, FLOW_JOBSTORE_TABLE)
 

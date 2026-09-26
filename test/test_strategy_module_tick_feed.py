@@ -11,6 +11,8 @@ whole file runs in milliseconds.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from services.strategy_module import tick_feed as tf
 
 # ---------------------------------------------------------------------------
@@ -73,6 +75,8 @@ class FakeQuotes:
         self.prices: dict[tuple[str, str], float] = {}
         #: Queue of outcomes; each entry is "ok", 429 or an exception instance.
         self.script: list = []
+        self.timestamp = None
+        self.include_timestamp = True
 
     def __call__(self, symbols, api_key):
         self.calls.append(list(symbols))
@@ -87,7 +91,11 @@ class FakeQuotes:
             if price is None:
                 results.append({**item, "error": "no data"})
             else:
-                results.append({**item, "data": {"ltp": price}})
+                stamp = self.timestamp or datetime.now(UTC).isoformat()
+                data = {"ltp": price}
+                if self.include_timestamp:
+                    data["timestamp"] = stamp
+                results.append({**item, "data": data})
         return True, {"status": "success", "results": results}, 200
 
 
@@ -112,6 +120,37 @@ def make_feed(clock=None, ws=None, quotes=None, **kwargs):
 def tick(symbol, exchange, ltp):
     """The websocket tick shape the proxy actually sends."""
     return {"type": "market_data", "symbol": symbol, "exchange": exchange, "data": {"ltp": ltp}}
+
+
+def test_old_native_trade_time_does_not_refresh_risk_price():
+    wall_now = datetime(2026, 9, 25, 6, 30, tzinfo=UTC)
+    received = []
+    feed, _, _, _ = make_feed(wall_clock=lambda: wall_now)
+    feed.set_on_price(lambda symbol, exchange, price: received.append((symbol, exchange, price)))
+    try:
+        feed.add_run_subscriptions(1, [("SILVERM27OCT26235000CE", "MCX")])
+        payload = tick("SILVERM27OCT26235000CE", "MCX", 7037.5)
+        payload["data"]["ltt"] = int((wall_now - timedelta(seconds=35)).timestamp() * 1000)
+        payload["data"]["timestamp"] = int(wall_now.timestamp() * 1000)
+        feed.on_tick(payload)
+        feed._drain_ticks_once()
+        assert feed.get_ltp("SILVERM27OCT26235000CE", "MCX") is None
+        assert received == []
+    finally:
+        feed.stop()
+
+
+def test_packet_explicitly_missing_native_market_time_cannot_refresh_risk_price():
+    feed, _, _, _ = make_feed()
+    try:
+        feed.add_run_subscriptions(1, [("SILVERM27OCT26235000CE", "MCX")])
+        payload = tick("SILVERM27OCT26235000CE", "MCX", 7037.5)
+        payload["data"]["market_time_missing"] = True
+        feed.on_tick(payload)
+        feed._drain_ticks_once()
+        assert feed.get_ltp("SILVERM27OCT26235000CE", "MCX") is None
+    finally:
+        feed.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +359,76 @@ def test_both_sources_failing_marks_the_symbol_stale():
         feed.stop()
 
 
+def test_rest_quote_with_prior_market_timestamp_cannot_refresh_a_polling_leg():
+    wall_now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+    clock = FakeClock()
+    quotes = FakeQuotes()
+    quotes.prices[("CE", "NFO")] = 42.0
+    quotes.timestamp = (wall_now - timedelta(minutes=2)).isoformat()
+    feed, _, _, _ = make_feed(
+        clock=clock,
+        quotes=quotes,
+        wall_clock=lambda: wall_now,
+        stale_threshold_sec=10.0,
+        stale_fatal_sec=30.0,
+    )
+    seen = []
+    feed.set_on_price(lambda *args: seen.append(args))
+    try:
+        feed.add_run_subscriptions(1, [("CE", "NFO")])
+        clock.advance(10)
+        assert feed._poll_once() == 0
+        assert feed.get_ltp("CE", "NFO") is None
+        assert seen == []
+        clock.advance(20)
+        feed._poll_once()
+        assert feed.get_source("CE", "NFO") == tf.STALE
+    finally:
+        feed.stop()
+
+
+def test_repeated_rest_quote_ages_from_broker_time_not_receipt_time():
+    wall_now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+    clock = FakeClock()
+    quotes = FakeQuotes()
+    quotes.prices[("CE", "NFO")] = 42.0
+    quotes.timestamp = wall_now.isoformat()
+    feed, _, _, _ = make_feed(
+        clock=clock,
+        quotes=quotes,
+        wall_clock=lambda: wall_now + timedelta(seconds=clock.now - 1000),
+        stale_threshold_sec=10.0,
+        stale_fatal_sec=30.0,
+    )
+    try:
+        feed.add_run_subscriptions(1, [("CE", "NFO")])
+        clock.advance(10)
+        assert feed._poll_once() == 1
+        assert feed.get_ltp("CE", "NFO") == 42.0
+        clock.advance(10)
+        assert feed._poll_once() == 0
+        clock.advance(10)
+        feed._poll_once()
+        assert feed.get_source("CE", "NFO") == tf.STALE
+        assert feed.get_ltp("CE", "NFO") is None
+    finally:
+        feed.stop()
+
+
+def test_rest_quote_without_broker_timestamp_is_not_a_fresh_mark():
+    quotes = FakeQuotes()
+    quotes.prices[("CE", "NFO")] = 42.0
+    quotes.include_timestamp = False
+    feed, clock, _, _ = make_feed(quotes=quotes, stale_threshold_sec=10.0)
+    try:
+        feed.add_run_subscriptions(1, [("CE", "NFO")])
+        clock.advance(10)
+        assert feed._poll_once() == 0
+        assert feed.get_ltp("CE", "NFO") is None
+    finally:
+        feed.stop()
+
+
 def test_a_stale_symbol_stops_being_polled_and_does_not_recover_by_itself():
     feed, clock, _ws, quotes = make_feed(stale_threshold_sec=10.0, stale_fatal_sec=60.0)
     try:
@@ -329,12 +438,11 @@ def test_a_stale_symbol_stops_being_polled_and_does_not_recover_by_itself():
         assert feed.get_source("CE", "NFO") == tf.STALE
         calls_at_stale = len(quotes.calls)
 
-        # A tick records its price, because a real number beats a missing one,
-        # but the source stays STALE: a halted run must not resume silently.
+        # A halted run must not resume silently or expose a stale mark as current.
         clock.advance(1)
         feed.on_tick(tick("CE", "NFO", 42.0))
         feed._drain_ticks_once()
-        assert feed.get_ltp("CE", "NFO") == 42.0
+        assert feed.get_ltp("CE", "NFO") is None
         assert feed.get_source("CE", "NFO") == tf.STALE
 
         clock.advance(5)
@@ -781,6 +889,26 @@ def test_reconnect_resubscribes_every_tracked_symbol():
         feed.stop()
 
 
+def test_replaced_websocket_client_receives_the_feed_callbacks():
+    first = FakeWsClient()
+    second = FakeWsClient()
+    selected = {"client": first}
+    feed = tf.RiskTickFeed(
+        ws_provider=lambda _key: selected["client"],
+        api_key_provider=lambda: "test-key",
+    )
+    feed._running = True
+    try:
+        feed.add_run_subscriptions(1, [("CE", "NFO")])
+        first.connected = False
+        selected["client"] = second
+        feed._ensure_ws()
+        assert second.callbacks["market_data"] == [feed.on_tick]
+        assert first.callbacks["market_data"] == []
+    finally:
+        feed.stop()
+
+
 # ---------------------------------------------------------------------------
 # The per-price hook
 #
@@ -801,6 +929,28 @@ def test_a_websocket_tick_reaches_the_price_hook():
     assert seen == [("RELIANCE", "NSE", 1287.5)]
 
 
+def test_comparison_hook_receives_only_admitted_market_observations():
+    feed, _clock, _ws, _quotes = make_feed()
+    try:
+        feed.add_run_subscriptions(1, [("RELIANCE", "NSE")])
+        seen = []
+        feed.set_on_observation(
+            lambda packet, received, source, key: seen.append((packet, source, key))
+        )
+        missing = tick("RELIANCE", "NSE", 100)
+        missing["data"]["market_time_missing"] = True
+        feed.on_tick(missing)
+        feed._drain_ticks_once()
+        assert seen == []
+
+        valid = tick("RELIANCE", "NSE", 101)
+        feed.on_tick(valid)
+        feed._drain_ticks_once()
+        assert seen == [(valid, "websocket", "test-key")]
+    finally:
+        feed.stop()
+
+
 def test_a_polled_price_reaches_the_price_hook_too():
     # The one that matters most. A leg that has fallen back to REST must still
     # be risk evaluated: if only websocket ticks drove the hook, the fallback
@@ -818,6 +968,53 @@ def test_a_polled_price_reaches_the_price_hook_too():
 
         assert priced == 1
         assert seen == [("RELIANCE", "NSE", 1290.0)]
+    finally:
+        feed.stop()
+
+
+def test_native_kotak_multiquote_market_time_reaches_rest_fallback(monkeypatch):
+    from broker.kotak.api.data import BrokerData
+
+    data = BrokerData.__new__(BrokerData)
+    monkeypatch.setattr(data, "_get_kotak_exchange", lambda _exchange: "nse_cm")
+    monkeypatch.setattr(data, "_get_index_symbol_candidates", lambda _symbol: ["NIFTY 50"])
+    monkeypatch.setattr(
+        data,
+        "_make_quotes_request",
+        lambda *_args: [
+            {
+                "exchange": "nse_cm",
+                "exchange_token": "NIFTY 50",
+                "display_symbol": "NIFTY 50",
+                "ltp": 24000,
+                "lstup_time": "25/09/2026 10:00:00",
+                "ohlc": {"open": 23900, "high": 24100, "low": 23800, "close": 23950},
+                "depth": {"buy": [{"price": 23999}], "sell": [{"price": 24001}]},
+            }
+        ],
+    )
+    clock = FakeClock()
+    ws = FakeWsClient()
+    feed = tf.RiskTickFeed(
+        clock=clock,
+        wall_clock=lambda: datetime(2026, 9, 25, 4, 30, 5, tzinfo=UTC),
+        ws_provider=lambda _key: ws,
+        quote_fetcher=lambda symbols, _key: (
+            True,
+            {"status": "success", "results": data.get_multiquotes(symbols)},
+            200,
+        ),
+        api_key_provider=lambda: "test-key",
+        stale_threshold_sec=10.0,
+    )
+    feed._running = True
+    try:
+        feed.add_run_subscriptions(1, [("NIFTY", "NSE_INDEX")])
+        clock.advance(10)
+
+        assert feed._poll_once() == 1
+        assert feed.get_ltp("NIFTY", "NSE_INDEX") == 24000
+        assert feed.get_source("NIFTY", "NSE_INDEX") == tf.POLLING
     finally:
         feed.stop()
 

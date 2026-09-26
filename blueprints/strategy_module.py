@@ -37,6 +37,7 @@ import os
 import re
 from datetime import time as dt_time
 from typing import Any
+from uuid import UUID
 
 from flask import Blueprint, jsonify, request, session
 from flask_socketio import join_room, leave_room
@@ -44,6 +45,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
+from services.strategy_module import live_authorization, starter_pack
 from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
@@ -910,6 +912,16 @@ def _validate_strategy_config(payload: Any) -> dict:
         ),
         "webhook_ip_allowlist": _validate_ip_allowlist(raw.get("webhook_ip_allowlist")),
     }
+    connection_id = raw.get("broker_connection_id")
+    if connection_id is not None:
+        try:
+            config["broker_connection_id"] = str(
+                UUID(_text(connection_id, "broker_connection_id", max_length=36))
+            )
+        except (ValueError, AttributeError) as exc:
+            raise ValidationError("broker_connection_id must be a UUID") from exc
+    else:
+        config["broker_connection_id"] = None
 
     # An intraday strategy with no exit time has nothing to square off against,
     # so both times are required there and optional for a positional one.
@@ -1109,6 +1121,26 @@ def _error(message: str, code: int, payload: dict | None = None):
     return jsonify(body), code
 
 
+def _live_authorization_response(username: str):
+    """Return current authorization and mirror only safe display data to Flask."""
+    current = live_authorization.status(username)
+    if current.active:
+        session["live_authorization"] = {
+            "username": username,
+            "session_day": current.session_day,
+            "expires_at": current.expires_at,
+        }
+    else:
+        session.pop("live_authorization", None)
+    return {
+        "live_authorization": {
+            "active": current.active,
+            "session_day": current.session_day,
+            "expires_at": current.expires_at,
+        }
+    }
+
+
 def _store_error(message: str | None):
     """Map a store message to a status code.
 
@@ -1183,6 +1215,77 @@ def _int_arg(name: str) -> tuple[int | None, Any]:
         return int(raw), None
     except ValueError:
         return None, _error(f"{name} must be a whole number", 400)
+
+
+# ---------------------------------------------------------------------------
+# Current-session sandbox test reset. Separate from /sandbox/reset, which
+# clears all sandbox history and configuration.
+# ---------------------------------------------------------------------------
+
+
+@strategy_module_bp.route("/api/sandbox-reset/preview", methods=["GET"])
+@check_session_validity
+@_api_limit
+def sandbox_reset_preview():
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    from services.strategy_module import sandbox_reset
+
+    try:
+        view = sandbox_reset.preview(username)
+    except Exception:
+        logger.exception("Sandbox reset preview failed")
+        return _error("Sandbox reset preview is unavailable", 503)
+    return _ok({"data": {
+        "session_start_utc": view.session_start_utc.isoformat() + "Z",
+        "session_end_utc": view.session_end_utc.isoformat() + "Z",
+        "run_count": len(view.run_ids),
+        "order_count": len(view.order_ids),
+        "trade_count": len(view.trade_ids),
+        "realised_pnl": float(view.realised_pnl),
+        "funds_before": float(view.funds_before) if view.funds_before is not None else None,
+        "funds_after": float(view.funds_after) if view.funds_after is not None else None,
+        "blockers": list(view.blockers),
+        "version": view.version,
+    }})
+
+
+@strategy_module_bp.route("/api/sandbox-reset", methods=["POST"])
+@check_session_validity
+@_api_limit
+def sandbox_reset_execute():
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    body, error = _json_body()
+    if error:
+        return error
+    if set(body) != {"version"} or not isinstance(body["version"], str) or not re.fullmatch(
+        r"[0-9a-f]{64}", body["version"]
+    ):
+        return _error("A current reset preview version is required", 400)
+    from services.strategy_module import sandbox_reset
+
+    try:
+        result = sandbox_reset.execute(username, body["version"])
+    except sandbox_reset.ResetBlocked as exc:
+        return _error(str(exc), 409)
+    except sandbox_reset.ResetRecoveryRequired:
+        return _error("Sandbox reset recovery is required; new sandbox entries are paused", 503)
+    except Exception:
+        logger.exception("Sandbox reset failed")
+        return _error("Sandbox reset failed safely; check the audit before retrying", 503)
+    return _ok({"data": {
+        "audit_id": result.audit_id,
+        "run_count": result.run_count,
+        "order_count": result.order_count,
+        "trade_count": result.trade_count,
+        "realised_pnl": float(result.realised_pnl),
+        "funds_after": float(result.funds_after) if result.funds_after is not None else None,
+        "already_done": result.already_done,
+        "version": result.version,
+    }})
 
 
 # ---------------------------------------------------------------------------
@@ -1371,6 +1474,89 @@ def delete_strategy(sid):
 # ---------------------------------------------------------------------------
 
 
+@strategy_module_bp.route("/api/automation/starter-pack", methods=["POST"])
+@check_session_validity
+@_api_limit
+def install_starter_pack():
+    """Install missing sandbox-only starter strategies for the signed-in user."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    try:
+        result = starter_pack.install(username)
+    except RuntimeError:
+        logger.exception("Could not install starter pack for %s", username)
+        return _error("Could not install the starter pack", 500)
+
+    return _ok(
+        {
+            "created": list(result.created),
+            "existing": list(result.existing),
+            "webhook_tokens": result.webhook_tokens,
+            "workflows_created": list(result.workflows_created),
+            "workflows_existing": list(result.workflows_existing),
+        },
+        201 if result.created else 200,
+    )
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_live_authorization():
+    """Show whether the current browser user may open automated live entries."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    return _ok(_live_authorization_response(username))
+
+
+@strategy_module_bp.route("/api/automation/critical-alerts", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_critical_alerts():
+    """Owner-scoped delivery status, including alerts for deleted strategies."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    requested, error = _int_arg("limit")
+    if error:
+        return error
+    limit = min(max(requested or 100, 1), 500)
+    return _ok({"data": store.list_critical_alerts(username, limit=limit)})
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["POST"])
+@check_session_validity
+@_api_limit
+def grant_live_authorization():
+    """Grant current-session live-entry authorization after explicit confirmation."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    payload, error = _json_body()
+    if error:
+        return error
+    confirm = payload.get("confirm")
+    if set(payload) != {"confirm"} or type(confirm) is not bool or confirm is not True:
+        return _error("confirm must be true", 400)
+    live_authorization.grant(username)
+    return _ok(_live_authorization_response(username))
+
+
+@strategy_module_bp.route("/api/automation/live-authorization", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def revoke_live_authorization():
+    """Revoke current-session live-entry authorization without affecting exits."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    live_authorization.revoke(username)
+    return _ok(_live_authorization_response(username))
+
+
 @strategy_module_bp.route("/api/strategies/<int:sid>/webhook/rotate", methods=["POST"])
 @check_session_validity
 @_api_limit
@@ -1477,7 +1663,9 @@ def engage_kill_switch(sid):
         flatten_message = "; flatten refused, stop remains pending and retryable"
     else:
         flatten_message = ""
-    store.record_event(
+    from services.strategy_module.lifecycle_events import record_and_notify
+
+    record_and_notify(
         sid,
         username,
         "webhook_locked",
@@ -1540,6 +1728,211 @@ def start_strategy(sid):
         return _error(result.error or "Could not start the strategy", code)
 
     return _ok({"run_id": result.run_id, "mode": mode, "legs": result.legs})
+
+
+@strategy_module_bp.route("/api/strategies/start-all-sandbox", methods=["POST"])
+@check_session_validity
+@_api_limit
+def start_all_sandbox_strategies():
+    """Mirror each strategy's individual sandbox start in one request.
+
+    Batch strategies enter through the normal run engine. Signal strategies
+    cannot be started without a signal, so their linked sandbox workflows are
+    armed instead. One refusal does not prevent the remaining strategies from
+    being processed, and this route never selects live mode.
+    """
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from services.strategy_module import automation_control, engine
+
+    try:
+        with Session(store.engine) as db:
+            rows = db.scalars(select(store.SmStrategy).where(
+                store.SmStrategy.user_id == username
+            ).order_by(store.SmStrategy.id)).all()
+            for row in rows:
+                _ = (row.id, row.name, row.strategy_kind, row.status,
+                     row.current_run_id, row.automation_state)
+    except Exception:
+        logger.exception("Could not enumerate sandbox strategies for bulk start")
+        return _error("Could not enumerate strategies safely", 503)
+
+    api_key = _api_key_for(username)
+    items = []
+    processed = 0
+    for row in rows:
+        try:
+            if row.strategy_kind == "signal":
+                previous_state = row.automation_state
+                result = automation_control.enable_sandbox(row.id, username, api_key)
+                _audit_automation_result(row, username, result, enabling=True,
+                                         previous_state=previous_state)
+                item = _automation_item(row, result, api_key=api_key)
+                if result.ok:
+                    item["reason"] = "Waiting for a valid signal"
+                elif _bulk_automation_skipped(result):
+                    item["outcome"] = "skipped"
+            else:
+                result = engine.start_run(
+                    row.id, username, "sandbox", trigger_source="manual"
+                )
+                if result.ok:
+                    item = {
+                        "strategy_id": row.id,
+                        "name": row.name,
+                        "state": row.automation_state,
+                        "outcome": "started",
+                        "workflow_id": None,
+                        "run_id": result.run_id,
+                        "close_pending": False,
+                        "reason": None,
+                    }
+                else:
+                    reason = result.error or "Could not start the strategy"
+                    item = {
+                        "strategy_id": row.id,
+                        "name": row.name,
+                        "state": row.automation_state,
+                        "outcome": "skipped" if "already running" in reason.lower() else "failed",
+                        "workflow_id": None,
+                        "run_id": row.current_run_id,
+                        "close_pending": False,
+                        "reason": reason,
+                    }
+            items.append(item)
+            processed += 1
+        except Exception:
+            logger.exception("Could not bulk-start sandbox strategy %s", row.id)
+            items.append({
+                "strategy_id": row.id,
+                "name": row.name,
+                "state": row.automation_state,
+                "outcome": "failed",
+                "workflow_id": None,
+                "run_id": row.current_run_id,
+                "close_pending": False,
+                "reason": "Strategy start failed",
+            })
+
+    if rows:
+        counts = {kind: sum(item["outcome"] == kind for item in items)
+                  for kind in ("started", "armed", "skipped", "failed")}
+        store.record_event(rows[0].id, username, "sandbox_bulk_start_summary",
+                           "Sandbox bulk start completed", payload=counts)
+    if rows and not processed:
+        return _error("Could not start strategies safely", 503, {"data": {"items": items}})
+    return _ok({"data": {"items": items}})
+
+
+@strategy_module_bp.route("/api/strategies/start-all-live", methods=["POST"])
+@check_session_validity
+@_api_limit
+def start_all_live_strategies():
+    """Start every eligible batch strategy live after explicit confirmation."""
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+
+    body, body_error = _json_body()
+    if body_error:
+        return body_error
+    if body.get("confirmation") != "START LIVE":
+        return _error('Type "START LIVE" to confirm real broker orders', 400)
+
+    from services.strategy_module import engine, live_authorization
+
+    allowed, authorization_error = live_authorization.require_live_entry(username)
+    if not allowed:
+        return _error(authorization_error or "Live automation authorization is required", 403)
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    try:
+        with Session(store.engine) as db:
+            rows = db.scalars(select(store.SmStrategy).where(
+                store.SmStrategy.user_id == username
+            ).order_by(store.SmStrategy.id)).all()
+            for row in rows:
+                _ = (row.id, row.name, row.strategy_kind, row.status,
+                     row.current_run_id, row.automation_state, row.live_enabled)
+    except Exception:
+        logger.exception("Could not enumerate strategies for live bulk start")
+        return _error("Could not enumerate strategies safely", 503)
+
+    items = []
+    processed = 0
+    for row in rows:
+        try:
+            if not row.live_enabled:
+                item = {
+                    "strategy_id": row.id,
+                    "name": row.name,
+                    "state": row.automation_state,
+                    "outcome": "skipped",
+                    "workflow_id": None,
+                    "run_id": row.current_run_id,
+                    "close_pending": False,
+                    "reason": "Strategy is not live-enabled",
+                }
+            elif row.strategy_kind == "signal":
+                item = {
+                    "strategy_id": row.id,
+                    "name": row.name,
+                    "state": row.automation_state,
+                    "outcome": "skipped",
+                    "workflow_id": None,
+                    "run_id": row.current_run_id,
+                    "close_pending": False,
+                    "reason": "Signal strategy is waiting for a valid live signal",
+                }
+            else:
+                result = engine.start_run(
+                    row.id, username, "live", trigger_source="manual"
+                )
+                reason = result.error or None
+                item = {
+                    "strategy_id": row.id,
+                    "name": row.name,
+                    "state": row.automation_state,
+                    "outcome": (
+                        "started" if result.ok else
+                        "skipped" if "already running" in (reason or "").lower() else
+                        "failed"
+                    ),
+                    "workflow_id": None,
+                    "run_id": result.run_id if result.ok else row.current_run_id,
+                    "close_pending": False,
+                    "reason": None if result.ok else reason or "Could not start the strategy",
+                }
+            items.append(item)
+            processed += 1
+        except Exception:
+            logger.exception("Could not bulk-start live strategy %s", row.id)
+            items.append({
+                "strategy_id": row.id,
+                "name": row.name,
+                "state": row.automation_state,
+                "outcome": "failed",
+                "workflow_id": None,
+                "run_id": row.current_run_id,
+                "close_pending": False,
+                "reason": "Strategy start failed",
+            })
+
+    if rows:
+        counts = {kind: sum(item["outcome"] == kind for item in items)
+                  for kind in ("started", "skipped", "failed")}
+        store.record_event(rows[0].id, username, "live_bulk_start_summary",
+                           "Live bulk start completed", severity="warn", payload=counts)
+    if rows and not processed:
+        return _error("Could not start strategies safely", 503, {"data": {"items": items}})
+    return _ok({"data": {"items": items}})
 
 
 @strategy_module_bp.route("/api/strategies/<int:sid>/stop", methods=["POST"])
@@ -1676,6 +2069,20 @@ def list_runs(sid):
     return _ok({"data": store.list_runs(sid)})
 
 
+@strategy_module_bp.route("/api/strategies/<int:sid>/profit-comparisons", methods=["GET"])
+@check_session_validity
+@_api_limit
+def list_profit_comparisons(sid):
+    """Read-only shadow results; these records never represent extra orders."""
+    _username, _row, error = _resolve(sid)
+    if error:
+        return error
+    from database import profit_comparison_db
+
+    run_ids = [row["id"] for row in store.list_runs(sid, limit=100)]
+    return _ok({"data": profit_comparison_db.list_for_runs(run_ids, limit=100)})
+
+
 @strategy_module_bp.route("/api/strategies/<int:sid>/orders", methods=["GET"])
 @check_session_validity
 @_api_limit
@@ -1744,6 +2151,174 @@ def _api_key_for(username: str) -> str | None:
     except Exception:
         logger.exception("Could not read the API key for %s", username)
         return None
+
+
+def _automation_item(row, result=None, *, outcome=None, reason=None, api_key=None):
+    """The public control result contains state, never broker credentials."""
+    if result is not None:
+        reason = result.error
+        if result.ok:
+            outcome = "close_pending" if result.close_pending else (
+                "armed" if result.state == "armed" else "disabled"
+            )
+        else:
+            outcome = "failed"
+    if reason and api_key:
+        reason = reason.replace(api_key, "[redacted]")
+    if reason:
+        reason = re.sub(
+            r"\b(api[_ -]?key|token|secret|password)\s*[:=]\s*\S+",
+            r"\1=[redacted]", reason, flags=re.IGNORECASE,
+        )
+    return {
+        "strategy_id": row.id,
+        "name": row.name,
+        "state": result.state if result is not None else row.automation_state,
+        "outcome": outcome,
+        "workflow_id": result.workflow_id if result is not None else None,
+        "run_id": result.run_id if result is not None else row.current_run_id,
+        "close_pending": result.close_pending if result is not None else row.automation_state in {"closing", "close_failed"},
+        "reason": reason,
+    }
+
+
+def _audit_automation_result(row, username, result, *, enabling, previous_state=None):
+    if enabling and result.ok:
+        if (previous_state if previous_state is not None else row.automation_state) == "armed":
+            return
+        kind, message = "automation_armed", "Sandbox automation armed"
+    elif not enabling and result.ok and result.close_pending:
+        kind, message = "automation_closing", "Sandbox automation close pending"
+    elif not enabling and result.ok:
+        kind, message = "automation_disabled", "Sandbox automation disabled"
+    elif not enabling:
+        kind, message = "automation_close_failed", "Sandbox automation close failed"
+    else:
+        return
+    store.record_event(row.id, username, kind, message, run_id=result.run_id,
+                       severity="warn" if not result.ok else "info",
+                       payload={"state": result.state, "workflow_id": result.workflow_id,
+                                "close_pending": result.close_pending})
+
+
+def _automation_error_code(result):
+    reason = (result.error or "").lower()
+    if reason == "strategy not found":
+        return 404
+    if result.state in {"closing", "close_failed"}:
+        return 409
+    if any(word in reason for word in ("api key", "stop loss", "invalid", "requires", "only signal",
+                                        "no flow workflow", "multiple flow workflows", "malformed",
+                                        "not in sandbox mode", "different broker", "different owner")):
+        return 400
+    return 409
+
+
+def _bulk_automation_skipped(result):
+    """A safe refusal is a skip; a failed control operation is a failure."""
+    reason = (result.error or "").lower()
+    return any(phrase in reason for phrase in (
+        "live-enabled", "only signal", "api key not configured", "stop loss",
+        "unresolved", "no flow workflow", "multiple flow workflows", "linked flow",
+        "invalid", "malformed", "not in sandbox mode", "different broker",
+        "different owner", "close/reconciliation", "requires reconciliation",
+        "existing exposure", "a live or stopping run",
+    ))
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/automation/enable", methods=["POST"])
+@check_session_validity
+@_api_limit
+def enable_strategy_automation(sid):
+    username, row, error = _resolve(sid)
+    if error:
+        return error
+    from services.strategy_module import automation_control
+
+    api_key = _api_key_for(username)
+    previous_state = row.automation_state
+    result = automation_control.enable_sandbox(sid, username, api_key)
+    if result.error == NOT_FOUND:
+        return _error(NOT_FOUND, 404)
+    item = _automation_item(row, result, api_key=api_key)
+    _audit_automation_result(row, username, result, enabling=True,
+                             previous_state=previous_state)
+    if not result.ok:
+        return _error(item["reason"] or "Sandbox automation could not be enabled",
+                      _automation_error_code(result), {"data": item})
+    return _ok({"data": item})
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/automation/disable", methods=["POST"])
+@check_session_validity
+@_api_limit
+def disable_strategy_automation(sid):
+    username, row, error = _resolve(sid)
+    if error:
+        return error
+    from services.strategy_module import automation_control
+
+    result = automation_control.disable_and_close(sid, username)
+    if result.error == NOT_FOUND:
+        return _error(NOT_FOUND, 404)
+    item = _automation_item(row, result)
+    _audit_automation_result(row, username, result, enabling=False)
+    if not result.ok:
+        return _error(item["reason"] or "Sandbox automation could not be disabled",
+                      _automation_error_code(result), {"data": item})
+    return _ok({"data": item})
+
+
+@strategy_module_bp.route("/api/automation/strategies/enable-all-sandbox", methods=["POST"])
+@check_session_validity
+@_api_limit
+def enable_all_sandbox_automation():
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from services.strategy_module import automation_control
+
+    try:
+        with Session(store.engine) as db:
+            rows = db.scalars(select(store.SmStrategy).where(
+                store.SmStrategy.user_id == username
+            ).order_by(store.SmStrategy.id)).all()
+            # Loaded columns remain available after the read session closes.
+            for row in rows:
+                _ = (row.id, row.name, row.automation_state, row.current_run_id,
+                     row.strategy_kind, row.live_enabled, row.legs)
+    except Exception:
+        logger.exception("Could not enumerate sandbox automation strategies")
+        return _error("Could not enumerate strategies safely", 503)
+
+    api_key = _api_key_for(username)
+    items = []
+    processed = 0
+    for row in rows:
+        try:
+            previous_state = row.automation_state
+            result = automation_control.enable_sandbox(row.id, username, api_key)
+            _audit_automation_result(row, username, result, enabling=True,
+                                     previous_state=previous_state)
+            item = _automation_item(row, result, api_key=api_key)
+            if not result.ok and _bulk_automation_skipped(result):
+                item["outcome"] = "skipped"
+            items.append(item)
+            processed += 1
+        except Exception:
+            logger.exception("Could not process sandbox automation strategy %s", row.id)
+            items.append(_automation_item(row, outcome="failed", reason="Strategy control failed"))
+    if rows:
+        counts = {kind: sum(item["outcome"] == kind for item in items)
+                  for kind in ("armed", "skipped", "failed")}
+        store.record_event(rows[0].id, username, "automation_bulk_summary",
+                           "Sandbox automation bulk request completed", payload=counts)
+    if rows and not processed:
+        return _error("Could not process strategies safely", 503, {"data": {"items": items}})
+    return _ok({"data": {"items": items}})
 
 
 def _book(sid: int, fetch):
@@ -1912,6 +2487,32 @@ def webhook(token):
 # positions. Answering the same way for a strategy that is not yours and one
 # that does not exist keeps the id space unprobeable, as the REST routes do.
 # ---------------------------------------------------------------------------
+
+
+@socketio.on("strategy_user_subscribe")
+def _strategy_user_subscribe(_data=None):
+    """Join the authenticated account room for strategy-independent events."""
+    username = _current_user()
+    if not username:
+        return {"status": "error", "message": "Not authenticated"}
+
+    from services.strategy_module import broadcast
+
+    join_room(broadcast.user_room_for(username))
+    return {"status": "success"}
+
+
+@socketio.on("strategy_user_unsubscribe")
+def _strategy_user_unsubscribe(_data=None):
+    """Leave only the authenticated account's automation lifecycle room."""
+    username = _current_user()
+    if not username:
+        return {"status": "error", "message": "Not authenticated"}
+
+    from services.strategy_module import broadcast
+
+    leave_room(broadcast.user_room_for(username))
+    return {"status": "success"}
 
 
 @socketio.on("strategy_subscribe")

@@ -16,7 +16,8 @@ none of them proved it was reachable.
 """
 
 import sys
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,6 +38,37 @@ from services.strategy_module.order_dispatch import DispatchResult  # noqa: E402
 from services.strategy_module.symbol_resolver import ResolvedLeg  # noqa: E402
 
 USER = "e2e-user"
+
+
+@pytest.fixture(autouse=True)
+def synthetic_market_and_account(monkeypatch):
+    """Keep end-to-end routing tests independent of today's market hours."""
+    from database import market_calendar_db
+    from services.strategy_module import portfolio_governor as governor
+
+    def window(_day, _exchange):
+        now = datetime.now(UTC)
+        return {
+            "start_ms": int((now - timedelta(minutes=10)).timestamp() * 1000),
+            "end_ms": int((now + timedelta(hours=2)).timestamp() * 1000),
+        }
+
+    def facts(_user, _strategy, _resolved, _key, mode, **_kwargs):
+        return governor.EntryFacts(
+            mode=mode, available_cash=Decimal("10000000"),
+            session_capital=Decimal("10000000"), open_cash_positions=0,
+            open_nifty_option_positions=0, open_sensex_option_positions=0,
+            open_mcx_option_positions=0, open_derivative_positions=0,
+            entry_nifty_option_positions=0, entry_derivative_positions=0,
+            entry_cash_risk=Decimal("0"), entry_option_lot_risk=Decimal("100"),
+            entry_risk=Decimal("100"), open_risk=Decimal("0"),
+            estimated_debit=Decimal("1000"), minimum_reward_risk=Decimal("2"),
+            session_pnl=Decimal("0"), consecutive_stopped_runs=0,
+            has_option_entry=True, intraday=False, entry_exchanges=("NSE",),
+        )
+
+    monkeypatch.setattr(market_calendar_db, "get_effective_session_window", window)
+    monkeypatch.setattr(governor, "build_entry_facts", facts)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -174,6 +206,7 @@ def _signal_strategy():
         },
     )
     assert error is None, error
+    assert store.set_automation_state(created["id"], USER, "armed") == (True, None)
     return created["id"], created["webhook_token"]
 
 
@@ -189,7 +222,7 @@ def test_a_batch_start_alert_reaches_the_broker_and_the_audit_trail(client, brok
 
     response = _post(client, token, {"action": "start", "mode": "sandbox"})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.get_json()
     assert response.get_json()["status"] == "success"
 
     # An order actually went out.

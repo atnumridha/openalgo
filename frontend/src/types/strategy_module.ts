@@ -20,6 +20,8 @@ export type StrategyKind = 'batch' | 'signal'
 export type StrategyDirection = 'both' | 'long_only' | 'short_only'
 export type StrategyType = 'intraday' | 'positional'
 export type StrategyStatus = 'stopped' | 'running' | 'paused' | 'errored'
+/** Entry admission for linked sandbox automation; independent of a run's status. */
+export type AutomationState = 'disabled' | 'armed' | 'closing' | 'close_failed'
 export type RunMode = 'live' | 'sandbox'
 export type TriggerSource = 'manual' | 'webhook' | 'scheduler'
 
@@ -200,11 +202,44 @@ export interface StrategySummary {
   webhook_ip_allowlist: string[] | null
   daily_loss_limit_inr: number | null
   status: StrategyStatus
+  automation_state: AutomationState
+  automation_state_reason: string | null
+  automation_state_updated_at: string | null
   current_run_id: number | null
   created_at: string
   updated_at: string
   /** Present on list rows; never use a checkpoint after this run has ended. */
   last_finalized_run?: FinalizedRunSummary | null
+}
+
+export interface AutomationControlResult {
+  strategy_id: number
+  name: string
+  state: AutomationState
+  outcome: 'started' | 'armed' | 'disabled' | 'close_pending' | 'skipped' | 'failed'
+  workflow_id: number | null
+  run_id: number | null
+  close_pending: boolean
+  reason: string | null
+}
+
+export interface BulkAutomationResult {
+  items: AutomationControlResult[]
+}
+
+/** Current-session gate for opening automated live entries. */
+export interface LiveAuthorizationStatus {
+  active: boolean
+  session_day: string
+  expires_at: string
+}
+
+/** Idempotent sandbox starter-pack installation response. */
+export interface StarterPackInstallResult {
+  created: StrategySummary[]
+  existing: StrategySummary[]
+  /** One-time tokens, present only for strategies created by this install. */
+  webhook_tokens: Record<string, string>
 }
 
 /** A strategy as the detail endpoint returns it. */
@@ -364,6 +399,33 @@ export interface StrategyEvent {
   leg_id: number | null
   message: string
   payload: Record<string, unknown> | null
+  whatsapp_delivery?: {
+    status: 'pending' | 'sending' | 'sent' | 'late' | 'failed' | 'unavailable'
+    attempts: number
+    event_ts: string
+    last_attempt_at: string | null
+    accepted_at: string | null
+    last_error: string | null
+  } | null
+}
+
+export interface CriticalAlert {
+  id: number
+  source_key: string
+  source_id: number
+  strategy_id: number | null
+  user_id: string
+  event_ts: string
+  kind: string
+  severity: EventSeverity
+  message: string
+  run_id: number | null
+  status: 'pending' | 'sending' | 'sent' | 'late' | 'failed' | 'unavailable'
+  attempts: number
+  last_attempt_at: string | null
+  accepted_at: string | null
+  expires_at: string
+  last_error: string | null
 }
 
 export interface WebhookEvent {

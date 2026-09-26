@@ -13,10 +13,12 @@ is left untouched; this is a fresh, reusable implementation of the same idea.
 
 import hashlib
 import inspect
+import math
 import os
 import threading
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from cachetools import TTLCache
@@ -99,6 +101,7 @@ def fetch_history_cached(
     start_date: str,
     end_date: str,
     source: str = "api",
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Fetch OHLCV history through a short-TTL, process-wide cache.
 
@@ -106,7 +109,19 @@ def fetch_history_cached(
     range must stay retryable rather than being pinned for the whole TTL.
     Set FLOW_HISTORY_CACHE_TTL=0 to effectively disable caching.
     """
-    key = (_account_tag(client), symbol, exchange, interval, start_date, end_date, source)
+    # A broker may send the still-forming final row. Never carry a response
+    # fetched before close (or during the broker settle grace) into the first
+    # moment when that row can authorize a current-bar strategy entry.
+    settled_bar = (
+        current_completed_bar_start(interval, exchange, now)
+        if interval.strip().lower() in _INTERVAL_MINUTES
+        else None
+    )
+    key = (
+        _account_tag(client), getattr(client, "broker_connection_id", None),
+        symbol, exchange, interval, start_date, end_date, source,
+        settled_bar.isoformat() if settled_bar else None,
+    )
 
     def _cached():
         with _history_cache_lock:
@@ -515,6 +530,137 @@ _INTERVAL_MINUTES = {
     "4h": 240,
 }
 
+_IST = ZoneInfo("Asia/Kolkata")
+FLOW_BAR_SETTLE_SECONDS = max(1.0, float(os.getenv("FLOW_BAR_SETTLE_SECONDS", "5")))
+
+
+def completed_history_records(
+    records: list[dict[str, Any]], interval: str, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    """Keep only candles whose full interval and settle grace have elapsed."""
+    moment = _market_bar_time(now or datetime.now(_IST))
+    minutes = _INTERVAL_MINUTES.get(str(interval).strip().lower())
+    if minutes is not None:
+        cutoff = moment - timedelta(minutes=minutes, seconds=FLOW_BAR_SETTLE_SECONDS)
+        return [bar for bar in records if (stamp := _market_bar_time(bar.get("timestamp"))) is not None and stamp <= cutoff]
+    if str(interval).strip().lower() in {"d", "1d", "day"}:
+        return [bar for bar in records if (stamp := _market_bar_time(bar.get("timestamp"))) is not None and stamp.date() < moment.date()]
+    return records
+
+
+def _market_bar_time(value: Any) -> datetime | None:
+    """Read a broker candle timestamp as an IST-aware instant."""
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, (int, float)):
+            stamp = float(value)
+            parsed = datetime.fromtimestamp(stamp / 1000 if stamp > 10**11 else stamp, _IST)
+        else:
+            text = str(value)
+            try:
+                stamp = float(text)
+            except ValueError:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            else:
+                parsed = datetime.fromtimestamp(stamp / 1000 if stamp > 10**11 else stamp, _IST)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    return parsed.replace(tzinfo=_IST) if parsed.tzinfo is None else parsed.astimezone(_IST)
+
+
+def current_completed_bar_start(
+    interval: str, exchange: str, now: datetime | None = None
+) -> datetime | None:
+    """Start of the most recently completed bar in today's effective session.
+
+    Session start anchors interval boundaries. A sparse or late broker history
+    response never moves the expected slot backwards to an older candle.
+    """
+    from database.market_calendar_db import get_effective_session_window
+
+    minutes = _INTERVAL_MINUTES.get(str(interval).strip().lower())
+    if minutes is None:
+        return None
+    moment = _market_bar_time(now or datetime.now(_IST))
+    if moment is None:
+        return None
+    venue = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}.get(exchange.upper(), exchange.upper())
+    window = get_effective_session_window(moment.date(), venue)
+    if not window:
+        return None
+    start = datetime.fromtimestamp(window["start_ms"] / 1000, _IST)
+    end = datetime.fromtimestamp(window["end_ms"] / 1000, _IST)
+    if moment < start or moment >= end:
+        return None
+    duration = timedelta(minutes=minutes)
+    completed = int((moment - start) // duration)
+    if completed < 1:
+        return None
+    bar_start = start + (completed - 1) * duration
+    if moment < bar_start + duration + timedelta(seconds=FLOW_BAR_SETTLE_SECONDS):
+        return None
+    return bar_start
+
+
+def validate_current_bar_set(
+    bars: dict[str, tuple[dict[str, Any], dict[str, Any]]],
+    exchange: str,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Return the current 5-minute bar's start when 5/15 evidence is coherent."""
+    moment = now or datetime.now(_IST)
+    expected_five: datetime | None = None
+    instruments: set[tuple[str, str]] = set()
+    from database.market_calendar_db import get_effective_session_window
+
+    venue = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}.get(exchange.upper(), exchange.upper())
+    for interval in ("5m", "15m"):
+        expected = current_completed_bar_start(interval, exchange, moment)
+        pair = bars.get(interval)
+        if expected is None or not isinstance(pair, (tuple, list)) or len(pair) != 2:
+            return None
+        current, previous = pair
+        if not isinstance(current, dict) or not isinstance(previous, dict):
+            return None
+        duration = timedelta(minutes=_INTERVAL_MINUTES[interval])
+        prior = expected - duration
+        window = get_effective_session_window(expected.date(), venue)
+        if window is None or prior.timestamp() * 1000 < window["start_ms"]:
+            return None
+        if _market_bar_time(current.get("timestamp")) != expected:
+            return None
+        if _market_bar_time(previous.get("timestamp")) != prior:
+            return None
+        for bar in pair:
+            if bar.get("status") != "success":
+                return None
+            symbol = bar.get("symbol")
+            bar_exchange = bar.get("exchange")
+            if not symbol or not bar_exchange:
+                return None
+            try:
+                prices = {field: float(bar[field]) for field in ("open", "high", "low", "close")}
+                if not all(math.isfinite(value) and value > 0 for value in prices.values()):
+                    return None
+                if not (
+                    prices["low"] <= prices["open"] <= prices["high"]
+                    and prices["low"] <= prices["close"] <= prices["high"]
+                ):
+                    return None
+                if "volume" in bar:
+                    volume = float(bar["volume"])
+                    if not math.isfinite(volume) or volume < 0:
+                        return None
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return None
+            instruments.add((str(symbol), str(bar_exchange)))
+        if interval == "5m":
+            expected_five = expected
+    if len(instruments) > 1:
+        return None
+    return expected_five
+
 
 def _drop_forming_bar(
     records: list[dict[str, Any]], interval: str, now: datetime | None = None
@@ -538,6 +684,15 @@ def _drop_forming_bar(
             return records[:-1]
         return records
     minutes = _INTERVAL_MINUTES.get(key)
+    if key in {"5m", "15m"}:
+        # Both the still-forming row and the just-closed row inside the broker
+        # settle grace are unusable. A Flow can retain this offset result until
+        # after grace, so filtering only at the eventual run node is too late.
+        settled = len(records)
+        delay = timedelta(minutes=minutes, seconds=FLOW_BAR_SETTLE_SECONDS)
+        while settled and (now - _parse_timestamp(records[settled - 1].get("timestamp"))) < delay:
+            settled -= 1
+        return records[:settled]
     if minutes is not None and (now - last_ts) < timedelta(minutes=minutes):
         return records[:-1]
     return records

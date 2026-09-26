@@ -151,6 +151,9 @@ const NODE_TITLES: Record<string, string> = {
   indicator: 'Indicator',
   priorPeriodOhlc: 'Prior Period OHLC',
   strategyPnl: 'Strategy P&L',
+  strategyModuleRun: 'Strategy Module Run',
+  strategySignal: 'Strategy Signal',
+  openingRange: 'Opening Range',
   barOffset: 'Bar Offset',
   expiry: 'Get Expiry',
   calendar: 'Calendar',
@@ -1987,6 +1990,173 @@ export function ConfigPanel() {
                     Exposes {'{{spnl.realized}}'}, {'{{spnl.unrealized}}'}, {'{{spnl.total}}'},{' '}
                     {'{{spnl.today_realized}}'}, {'{{spnl.open_quantity}}'}.
                   </p>
+                </div>
+              </>
+            )}
+
+            {nodeType === 'strategyModuleRun' && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Strategy ID</Label>
+                  <Input
+                    className="h-8"
+                    type="number"
+                    min={1}
+                    value={(nodeData.strategyId as number) || ''}
+                    onChange={(e) => handleDataChange('strategyId', Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Broker Owner</Label>
+                  <Input className="h-8" placeholder="API key username"
+                    value={(nodeData.brokerOwner as string) || ''}
+                    onChange={(e) => handleDataChange('brokerOwner', e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Mode</Label>
+                  <Select
+                    value={(nodeData.mode as string) || 'sandbox'}
+                    onValueChange={(v) => handleDataChange('mode', v)}
+                  >
+                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sandbox">Sandbox</SelectItem>
+                      <SelectItem value="live">Live (all safety gates apply)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Market-hours Exchange</Label>
+                  <Input className="h-8" value={(nodeData.marketHoursExchange as string) || ''}
+                    onChange={(e) => handleDataChange('marketHoursExchange', e.target.value)} />
+                </div>
+                {(['5m', '15m'] as const).map((interval) =>
+                  ([0, 1] as const).map((index) => (
+                    <div className="space-y-2" key={`module-${interval}-${index}`}>
+                      <Label className="text-xs">{interval} {index === 0 ? 'current' : 'previous'} candle variable</Label>
+                      <Input className="h-8"
+                        value={((nodeData.barEvidence as Record<string, string[]> | undefined)?.[interval]?.[index]) || ''}
+                        onChange={(e) => {
+                          const existing = (nodeData.barEvidence as Record<string, string[]> | undefined) || {}
+                          const pair = [...(existing[interval] || ['', ''])]
+                          pair[index] = e.target.value
+                          handleDataChange('barEvidence', { ...existing, [interval]: pair })
+                        }} />
+                    </div>
+                  )),
+                )}
+                <div className="space-y-2">
+                  <Label className="text-xs">Output Variable</Label>
+                  <Input
+                    className="h-8"
+                    value={(nodeData.outputVariable as string) || ''}
+                    onChange={(e) => handleDataChange('outputVariable', e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+
+            {nodeType === 'strategySignal' && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Strategy ID</Label>
+                  <Input className="h-8" type="number" min={1}
+                    value={(nodeData.strategyId as number) || ''}
+                    onChange={(e) => handleDataChange('strategyId', Number(e.target.value))} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Broker Owner</Label>
+                  <Input className="h-8" placeholder="API key username"
+                    value={(nodeData.brokerOwner as string) || ''}
+                    onChange={(e) => handleDataChange('brokerOwner', e.target.value)} />
+                  <p className="text-[10px] text-muted-foreground">Must match the workflow API key and strategy owner.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Mode</Label>
+                  <Select value={(nodeData.mode as string) || ''} onValueChange={(v) => handleDataChange('mode', v)}>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="Choose mode" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="sandbox">Sandbox</SelectItem>
+                      <SelectItem value="live">Live (all safety gates apply)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Action</Label>
+                  <Select value={(nodeData.action as string) || ''} onValueChange={(v) => handleDataChange('action', v)}>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="Choose action" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="start">Start batch</SelectItem>
+                      <SelectItem value="stop">Stop batch</SelectItem>
+                      <SelectItem value="long_entry">Long entry</SelectItem>
+                      <SelectItem value="long_exit">Long exit</SelectItem>
+                      <SelectItem value="short_entry">Short entry</SelectItem>
+                      <SelectItem value="short_exit">Short exit</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Signal leg ID (directional actions)</Label>
+                  <Input className="h-8" type="number" min={1}
+                    value={(nodeData.legId as number) || ''}
+                    onChange={(e) => handleDataChange('legId', Number(e.target.value))} />
+                </div>
+                {['start', 'long_entry', 'short_entry'].includes((nodeData.action as string) || '') && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Market-hours Exchange</Label>
+                      <Input className="h-8" value={(nodeData.marketHoursExchange as string) || ''}
+                        onChange={(e) => handleDataChange('marketHoursExchange', e.target.value)} />
+                    </div>
+                    {(['5m', '15m'] as const).map((interval) =>
+                      ([0, 1] as const).map((index) => (
+                        <div className="space-y-2" key={`${interval}-${index}`}>
+                          <Label className="text-xs">{interval} {index === 0 ? 'current' : 'previous'} candle variable</Label>
+                          <Input className="h-8"
+                            value={((nodeData.barEvidence as Record<string, string[]> | undefined)?.[interval]?.[index]) || ''}
+                            onChange={(e) => {
+                              const existing = (nodeData.barEvidence as Record<string, string[]> | undefined) || {}
+                              const pair = [...(existing[interval] || ['', ''])]
+                              pair[index] = e.target.value
+                              handleDataChange('barEvidence', { ...existing, [interval]: pair })
+                            }} />
+                        </div>
+                      )),
+                    )}
+                    <p className="text-[10px] text-muted-foreground">Entry requires matching completed 5-minute and 15-minute candles. Stops and exits remain available without candles.</p>
+                  </>
+                )}
+                <div className="space-y-2">
+                  <Label className="text-xs">Output Variable</Label>
+                  <Input className="h-8" value={(nodeData.outputVariable as string) || ''}
+                    onChange={(e) => handleDataChange('outputVariable', e.target.value)} />
+                </div>
+              </>
+            )}
+
+            {nodeType === 'openingRange' && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Symbol</Label>
+                  <Input className="h-8" value={(nodeData.symbol as string) || ''}
+                    onChange={(e) => handleDataChange('symbol', e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Exchange</Label>
+                  <Input className="h-8" value={(nodeData.exchange as string) || ''}
+                    onChange={(e) => handleDataChange('exchange', e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Opening minutes</Label>
+                  <Input className="h-8" type="number" min={1} max={60}
+                    value={(nodeData.rangeMinutes as number) || 15}
+                    onChange={(e) => handleDataChange('rangeMinutes', Number(e.target.value))} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Output Variable</Label>
+                  <Input className="h-8" value={(nodeData.outputVariable as string) || ''}
+                    onChange={(e) => handleDataChange('outputVariable', e.target.value)} />
+                  <p className="text-[10px] text-muted-foreground">Exposes high, low and session start after every one-minute candle closes.</p>
                 </div>
               </>
             )}

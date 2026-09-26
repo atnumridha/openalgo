@@ -92,6 +92,7 @@ __all__ = [
     "EVENT_RUN_UPDATE",
     "EVENT_SNAPSHOT",
     "EVENT_TERMINAL",
+    "EVENT_USER_EVENT",
     "NAMESPACE",
     "delta_payload",
     "forget_strategy",
@@ -102,7 +103,9 @@ __all__ = [
     "push_run_update",
     "push_snapshot",
     "push_terminal",
+    "push_user_event",
     "room_for",
+    "user_room_for",
     "snapshot_payload",
 ]
 
@@ -111,6 +114,7 @@ __all__ = [
 NAMESPACE = "/"
 
 ROOM_PREFIX = "strategy:"
+USER_ROOM_PREFIX = "strategy-user:"
 
 EVENT_SNAPSHOT = "strategy_snapshot"
 EVENT_DELTA = "strategy_delta"
@@ -118,6 +122,7 @@ EVENT_EVENT = "strategy_event"
 EVENT_ORDER_UPDATE = "strategy_order_update"
 EVENT_RUN_UPDATE = "strategy_run_update"
 EVENT_TERMINAL = "strategy_terminal"
+EVENT_USER_EVENT = "strategy_user_event"
 
 #: Every trading time in this product is IST. Same zone the scheduler and the
 #: signal path use, so a timestamp in a broadcast and one in an event row read
@@ -182,6 +187,11 @@ _subscriber_probe_warned = False
 def room_for(strategy_id: int) -> str:
     """The Socket.IO room carrying one strategy's live updates."""
     return f"{ROOM_PREFIX}{strategy_id}"
+
+
+def user_room_for(user_id: str) -> str:
+    """The account-scoped room for lifecycle events without a strategy."""
+    return f"{USER_ROOM_PREFIX}{user_id}"
 
 
 def _room_size(room: str) -> int | None:
@@ -595,6 +605,32 @@ def push_event(strategy_id: int, event: dict[str, Any]) -> bool:
         return _push(EVENT_EVENT, strategy_id, payload)
     except Exception:
         logger.exception("Could not push an event for strategy %s", strategy_id)
+        return False
+
+
+def push_user_event(user_id: str, event: dict[str, Any]) -> bool:
+    """Push one persisted account automation event without a fake strategy id."""
+    try:
+        username = str(user_id or "").strip()
+        if not username or not event:
+            return False
+        now = _now_ist()
+        payload = {
+            "type": "user_event",
+            "user_id": username,
+            "ts": now.isoformat(),
+            "ts_ms": int(now.timestamp() * 1000),
+            "event": event,
+        }
+        socketio.start_background_task(
+            _emit_now,
+            EVENT_USER_EVENT,
+            payload,
+            user_room_for(username),
+        )
+        return True
+    except Exception:
+        logger.exception("Could not push a user lifecycle event for %s", user_id)
         return False
 
 

@@ -72,6 +72,7 @@ VALID_NODE_TYPES: frozenset[str] = frozenset(
         "multiQuotes",
         "notGate",
         "openPosition",
+        "openingRange",
         "optionChain",
         "optionSymbol",
         "optionsMultiOrder",
@@ -89,6 +90,8 @@ VALID_NODE_TYPES: frozenset[str] = frozenset(
         "splitOrder",
         "start",
         "strategyPnl",
+        "strategyModuleRun",
+        "strategySignal",
         "subscribeDepth",
         "subscribeLtp",
         "subscribeQuote",
@@ -289,6 +292,9 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "symbol": ("symbol", "exchange"),
     "multiQuotes": ("symbols",),
     "httpRequest": ("url",),
+    "strategyModuleRun": ("strategyId", "brokerOwner", "mode", "marketHoursExchange", "barEvidence"),
+    "strategySignal": ("strategyId", "brokerOwner", "mode", "action"),
+    "openingRange": ("symbol", "exchange", "rangeMinutes"),
     "variable": ("variableName",),
     "waitUntil": ("targetTime",),
 }
@@ -779,6 +785,8 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
     """
     found = []
     for field, allowed in ENUM_FIELDS.items():
+        if node_type == "strategySignal" and field == "action":
+            continue
         if field not in data:
             continue
         value = data.get(field)
@@ -814,6 +822,38 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
                     value,
                 )
             )
+
+    if node_type == "strategySignal":
+        for field, allowed in (
+            ("action", {"start", "stop", "long_entry", "long_exit", "short_entry", "short_exit"}),
+        ):
+            value = data.get(field)
+            if value is not None and value not in allowed:
+                found.append(_err(f"{base}/data/{field}", "invalid_constant", f"Invalid {field}", sorted(allowed), value))
+    if node_type in {"strategySignal", "strategyModuleRun"}:
+        mode = data.get("mode")
+        if mode is not None and mode not in {"sandbox", "live"}:
+            found.append(_err(f"{base}/data/mode", "invalid_constant", "mode must be sandbox or live", ["sandbox", "live"], mode))
+        strategy_id = data.get("strategyId")
+        if strategy_id is not None and (isinstance(strategy_id, bool) or not str(strategy_id).isdigit() or int(strategy_id) <= 0):
+            found.append(_err(f"{base}/data/strategyId", "invalid_strategy", "strategyId must be a positive integer", "positive integer", strategy_id))
+    if strict and (node_type == "strategyModuleRun" or (
+        node_type == "strategySignal" and data.get("action") in {"start", "long_entry", "short_entry"}
+    )):
+        evidence = data.get("barEvidence")
+        if not isinstance(evidence, dict) or any(
+            not isinstance(evidence.get(interval), list)
+            or len(evidence[interval]) != 2
+            or not all(isinstance(name, str) and name.strip() for name in evidence[interval])
+            for interval in ("5m", "15m")
+        ):
+            found.append(_err(f"{base}/data/barEvidence", "required", "Entry requires current 5/15-minute candle variables", "two names per interval", evidence))
+        if not data.get("marketHoursExchange"):
+            found.append(_err(f"{base}/data/marketHoursExchange", "required", "Entry requires a market-hours exchange", "exchange", data.get("marketHoursExchange")))
+    if node_type == "openingRange" and "rangeMinutes" in data:
+        minutes = data["rangeMinutes"]
+        if isinstance(minutes, bool) or not str(minutes).isdigit() or not 1 <= int(minutes) <= 60:
+            found.append(_err(f"{base}/data/rangeMinutes", "invalid_range", "rangeMinutes must be an integer from 1 to 60", "1..60", minutes))
 
     for field in POSITIVE_NUMBER_FIELDS:
         if field not in data:

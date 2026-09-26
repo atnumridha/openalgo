@@ -3,7 +3,7 @@
 Persistence for the /strategy module: multi-leg options strategies with
 end-to-end risk management.
 
-Six tables, all ``sm_`` prefixed. The prefix is not decoration: this codebase
+Seven tables, all ``sm_`` prefixed. The prefix is not decoration: this codebase
 already carries five unrelated things called "strategy" (the Strategy Builder's
 ``strategy_portfolio``, ``strategy_book``, ``strategy_order_tags``,
 ``strategy_pending_fills``, and the Python strategy host), and the retired
@@ -16,6 +16,7 @@ what keeps a future reader from wiring the wrong one.
 - ``sm_strategy_checkpoint`` periodic runtime snapshot, for crash recovery
 - ``sm_webhook_event``       every inbound webhook, accepted or rejected
 - ``sm_strategy_event``      risk-event audit trail (SL hit, lock profit, ...)
+- ``sm_automation_event``    user-scoped automation lifecycle audit trail
 
 Timestamps are stored naive UTC and rendered IST at the API boundary. SQLite
 does not preserve a timezone on a DateTime column whatever you pass it, so
@@ -32,8 +33,9 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from math import isfinite
 from typing import Any
 
 from cachetools import TTLCache
@@ -41,6 +43,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -50,8 +53,12 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    case,
     exists,
+    inspect,
+    or_,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
@@ -105,6 +112,7 @@ DIRECTIONS = ("both", "long_only", "short_only")
 STRATEGY_TYPES = ("intraday", "positional")
 RUN_MODES = ("live", "sandbox")
 STRATEGY_STATUSES = ("stopped", "running", "paused", "errored")
+AUTOMATION_STATES = ("disabled", "armed", "closing", "close_failed")
 TRIGGER_SOURCES = ("manual", "webhook", "scheduler")
 
 STOP_REASONS = (
@@ -118,11 +126,13 @@ STOP_REASONS = (
     "daily_loss_limit",
     "tick_stale",
     "recovery_failed",
+    "protection_failed",
     "error",
 )
 
 ORDER_KINDS = (
     "entry",
+    "protective_stop",
     "exit_sl",
     "exit_target",
     "exit_trail",
@@ -141,7 +151,7 @@ ORDER_KINDS = (
     "exit_signal",
 )
 
-ORDER_STATUSES = ("pending", "open", "complete", "cancelled", "rejected")
+ORDER_STATUSES = ("pending", "unknown", "open", "complete", "cancelled", "rejected")
 
 _TERMINAL_ORDER_STATUSES = frozenset({"complete", "cancelled", "rejected"})
 
@@ -171,6 +181,34 @@ class OrderFactFold:
 
 EVENT_SEVERITIES = ("info", "warn", "critical")
 
+# Account lifecycle exists independently of any strategy row. These values are
+# deliberately absent from EVENT_KINDS, which is also the public
+# /api/v1/strategy/events filter vocabulary.
+AUTOMATION_EVENT_KINDS = (
+    "live_authorization_granted",
+    "live_authorization_revoked",
+    "live_authorization_expired",
+    "broker_data_unavailable",
+    "broker_data_recovered",
+)
+
+# Enqueued in the *same transaction* as the audit event. These need operator
+# attention even when a caller writes directly through record_event().
+CRITICAL_ALERT_EVENT_KINDS = frozenset({
+    "run_stop_failed", "leg_exit_rejected", "order_outcome_unknown",
+    "live_protection_unverified", "protective_stop_uncovered", "protective_stop_failed",
+    "exit_order_unrecorded", "order_ack_unrecorded",
+    "flip_outgoing_exit_rejected", "stale_feed_stop", "recovery_failed",
+    "daily_loss_limit", "daily_loss_lock", "webhook_locked",
+    "kill_switch_engaged", "overall_sl_hit", "leg_sl_hit",
+    "sandbox_comparison_summary",
+})
+CRITICAL_ALERT_AUTOMATION_KINDS = frozenset({
+    "live_authorization_revoked", "live_authorization_expired",
+    "broker_data_unavailable", "broker_data_recovered",
+})
+CRITICAL_ALERT_TTL = timedelta(hours=12)
+
 EVENT_KINDS = (
     # Lifecycle
     "strategy_created",
@@ -185,7 +223,12 @@ EVENT_KINDS = (
     "run_resumed",
     "run_stop_requested",
     "run_stopped",
+    "sandbox_comparison_summary",
     "run_stop_failed",
+    "live_authorization_required",
+    "portfolio_governor_admitted",
+    "portfolio_governor_rejected",
+    "stale_feed_stop",
     "flip_outgoing_exit_rejected",
     "close_all_manual",
     # Entry and exit
@@ -198,6 +241,11 @@ EVENT_KINDS = (
     "leg_close_manual",
     "leg_expiry_fallback",
     "order_ack_unrecorded",
+    "order_outcome_unknown",
+    "live_protection_unverified",
+    "protective_stop_uncovered",
+    "protective_stop_verified",
+    "protective_stop_failed",
     # Per-leg risk
     "leg_sl_hit",
     "leg_target_hit",
@@ -258,6 +306,8 @@ class SmStrategy(Base):
     # database/scalping_db.py. OpenAlgo is single user per deployment, so this
     # keeps the schema honest rather than isolating tenants.
     user_id = Column(String(80), nullable=False, index=True)
+    # A strategy may only consume signals from its explicitly selected broker.
+    broker_connection_id = Column(String(36), nullable=True)
 
     name = Column(String(200), nullable=False)
 
@@ -304,6 +354,9 @@ class SmStrategy(Base):
     daily_loss_limit_inr = Column(Numeric(18, 2), nullable=True)
 
     status = Column(String(20), nullable=False, default="stopped", index=True)
+    automation_state = Column(String(20), nullable=False, default="disabled")
+    automation_state_reason = Column(Text, nullable=True)
+    automation_state_updated_at = Column(DateTime, nullable=True)
 
     # Deliberately a plain Integer, not a ForeignKey. sm_strategy and
     # sm_strategy_run reference each other, and SQLite cannot ALTER TABLE to
@@ -341,6 +394,7 @@ class SmStrategyRun(Base):
     )
     mode = Column(String(10), nullable=False)
     broker = Column(String(50), nullable=False, default="")
+    broker_connection_id = Column(String(36), nullable=True)
 
     started_at = Column(
         DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None)
@@ -518,6 +572,119 @@ class SmStrategyEvent(Base):
     )
 
 
+class SmRiskReservation(Base):
+    """Committed entry risk that must survive a process restart.
+
+    A memory-only reservation disappears when the worker restarts, and the next
+    entry then sees funds that are already spoken for. One row is one admitted
+    entry, keyed by its order ids so a fill or rejection can release it.
+    """
+
+    __tablename__ = "sm_risk_reservation"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(80), nullable=False, index=True)
+    # ``scope`` separates sandbox from live and prevents a reservation made for
+    # one broker connection from consuming the risk budget of another.
+    scope = Column(String(240), nullable=False, default="", index=True)
+    order_key = Column(String(200), nullable=False)
+    components = Column(JSON, nullable=False)
+    available_cash = Column(Numeric(18, 2), nullable=True)
+    created_at = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope", "order_key", name="uq_sm_risk_reservation"),
+    )
+
+
+class SmRiskSessionCapital(Base):
+    """First observed available cash for one broker and execution session."""
+
+    __tablename__ = "sm_risk_session_capital"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(80), nullable=False)
+    mode = Column(String(10), nullable=False)
+    broker = Column(String(50), nullable=False)
+    session_day = Column(Date, nullable=False)
+    capital = Column(Numeric(18, 2), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "mode", "broker", "session_day", name="uq_sm_risk_session_capital"
+        ),
+    )
+
+
+class SmAutomationEvent(Base):
+    """Account-level automation lifecycle that does not belong to a strategy.
+
+    Live authorization exists before the first strategy is created, so using a
+    fake strategy id would corrupt both ownership and foreign-key meaning.
+    """
+
+    __tablename__ = "sm_automation_event"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(80), nullable=False, index=True)
+    ts = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    kind = Column(String(40), nullable=False)
+    severity = Column(String(10), nullable=False, default="info")
+    message = Column(Text, nullable=False)
+    payload = Column(JSON, nullable=True)
+
+    __table_args__ = (Index("ix_sm_automation_event_user_ts", "user_id", "ts"),)
+
+
+class SmCriticalAlert(Base):
+    """One durable WhatsApp delivery attempt stream per critical audit event."""
+
+    __tablename__ = "sm_critical_alert"
+    id = Column(Integer, primary_key=True)
+    source_key = Column(String(80), nullable=False, unique=True)
+    source_id = Column(Integer, nullable=False)
+    strategy_id = Column(Integer, nullable=True, index=True)
+    user_id = Column(String(80), nullable=False, index=True)
+    event_ts = Column(DateTime, nullable=False)
+    kind = Column(String(40), nullable=False)
+    severity = Column(String(10), nullable=False)
+    message = Column(Text, nullable=False)
+    run_id = Column(Integer, nullable=True)
+    status = Column(String(12), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    lease_until = Column(DateTime, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    last_error = Column(String(240), nullable=True)
+
+    __table_args__ = (
+        Index("ix_sm_critical_alert_due", "status", "next_attempt_at"),
+    )
+
+
+class SmBrokerDataStatus(Base):
+    """Last announced state per pinned connection; transitions are CAS-owned."""
+
+    __tablename__ = "sm_broker_data_status"
+    connection_id = Column(String(36), primary_key=True)
+    user_id = Column(String(80), nullable=False)
+    state = Column(String(16), nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class SmComparisonSessionSummary(Base):
+    """One atomic audit/outbox summary per strategy and trading session."""
+
+    __tablename__ = "sm_comparison_session_summary"
+    strategy_id = Column(Integer, primary_key=True)
+    session_day = Column(Date, primary_key=True)
+    event_id = Column(Integer, nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Init
 # ---------------------------------------------------------------------------
@@ -527,6 +694,198 @@ def init_db() -> None:
     """Create the strategy-module tables if they do not exist."""
     logger.info("Initializing Strategy Module DB")
     Base.metadata.create_all(bind=engine)
+    try:
+        columns = {item["name"] for item in inspect(engine).get_columns("sm_strategy")}
+        if "broker_connection_id" not in columns:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sm_strategy ADD COLUMN broker_connection_id VARCHAR(36)"
+                )
+    except Exception:
+        logger.exception("Could not ensure strategy broker-connection schema")
+    try:
+        columns = {item["name"] for item in inspect(engine).get_columns("sm_strategy")}
+        for column, ddl in (
+            ("automation_state", "VARCHAR(20) NOT NULL DEFAULT 'disabled'"),
+            ("automation_state_reason", "TEXT"),
+            ("automation_state_updated_at", "DATETIME"),
+        ):
+            if column not in columns:
+                with engine.begin() as connection:
+                    connection.exec_driver_sql(
+                        f"ALTER TABLE sm_strategy ADD COLUMN {column} {ddl}"
+                    )
+    except Exception:
+        logger.exception("Could not ensure strategy automation-state schema")
+    try:
+        columns = {item["name"] for item in inspect(engine).get_columns("sm_strategy_run")}
+        if "broker_connection_id" not in columns:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sm_strategy_run ADD COLUMN broker_connection_id VARCHAR(36)"
+                )
+    except Exception:
+        logger.exception("Could not ensure strategy-run broker-connection schema")
+    # ``create_all`` does not alter an already-created reservation table. Keep
+    # boot safe for installations that upgraded before scoped reservations were
+    # introduced; the dedicated migration performs the same change explicitly.
+    try:
+        columns = {item["name"] for item in inspect(engine).get_columns("sm_risk_reservation")}
+        if "scope" not in columns:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "ALTER TABLE sm_risk_reservation ADD COLUMN scope "
+                    "VARCHAR(240) NOT NULL DEFAULT ''"
+                )
+    except Exception:
+        logger.exception("Could not ensure scoped risk-reservation schema")
+
+
+def get_or_create_session_capital(
+    user_id: str, mode: str, broker: str, session_day: date, observed_cash: Decimal
+) -> Decimal | None:
+    """Persist the first observed cash balance for this account session."""
+    if not user_id or mode not in {"live", "sandbox"} or not broker or observed_cash <= 0:
+        return None
+    criteria = {
+        "user_id": str(user_id),
+        "mode": mode,
+        "broker": broker.lower(),
+        "session_day": session_day,
+    }
+    try:
+        row = db_session.query(SmRiskSessionCapital).filter_by(**criteria).first()
+        if row is not None:
+            return Decimal(row.capital)
+        row = SmRiskSessionCapital(**criteria, capital=observed_cash)
+        db_session.add(row)
+        db_session.commit()
+        return Decimal(row.capital)
+    except IntegrityError:
+        db_session.rollback()
+        try:
+            row = db_session.query(SmRiskSessionCapital).filter_by(**criteria).first()
+            return Decimal(row.capital) if row is not None else None
+        except Exception:
+            db_session.rollback()
+            logger.exception("Could not read session capital for %s", user_id)
+            return None
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not persist session capital for %s", user_id)
+        return None
+
+
+def _reservation_key(components: list[dict[str, Any]]) -> str:
+    order_ids = sorted(
+        str(component.get("entry_order_id"))
+        for component in components
+        if component.get("entry_order_id") is not None
+    )
+    if order_ids:
+        return "orders:" + ",".join(order_ids)
+    refs = sorted(str(component.get("position_ref") or "") for component in components)
+    return "refs:" + ",".join(refs)
+
+
+def upsert_risk_reservation(
+    user_id: str,
+    components: list[dict[str, Any]],
+    available_cash: Decimal | None,
+    *,
+    scope: str = "",
+) -> bool:
+    """Store one committed reservation and report whether it is durable."""
+    try:
+        key = _reservation_key(components)
+        row = (
+            db_session.query(SmRiskReservation)
+            .filter_by(user_id=str(user_id), scope=str(scope), order_key=key)
+            .first()
+        )
+        if row is None:
+            row = SmRiskReservation(
+                user_id=str(user_id), scope=str(scope), order_key=key, components=components
+            )
+            db_session.add(row)
+        row.components = components
+        row.available_cash = available_cash
+        db_session.commit()
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not persist a risk reservation for %s (%s)", user_id, scope)
+        return False
+
+
+def list_risk_reservations(user_id: str, *, scope: str | None = None) -> list[dict[str, Any]]:
+    """Committed reservations for one user.
+
+    A missing table means nothing durable has been stored yet. Any other read
+    error is raised so admission can fail closed instead of ignoring reserved risk.
+    """
+    try:
+        query = db_session.query(SmRiskReservation).filter_by(user_id=str(user_id))
+        if scope is not None:
+            query = query.filter_by(scope=str(scope))
+        rows = query.all()
+    except Exception as exc:
+        db_session.rollback()
+        if _missing_table(exc):
+            return []
+        raise
+    return [
+        {
+            "components": row.components or [],
+            "available_cash": _num(row.available_cash),
+            "scope": row.scope,
+        }
+        for row in rows
+    ]
+
+
+def _missing_table(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "no such table" in message or "undefinedtable" in message or "does not exist" in message
+
+
+def delete_risk_reservations(
+    user_id: str,
+    order_ids: list[int],
+    position_refs: list[str] | None = None,
+    *,
+    scope: str | None = None,
+) -> None:
+    """Release persisted reservations once their entry is no longer reserved."""
+    wanted_orders = {str(order_id) for order_id in order_ids}
+    wanted_refs = {str(ref) for ref in position_refs or [] if ref}
+    if not wanted_orders and not wanted_refs:
+        return
+    try:
+        query = db_session.query(SmRiskReservation).filter_by(user_id=str(user_id))
+        if scope is not None:
+            query = query.filter_by(scope=str(scope))
+        rows = query.all()
+        for row in rows:
+            components = row.components or []
+            order_keys = {
+                str(component.get("entry_order_id"))
+                for component in components
+                if component.get("entry_order_id") is not None
+            }
+            ref_keys = {
+                str(component.get("position_ref"))
+                for component in components
+                if component.get("position_ref")
+            }
+            if (order_keys and order_keys <= wanted_orders) or (
+                ref_keys and ref_keys <= wanted_refs
+            ):
+                db_session.delete(row)
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not release risk reservations for %s", user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +947,7 @@ def strategy_to_dict(row: SmStrategy, *, include_legs: bool = True) -> dict:
     data = {
         "id": row.id,
         "name": row.name,
+        "broker_connection_id": row.broker_connection_id,
         "strategy_kind": row.strategy_kind,
         "direction": row.direction,
         "universe_tab": row.universe_tab,
@@ -608,6 +968,9 @@ def strategy_to_dict(row: SmStrategy, *, include_legs: bool = True) -> dict:
         "webhook_ip_allowlist": row.webhook_ip_allowlist,
         "daily_loss_limit_inr": _num(row.daily_loss_limit_inr),
         "status": row.status,
+        "automation_state": row.automation_state,
+        "automation_state_reason": row.automation_state_reason,
+        "automation_state_updated_at": _iso(row.automation_state_updated_at),
         "current_run_id": row.current_run_id,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
@@ -623,6 +986,7 @@ def run_to_dict(row: SmStrategyRun) -> dict:
         "strategy_id": row.strategy_id,
         "mode": row.mode,
         "broker": row.broker,
+        "broker_connection_id": row.broker_connection_id,
         "started_at": _iso(row.started_at),
         "stopped_at": _iso(row.stopped_at),
         "stop_reason": row.stop_reason,
@@ -671,6 +1035,70 @@ def event_to_dict(row: SmStrategyEvent) -> dict:
         "kind": row.kind,
         "severity": row.severity,
         "leg_id": row.leg_id,
+        "message": row.message,
+        "payload": row.payload,
+    }
+
+
+def critical_alert_to_dict(row: SmCriticalAlert) -> dict:
+    return {
+        "id": row.id,
+        "source_key": row.source_key,
+        "source_id": row.source_id,
+        "strategy_id": row.strategy_id,
+        "user_id": row.user_id,
+        "event_ts": _iso(row.event_ts),
+        "kind": row.kind,
+        "severity": row.severity,
+        "message": row.message,
+        "run_id": row.run_id,
+        "status": row.status,
+        "attempts": row.attempts,
+        "last_attempt_at": _iso(row.last_attempt_at),
+        "accepted_at": _iso(row.accepted_at),
+        "expires_at": _iso(row.expires_at),
+        "last_error": row.last_error,
+    }
+
+
+def _critical_source_key(row: SmStrategyEvent | SmAutomationEvent, *, account: bool) -> str:
+    """Stable event identity even if SQLite reuses an ID after audit deletion."""
+    return f"{'automation' if account else 'strategy'}:{row.id}:{row.ts.isoformat(timespec='microseconds')}"
+
+
+def _enqueue_critical_alert(row: SmStrategyEvent | SmAutomationEvent, *, account: bool) -> None:
+    """Flush IDs and stage the alert before the caller's single commit."""
+    is_critical = (
+        row.kind in CRITICAL_ALERT_AUTOMATION_KINDS if account
+        else row.kind in CRITICAL_ALERT_EVENT_KINDS
+    )
+    if not is_critical:
+        return
+    db_session.flush()
+    timestamp = row.ts or datetime.now(UTC).replace(tzinfo=None)
+    db_session.add(SmCriticalAlert(
+        source_key=_critical_source_key(row, account=account),
+        source_id=row.id,
+        strategy_id=None if account else row.strategy_id,
+        user_id=row.user_id,
+        event_ts=timestamp,
+        kind=row.kind,
+        severity=row.severity,
+        message=row.message,
+        run_id=None if account else row.run_id,
+        next_attempt_at=timestamp,
+        expires_at=timestamp + CRITICAL_ALERT_TTL,
+    ))
+
+
+def automation_event_to_dict(row: SmAutomationEvent) -> dict:
+    """Serialize an account-level event without inventing strategy context."""
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "ts": _iso(row.ts),
+        "kind": row.kind,
+        "severity": row.severity,
         "message": row.message,
         "payload": row.payload,
     }
@@ -730,6 +1158,7 @@ def create_strategy(user_id: str, config: dict) -> tuple[dict | None, str | None
         row = SmStrategy(
             user_id=user_id,
             name=config["name"],
+            broker_connection_id=config.get("broker_connection_id"),
             strategy_kind=config.get("strategy_kind", "batch"),
             direction=config.get("direction", "both"),
             universe_tab=config.get("universe_tab", "weekly_monthly"),
@@ -824,6 +1253,29 @@ def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:
         return None
 
 
+def set_automation_state(
+    strategy_id: int, user_id: str, state: str, *, reason: str | None = None
+) -> tuple[bool, str | None]:
+    """Atomically update one owner's strategy automation admission state."""
+    if state not in AUTOMATION_STATES:
+        return False, "Unknown automation state"
+    updated = db_session.query(SmStrategy).filter_by(
+        id=strategy_id, user_id=user_id
+    ).update(
+        {
+            SmStrategy.automation_state: state,
+            SmStrategy.automation_state_reason: reason,
+            SmStrategy.automation_state_updated_at: utcnow(),
+        },
+        synchronize_session=False,
+    )
+    if updated != 1:
+        db_session.rollback()
+        return False, "Strategy not found"
+    db_session.commit()
+    return True, None
+
+
 def get_strategy_unscoped(strategy_id: int) -> SmStrategy | None:
     """One strategy without an owner filter.
 
@@ -854,6 +1306,7 @@ def get_strategy_unscoped(strategy_id: int) -> SmStrategy | None:
 UPDATABLE_FIELDS = frozenset(
     {
         "name",
+        "broker_connection_id",
         "direction",
         "universe_tab",
         "underlying",
@@ -1125,10 +1578,14 @@ def create_run(
 ) -> SmStrategyRun | None:
     """Open a new run for a strategy."""
     try:
+        strategy_connection_id = db_session.query(SmStrategy.broker_connection_id).filter(
+            SmStrategy.id == strategy_id
+        ).scalar()
         row = SmStrategyRun(
             strategy_id=strategy_id,
             mode=mode,
             broker=broker or "",
+            broker_connection_id=strategy_connection_id,
             trigger_source=trigger_source,
             webhook_event_id=webhook_event_id,
             resolved_expiries=resolved_expiries,
@@ -1560,8 +2017,13 @@ def get_run(run_id: int) -> SmStrategyRun | None:
 
 
 def realized_pnl_since(
-    strategy_id: int, since: datetime, exclude_run_id: int | None = None
-) -> float:
+    strategy_id: int,
+    since: datetime,
+    exclude_run_id: int | None = None,
+    *,
+    mode: str | None = None,
+    broker: str | None = None,
+) -> float | None:
     """What this strategy has already banked this session, as a signed figure.
 
     Summed over the runs that have finished since the session began, so a
@@ -1586,7 +2048,7 @@ def realized_pnl_since(
     # one worker that serves everything else too. finish_run and
     # reconcile_run_pnl invalidate it, so the TTL is a safety net rather than
     # the mechanism.
-    key = (strategy_id, since, exclude_run_id)
+    key = (strategy_id, since, exclude_run_id, mode, broker)
     cached = _session_pnl_cache.get(key)
     if cached is not None:
         return cached
@@ -1595,18 +2057,20 @@ def realized_pnl_since(
         query = db_session.query(SmStrategyRun.pnl_realized).filter(
             SmStrategyRun.strategy_id == strategy_id,
             SmStrategyRun.started_at >= since,
+            SmStrategyRun.stopped_at.is_not(None),
         )
         if exclude_run_id is not None:
             query = query.filter(SmStrategyRun.id != exclude_run_id)
+        if mode is not None:
+            query = query.filter(SmStrategyRun.mode == mode)
+        if broker is not None:
+            query = query.filter(SmStrategyRun.broker == broker.lower())
         total = float(sum(float(row[0] or 0.0) for row in query.all()))
         _session_pnl_cache[key] = total
         return total
     except Exception:
         logger.exception("Could not total realized P&L for strategy %s", strategy_id)
-        # Zero, not a guess. A caller uses this to decide whether a limit has
-        # been reached, and inventing a loss would stop a strategy that has
-        # not lost anything.
-        return 0.0
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1760,6 +2224,127 @@ def reconcile_run_pnl(run_id: int) -> float | None:
         db_session.rollback()
         logger.exception("Could not reconcile the P&L of run %s", run_id)
         return None
+
+
+def list_user_runs(
+    user_id: str,
+    limit: int = 500,
+    *,
+    since: datetime | None = None,
+    mode: str | None = None,
+    broker: str | None = None,
+    strategy_id: int | None = None,
+) -> list[dict] | None:
+    """Runs for one user, optionally restricted to an account and session."""
+    try:
+        query = (
+            db_session.query(SmStrategyRun)
+            .join(SmStrategy, SmStrategy.id == SmStrategyRun.strategy_id)
+            .filter(SmStrategy.user_id == str(user_id))
+        )
+        if since is not None:
+            query = query.filter(
+                or_(
+                    SmStrategyRun.started_at >= since,
+                    SmStrategyRun.stopped_at >= since,
+                    SmStrategyRun.stopped_at.is_(None),
+                )
+            )
+        if mode is not None:
+            query = query.filter(SmStrategyRun.mode == mode)
+        if strategy_id is not None:
+            query = query.filter(SmStrategyRun.strategy_id == strategy_id)
+        if broker is not None:
+            query = query.filter(
+                or_(SmStrategyRun.broker == broker.lower(), SmStrategyRun.broker == "")
+            )
+        rows = query.order_by(SmStrategyRun.started_at.desc()).limit(max(1, int(limit))).all()
+        return [run_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list runs for user %s", user_id)
+        return None
+
+
+def filled_orders_have_usable_evidence(
+    run_ids: list[int], *, completed_run_ids: list[int] | None = None,
+    run_realized: dict[int, Decimal] | None = None,
+) -> bool:
+    """Whether priced, attributable fills agree with each run's realized P&L.
+
+    Empty runs are valid only with zero realized P&L. A read failure or a
+    history beyond the bounded audit size is not evidence of zero P&L.
+    """
+    try:
+        ids = sorted({int(run_id) for run_id in run_ids})
+        completed = {int(run_id) for run_id in (completed_run_ids or [])}
+        if not completed.issubset(ids) or run_realized is None:
+            return False
+        if set(run_realized) != set(ids):
+            return False
+        if not ids:
+            return True
+        if len(ids) > 500:
+            return False
+        rows = (
+            db_session.query(SmStrategyOrder)
+            .filter(SmStrategyOrder.run_id.in_(ids))
+            .order_by(SmStrategyOrder.run_id, SmStrategyOrder.placed_at, SmStrategyOrder.id)
+            .limit(10001)
+            .all()
+        )
+        if len(rows) > 10000:
+            return False
+
+        owners: dict[tuple[int, int, str | None], list[_PnlFillFact]] = {}
+        for order in rows:
+            status = str(order.status or "").lower()
+            quantity = int(order.filled_qty or 0)
+            if quantity < 0:
+                return False
+            if status == "complete" and quantity == 0:
+                quantity = int(order.qty or 0)
+            if quantity <= 0:
+                continue
+            price = float(order.avg_fill_price) if order.avg_fill_price is not None else 0.0
+            if not isfinite(price) or price <= 0:
+                return False
+            reference = str(order.position_ref).strip() if order.position_ref else None
+            owner = (int(order.run_id), int(order.leg_id), reference)
+            owners.setdefault(owner, []).append(
+                _PnlFillFact(
+                    order_id=int(order.id),
+                    placed_at=order.placed_at,
+                    kind=str(order.kind or ""),
+                    action=str(order.action or "").upper(),
+                    quantity=quantity,
+                    price=price,
+                )
+            )
+
+        folded_by_run = {run_id: Decimal("0") for run_id in ids}
+        for (run_id, _leg_id, reference), facts in owners.items():
+            entries = sum(fact.quantity for fact in facts if fact.kind == "entry")
+            exits = sum(fact.quantity for fact in facts if fact.kind != "entry")
+            if exits > entries or (run_id in completed and exits != entries):
+                return False
+            open_quantity = 0
+            for fact in sorted(facts, key=lambda item: (item.placed_at, item.order_id)):
+                open_quantity += fact.quantity if fact.kind == "entry" else -fact.quantity
+                if open_quantity < 0:
+                    return False
+            folded = _fold_owner_pnl(facts, referenced=reference is not None)
+            if folded is None:
+                return False
+            folded_by_run[run_id] += Decimal(str(folded[0]))
+        for run_id in ids:
+            recorded = Decimal(str(run_realized[run_id]))
+            if not recorded.is_finite() or abs(recorded - folded_by_run[run_id]) > Decimal("0.01"):
+                return False
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not validate filled-order P&L evidence")
+        return False
 
 
 def list_runs(strategy_id: int, limit: int = 100) -> list[dict]:
@@ -2202,6 +2787,78 @@ def list_orders(run_id: int) -> list[dict]:
         return []
 
 
+def has_unresolved_order_outcomes(user_id: str, mode: str | None = None) -> bool:
+    """Fail closed while this user's account has unknown or pending delivery.
+
+    A matching broker order or an operator's authoritative reconciliation must
+    resolve an unknown row before new entries are admitted. An open run's
+    pending row also blocks admission: both the status update and its fallback
+    event can fail after a broker call, leaving only the original intent.
+    ``mode`` separates the sandbox and live accounts; omission checks both.
+    """
+    try:
+        query = (
+            db_session.query(SmStrategyOrder.id)
+            .join(SmStrategyRun, SmStrategyOrder.run_id == SmStrategyRun.id)
+            .join(SmStrategy, SmStrategyRun.strategy_id == SmStrategy.id)
+            .filter(
+                SmStrategy.user_id == str(user_id),
+                (SmStrategyOrder.status == "unknown")
+                | (
+                    (SmStrategyOrder.status == "pending")
+                    & SmStrategyRun.stopped_at.is_(None)
+                ),
+            )
+        )
+        if mode is not None:
+            query = query.filter(SmStrategyRun.mode == str(mode))
+        if query.first() is not None:
+            return True
+
+        # If the status update failed after the broker call, the exact
+        # append-only unknown-outcome event is a second durable witness. The
+        # row remains pending, so a status-only query would reopen admission.
+        witnessed = (
+            db_session.query(SmStrategyEvent.id)
+            .join(
+                SmStrategyOrder,
+                SmStrategyOrder.id == SmStrategyEvent.payload["order_id"].as_integer(),
+            )
+            .join(SmStrategyRun, SmStrategyOrder.run_id == SmStrategyRun.id)
+            .filter(
+                SmStrategyEvent.user_id == str(user_id),
+                SmStrategyEvent.kind == "order_outcome_unknown",
+                SmStrategyEvent.run_id == SmStrategyOrder.run_id,
+                SmStrategyOrder.status.in_(("pending", "unknown")),
+            )
+        )
+        if mode is not None:
+            witnessed = witnessed.filter(SmStrategyRun.mode == str(mode))
+        if witnessed.first() is not None:
+            return True
+
+        # An exit can be attempted even when its audit row could not be
+        # written. A keyless unknown delivery event then has no row to join.
+        rowless = (
+            db_session.query(SmStrategyEvent.id)
+            .join(SmStrategyRun, SmStrategyEvent.run_id == SmStrategyRun.id)
+            .filter(
+                SmStrategyEvent.user_id == str(user_id),
+                SmStrategyEvent.kind == "order_outcome_unknown",
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyEvent.payload.is_not(None),
+                SmStrategyEvent.payload["version"].as_integer() == 1,
+                SmStrategyEvent.payload["order_id"].as_integer().is_(None),
+            )
+        )
+        if mode is not None:
+            rowless = rowless.filter(SmStrategyRun.mode == str(mode))
+        return rowless.first() is not None
+    except Exception:
+        logger.exception("Could not check unresolved order outcomes for user %s", user_id)
+        return True
+
+
 def list_orders_for_strategy(strategy_id: int, run_id: int | None = None) -> list[dict]:
     """Orders across a strategy's runs, optionally narrowed to one run."""
     try:
@@ -2244,6 +2901,24 @@ def list_order_ack_events(run_id: int) -> list[dict] | None:
         return None
 
 
+def list_order_unknown_events(run_id: int) -> list[dict] | None:
+    """Read every unknown-delivery witness, or None when safety cannot be checked."""
+    try:
+        rows = (
+            db_session.query(SmStrategyEvent)
+            .filter(
+                SmStrategyEvent.run_id == run_id,
+                SmStrategyEvent.kind == "order_outcome_unknown",
+            )
+            .order_by(SmStrategyEvent.id.asc())
+            .all()
+        )
+        return [event_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list unknown order outcomes for run %s", run_id)
+        return None
+
+
 def record_event(
     strategy_id: int,
     user_id: str,
@@ -2258,6 +2933,11 @@ def record_event(
 
     Append-only: nothing in this module updates or deletes an event row.
     """
+    if kind in AUTOMATION_EVENT_KINDS:
+        logger.warning(
+            "Refusing account automation event kind %r for strategy %s", kind, strategy_id
+        )
+        return None
     try:
         row = SmStrategyEvent(
             run_id=run_id,
@@ -2270,12 +2950,42 @@ def record_event(
             payload=payload,
         )
         db_session.add(row)
+        _enqueue_critical_alert(row, account=False)
         db_session.commit()
         return row
     except Exception:
         db_session.rollback()
         logger.exception("Could not record event %s for strategy %s", kind, strategy_id)
         return None
+
+
+def record_comparison_session_summary(
+    strategy_id: int, user_id: str, session_day: date, message: str, payload: dict
+) -> bool:
+    """Idempotent session report, event, and WhatsApp outbox in one commit."""
+    try:
+        if db_session.get(SmComparisonSessionSummary, (strategy_id, session_day)) is not None:
+            return False
+        event = SmStrategyEvent(
+            strategy_id=strategy_id, user_id=user_id,
+            kind="sandbox_comparison_summary", severity="info",
+            message=message, payload=payload,
+        )
+        db_session.add(event)
+        db_session.flush()
+        db_session.add(SmComparisonSessionSummary(
+            strategy_id=strategy_id, session_day=session_day, event_id=event.id,
+        ))
+        _enqueue_critical_alert(event, account=False)
+        db_session.commit()
+        return True
+    except IntegrityError:
+        db_session.rollback()
+        return False
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record comparison summary for strategy %s", strategy_id)
+        return False
 
 
 def list_events(
@@ -2294,10 +3004,264 @@ def list_events(
         if severity:
             query = query.filter(SmStrategyEvent.severity == severity)
         rows = query.order_by(SmStrategyEvent.ts.desc()).limit(limit).all()
-        return [event_to_dict(r) for r in rows]
+        events = [event_to_dict(r) for r in rows]
+        if rows:
+            try:
+                keys = [_critical_source_key(r, account=False) for r in rows]
+                alerts = db_session.query(SmCriticalAlert).filter(
+                    SmCriticalAlert.source_key.in_(keys)
+                ).all()
+                by_key = {alert.source_key: critical_alert_to_dict(alert) for alert in alerts}
+                for row, event in zip(rows, events, strict=True):
+                    event["whatsapp_delivery"] = by_key.get(
+                        _critical_source_key(row, account=False)
+                    )
+            except Exception:
+                logger.exception("Critical WhatsApp delivery state is unavailable")
+                db_session.rollback()
+                for event in events:
+                    if event["kind"] in CRITICAL_ALERT_EVENT_KINDS:
+                        event["whatsapp_delivery"] = {
+                            "status": "unavailable",
+                            "event_ts": event["ts"],
+                            "last_error": "Delivery status could not be read",
+                        }
+        return events
     except Exception:
         logger.exception("Could not list events for strategy %s", strategy_id)
         return []
+
+
+def record_automation_event(
+    user_id: str,
+    kind: str,
+    message: str,
+    severity: str = "info",
+    payload: dict | None = None,
+) -> SmAutomationEvent | None:
+    """Append one user-scoped automation event, independent of strategies."""
+    if kind not in AUTOMATION_EVENT_KINDS:
+        logger.warning("Refusing non-account automation event kind %r for user %s", kind, user_id)
+        return None
+    try:
+        row = SmAutomationEvent(
+            user_id=str(user_id),
+            kind=kind,
+            severity=severity,
+            message=message,
+            payload=payload,
+        )
+        db_session.add(row)
+        _enqueue_critical_alert(row, account=True)
+        db_session.commit()
+        return row
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record automation event %s for user %s", kind, user_id)
+        return None
+
+
+def record_broker_data_transition(
+    user_id: str, connection_id: str, *, healthy: bool, broker_status: str
+) -> bool:
+    """Atomically record one state change and its durable WhatsApp outbox row."""
+    desired = "healthy" if healthy else "unavailable"
+    kind = "broker_data_recovered" if healthy else "broker_data_unavailable"
+    now = utcnow()
+    try:
+        previous = db_session.get(SmBrokerDataStatus, connection_id)
+        if previous is not None and previous.user_id != user_id:
+            return False
+        if previous is not None and previous.state == desired:
+            return False
+        if previous is None:
+            db_session.add(SmBrokerDataStatus(
+                connection_id=connection_id, user_id=user_id, state=desired,
+                updated_at=now,
+            ))
+            db_session.flush()
+            if healthy:
+                db_session.commit()
+                return False
+        else:
+            changed = (
+                db_session.query(SmBrokerDataStatus)
+                .filter(
+                    SmBrokerDataStatus.connection_id == connection_id,
+                    SmBrokerDataStatus.state == previous.state,
+                )
+                .update({"state": desired, "updated_at": now}, synchronize_session=False)
+            )
+            if changed != 1:
+                db_session.rollback()
+                return False
+        message = (
+            "Kotak data connection restored; wait for fresh completed candles before entries"
+            if healthy else
+            "Kotak data connection unavailable; active sandbox workflows are risk-blocked"
+        )
+        event = SmAutomationEvent(
+            user_id=user_id, kind=kind, message=message,
+            severity="info" if healthy else "critical",
+            payload={"connection_id": connection_id, "broker_status": broker_status},
+        )
+        db_session.add(event)
+        _enqueue_critical_alert(event, account=True)
+        db_session.commit()
+        return True
+    except IntegrityError:
+        db_session.rollback()
+        return False
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not record broker data transition for %s", connection_id)
+        return False
+
+
+def list_automation_events(user_id: str, limit: int = 200) -> list[dict]:
+    """Newest account-level automation events for one user."""
+    try:
+        rows = (
+            db_session.query(SmAutomationEvent)
+            .filter_by(user_id=str(user_id))
+            .order_by(SmAutomationEvent.ts.desc(), SmAutomationEvent.id.desc())
+            .limit(max(1, min(int(limit), 500)))
+            .all()
+        )
+        return [automation_event_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list automation events for user %s", user_id)
+        return []
+
+
+def list_critical_alerts(user_id: str, *, strategy_id: int | None = None, limit: int = 100) -> list[dict]:
+    """Bounded operator view of durable delivery state."""
+    query = db_session.query(SmCriticalAlert).filter_by(user_id=str(user_id))
+    if strategy_id is not None:
+        query = query.filter_by(strategy_id=strategy_id)
+    rows = query.order_by(SmCriticalAlert.id.desc()).limit(max(1, min(limit, 500))).all()
+    return [critical_alert_to_dict(row) for row in rows]
+
+
+def claim_due_critical_alerts(
+    now: datetime, *, limit: int = 20, user_id: str | None = None,
+    max_attempts: int = 5, max_claimed: int = 100,
+) -> list[dict]:
+    """CAS-claim bounded rows; an expired send lease can be recovered on restart."""
+    claimed: list[dict] = []
+    try:
+        query = db_session.query(SmCriticalAlert)
+        if user_id is not None:
+            query = query.filter(SmCriticalAlert.user_id == str(user_id))
+        candidates = (
+            query
+            .filter(
+                or_(
+                    (SmCriticalAlert.status == "pending") & (SmCriticalAlert.next_attempt_at <= now),
+                    (SmCriticalAlert.status == "sending") & (SmCriticalAlert.lease_until <= now),
+                )
+            )
+            # A long expired backlog must not sit ahead of an actionable
+            # safety alert for many 15-second polls. Expired/exhausted rows
+            # are still failed in bounded batches after eligible rows.
+            .order_by(
+                case(
+                    (
+                        (SmCriticalAlert.expires_at > now)
+                        & (SmCriticalAlert.attempts < max_attempts),
+                        0,
+                    ),
+                    else_=1,
+                ),
+                SmCriticalAlert.next_attempt_at,
+                SmCriticalAlert.id,
+            )
+            .limit(max(1, min(limit, 100)))
+            .all()
+        )
+        for row in candidates:
+            if now >= row.expires_at or row.attempts >= max_attempts:
+                row.status = "failed"
+                row.last_error = (
+                    "Expired before WhatsApp accepted the alert"
+                    if now >= row.expires_at else "Retry limit reached after interrupted sends"
+                )
+                continue
+            previous_status = row.status
+            previous_attempt = row.next_attempt_at if previous_status == "pending" else row.lease_until
+            updated = db_session.query(SmCriticalAlert).filter(
+                SmCriticalAlert.id == row.id,
+                SmCriticalAlert.status == previous_status,
+                (SmCriticalAlert.next_attempt_at if previous_status == "pending" else SmCriticalAlert.lease_until) == previous_attempt,
+            ).update({
+                "status": "sending",
+                "lease_until": now + timedelta(seconds=45),
+                "last_attempt_at": now,
+                "attempts": SmCriticalAlert.attempts + 1,
+            }, synchronize_session=False)
+            if updated:
+                db_session.commit()
+                db_session.expire_all()
+                claimed.append(critical_alert_to_dict(db_session.get(SmCriticalAlert, row.id)))
+                if len(claimed) >= max_claimed:
+                    break
+        db_session.commit()
+        return claimed
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not claim critical WhatsApp alerts")
+        return []
+
+
+def finish_critical_alert(alert_id: int, attempts: int, *, accepted: bool, now: datetime, max_attempts: int) -> str:
+    """Only the owner of the current attempt may settle its claim."""
+    try:
+        row = db_session.get(SmCriticalAlert, alert_id)
+        if row is None or row.status != "sending" or row.attempts != attempts:
+            return "stale"
+        if accepted:
+            row.status = "late" if now - row.event_ts >= timedelta(minutes=1) else "sent"
+            row.accepted_at = now
+            row.last_error = None
+        elif attempts >= max_attempts or now >= row.expires_at:
+            row.status = "failed"
+            row.last_error = "WhatsApp did not accept the alert before retry limit/expiry"
+        else:
+            row.status = "pending"
+            row.next_attempt_at = min(
+                now + timedelta(seconds=min(30 * (2 ** (attempts - 1)), 1800)),
+                row.expires_at,
+            )
+            row.last_error = "WhatsApp unavailable or send not acknowledged"
+        row.lease_until = None
+        db_session.commit()
+        return row.status
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not settle critical WhatsApp alert %s", alert_id)
+        return "error"
+
+
+def prune_terminal_critical_alerts(now: datetime, *, limit: int = 100) -> int:
+    """Bound outbox disk growth while retaining 30 days of delivery status."""
+    try:
+        ids = [
+            row.id for row in db_session.query(SmCriticalAlert.id).filter(
+                SmCriticalAlert.status.in_(("sent", "late", "failed")),
+                SmCriticalAlert.event_ts <= now - timedelta(days=30),
+            ).order_by(SmCriticalAlert.id).limit(max(1, min(limit, 100))).all()
+        ]
+        if not ids:
+            return 0
+        deleted = db_session.query(SmCriticalAlert).filter(
+            SmCriticalAlert.id.in_(ids)
+        ).delete(synchronize_session=False)
+        db_session.commit()
+        return deleted
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not prune old critical WhatsApp delivery rows")
+        return 0
 
 
 # ---------------------------------------------------------------------------

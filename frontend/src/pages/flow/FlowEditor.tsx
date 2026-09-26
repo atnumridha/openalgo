@@ -141,10 +141,12 @@ function FlowEditorContent() {
   } = useFlowWorkflowStore()
 
   const [isActive, setIsActive] = useState(false)
+  const [brokerConnectionId, setBrokerConnectionId] = useState('')
+  const [savedBrokerConnectionId, setSavedBrokerConnectionId] = useState('')
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
-  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>(
+  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error' | 'collecting_history' | 'data_unavailable' | 'risk_blocked'>(
     'idle'
   )
 
@@ -213,6 +215,8 @@ function FlowEditorContent() {
         nodes: hydratedNodes,
         edges: convertedEdges,
       })
+      setBrokerConnectionId(workflow.broker_connection_id || '')
+      setSavedBrokerConnectionId(workflow.broker_connection_id || '')
       if (repaired) {
         // setWorkflow marks the canvas clean, so a repair made here would live
         // only in memory: Run Now saves nothing, the backend executes the
@@ -249,10 +253,12 @@ function FlowEditorContent() {
         name: state.name,
         nodes: state.nodes,
         edges: state.edges,
+        broker_connection_id: brokerConnectionId.trim() || null,
       }).then((saved) => ({ ...saved, revision }))
     },
     onSuccess: (saved) => {
       markSaved(saved.revision)
+      setSavedBrokerConnectionId(saved.broker_connection_id || '')
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
       // The server re-arms a changed trigger during the save. It only reports
       // needs_reactivate when that failed, in which case it has stood the
@@ -335,12 +341,17 @@ function FlowEditorContent() {
       return executeWorkflow(Number(id))
     },
     onSuccess: (data) => {
-      setExecutionStatus(data.status === 'success' ? 'success' : 'error')
+      const readinessStates = ['collecting_history', 'data_unavailable', 'risk_blocked']
+      setExecutionStatus(data.status === 'success' || readinessStates.includes(data.status)
+        ? data.status as typeof executionStatus
+        : 'error')
       if (data.logs) {
         setExecutionLogs(data.logs as LogEntry[])
       }
       if (data.status === 'success') {
         showToast.success(data.message || 'Execution completed', 'flow')
+      } else if (readinessStates.includes(data.status)) {
+        showToast.info(data.message || data.readiness || 'History is not ready', 'flow')
       } else {
         showToast.error(data.message || 'Execution failed', 'flow')
       }
@@ -375,7 +386,7 @@ function FlowEditorContent() {
       // Ctrl/Cmd + S - Save
       if ((event.ctrlKey || event.metaKey) && event.key === 's') {
         event.preventDefault()
-        if (isModified && !saveMutation.isPending) {
+        if ((isModified || brokerConnectionId !== savedBrokerConnectionId) && !saveMutation.isPending) {
           saveMutation.mutate()
         }
       }
@@ -401,6 +412,8 @@ function FlowEditorContent() {
     selectNode,
     selectEdge,
     isModified,
+    brokerConnectionId,
+    savedBrokerConnectionId,
     saveMutation,
     navigate,
   ])
@@ -818,14 +831,21 @@ function FlowEditorContent() {
             onChange={(e) => setName(e.target.value)}
             className="h-8 w-64 border-transparent bg-transparent px-2 font-medium hover:border-border focus:border-border"
           />
-          {isModified && <span className="text-xs text-muted-foreground">Unsaved</span>}
+          <Input
+            aria-label="Broker connection ID"
+            placeholder="Broker connection ID"
+            value={brokerConnectionId}
+            onChange={(e) => setBrokerConnectionId(e.target.value)}
+            className="h-8 w-64 text-xs"
+          />
+          {(isModified || brokerConnectionId !== savedBrokerConnectionId) && <span className="text-xs text-muted-foreground">Unsaved</span>}
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending || !isModified}
+            disabled={saveMutation.isPending || (!isModified && brokerConnectionId === savedBrokerConnectionId)}
           >
             {saveMutation.isPending ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

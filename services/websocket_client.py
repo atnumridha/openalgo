@@ -76,7 +76,8 @@ class WebSocketClient:
             host: WebSocket server host
             port: WebSocket server port
         """
-        self.ws_url = f"ws://{host}:{port}"
+        address = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        self.ws_url = f"ws://{address}:{port}"
         self.api_key = api_key
         self.ws = None
         self.loop = None
@@ -762,7 +763,7 @@ _client_lock = threading.Lock()
 
 
 def get_websocket_client(
-    api_key: str, host: str = "localhost", port: int = 8765
+    api_key: str, host: str | None = None, port: int | None = None
 ) -> WebSocketClient:
     """
     Get or create a WebSocket client instance for the given API key.
@@ -776,15 +777,28 @@ def get_websocket_client(
     Returns:
         WebSocketClient instance
     """
+    host = host or os.getenv("WEBSOCKET_HOST", "127.0.0.1")
+    port = int(port if port is not None else os.getenv("WEBSOCKET_PORT", "8765"))
+    # A bind address is never a usable destination for an internal client.
+    if host == "0.0.0.0":
+        host = "127.0.0.1"
+    elif host == "::":
+        host = "::1"
+    endpoint = (host, port)
     with _client_lock:
-        if api_key not in _client_instances:
-            client = WebSocketClient(api_key, host, port)
-            if client.connect():
-                _client_instances[api_key] = client
-            else:
-                raise ConnectionError("Failed to connect to WebSocket server")
-
-        return _client_instances[api_key]
+        current = _client_instances.get(api_key)
+        if current is not None and getattr(current, "_endpoint", None) == endpoint:
+            return current
+        if current is not None:
+            current.disconnect()
+            _client_instances.pop(api_key, None)
+        client = WebSocketClient(api_key, host, port)
+        client._endpoint = endpoint
+        if not client.connect():
+            client.disconnect()
+            raise ConnectionError("Failed to connect to WebSocket server")
+        _client_instances[api_key] = client
+        return client
 
 
 def close_all_clients():

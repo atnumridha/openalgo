@@ -97,6 +97,29 @@ Each reply is a plain-text WhatsApp message (no Markdown rendering — WhatsApp'
 
 ### Order Alerts (Automatic Notifications)
 
+#### Critical strategy safety alerts
+
+Strategy safety events such as an unknown broker order outcome, rejected exit,
+uncovered protective stop, failed run stop, and revoked live authorization use a
+durable outbox separate from ordinary order alerts. The audit event and its
+WhatsApp delivery record are committed together. If the linked device is
+disconnected, delivery stays **pending** and is retried by the Strategy Module
+worker (up to five attempts over at most 12 hours). The Strategy Detail **Events**
+tab and the Strategies page's **Critical safety alerts** card show pending,
+sending, upstream accepted, accepted late, or failed status, with the original
+event time and last attempt. The account card keeps deleted-strategy and
+account-authorization alerts visible. A delayed message is clearly
+marked as a historical safety alert, not a current trading signal.
+
+This is at-least-once delivery: a process crash after WhatsApp accepts a send
+but before the local acknowledgement is saved may cause a duplicate. “Accepted”
+means the WhatsApp transport accepted the send, not that the operator's phone
+received it or anyone read it. If retries expire, the UI retains **failed**
+status; do not rely on WhatsApp as the sole risk monitor. Ordinary order alerts
+keep their real-time-only behavior and are not queued while disconnected.
+Terminal delivery records are retained for 30 days; the strategy audit event
+itself follows the strategy audit retention policy.
+
 #### Overview
 
 The bot automatically sends a WhatsApp message to the paired device's own number for every order-related API activity. No additional commands are needed — alerts are sent automatically when orders flow through the OpenAlgo API.
@@ -178,6 +201,27 @@ Time: 14:23:45
 1. WhatsApp device must be paired in OpenAlgo (`/whatsapp` page in the web UI).
 2. The OpenAlgo server must have rebooted at least once since pairing OR the bot must be currently connected (auto-reconnects on every boot from the encrypted session blob).
 3. Orders must be placed through the OpenAlgo API (REST `/api/v1/*`, the Python SDK, or any tool that ultimately hits the API).
+
+### WhatsApp Lifecycle Notices for Strategy Module Automation
+
+WhatsApp lifecycle notices supplement generic accepted-order alerts for a
+Strategy Module automation. Pair the device from `/whatsapp` before relying on
+these notices. They are sent to the paired operator for material state changes,
+including:
+
+* **Live authorization granted, live authorization revoked, or live
+  authorization expired** for automated live entries.
+* **Run started** and stopped, plus **portfolio governor admitted** or rejected
+  entries.
+* Protective stops, targets, daily-loss locks, cooldowns, **stale-feed stop**,
+  recovery failures, and the **kill switch**.
+* Broker or order acknowledgement failures that need operator attention.
+
+Routine ticks, P&L deltas, and no-action updates remain in the Strategy Module
+event audit rather than creating chat noise. WhatsApp lifecycle notices are
+best-effort asynchronous delivery. A notification failure never blocks
+trading, a stop, or an exit; an unpaired device is handled the same way. Use
+the Strategies page for the authoritative run, order, and event state.
 
 ### Sending Messages via API
 

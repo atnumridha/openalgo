@@ -24,6 +24,7 @@ class FlowOpenAlgoClient:
             api_key: The OpenAlgo API key for authentication
         """
         self.api_key = api_key
+        self.broker_connection_id: str | None = None
 
     def _handle_response(
         self, success: bool, response: dict[str, Any], status_code: int
@@ -282,6 +283,21 @@ class FlowOpenAlgoClient:
         (2m, 4m, W, M, Q) the live broker feed doesn't offer.
         """
         from services.history_service import get_history
+
+        if str(exchange).upper() == "MCX":
+            from services.kotak_mcx_candles import get_kotak_mcx_history, is_kotak_api_key
+
+            if is_kotak_api_key(self.api_key):
+                if source != "api":
+                    return {"status": "risk_blocked", "readiness": "Risk blocked", "data": [],
+                            "message": "Kotak MCX workflows require the pinned live stream"}
+                if not self.broker_connection_id:
+                    return {"status": "risk_blocked", "readiness": "Risk blocked", "data": [],
+                            "message": "Kotak MCX history requires a pinned broker connection"}
+                return get_kotak_mcx_history(
+                    api_key=self.api_key, connection_id=self.broker_connection_id,
+                    symbol=symbol, interval=interval, start_date=start_date, end_date=end_date,
+                )
 
         if source == "db" and not (start_date and end_date):
             # get_history_from_db feeds these straight into datetime.strptime,

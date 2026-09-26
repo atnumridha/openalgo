@@ -270,6 +270,29 @@ def get_history(
             end_date=end_date,
         )
 
+    if str(exchange).upper() == "MCX" and api_key:
+        from services.kotak_mcx_candles import (
+            connection_id_for_api_key,
+            get_kotak_mcx_history,
+            is_kotak_api_key,
+        )
+
+        if is_kotak_api_key(api_key):
+            connection_id = connection_id_for_api_key(api_key)
+            response = get_kotak_mcx_history(
+                api_key=api_key, connection_id=connection_id, symbol=symbol,
+                interval=interval, start_date=start_date, end_date=end_date,
+            )
+            readiness = response.get("readiness")
+            code = {"Ready": 200, "Collecting history": 202,
+                    "Data unavailable": 503, "Risk blocked": 403}.get(readiness, 503)
+            return readiness == "Ready", response, code
+
+    if str(exchange).upper() == "MCX" and str(broker or "").lower() == "kotak":
+        return False, {"status": "risk_blocked", "readiness": "Risk blocked",
+                       "message": "Kotak MCX history requires a connection-bound API key",
+                       "data": []}, 403
+
     # Source: 'api' (default) - Fetch from broker API
     # Enforce 3 requests/second rate limit for broker history calls
     _enforce_rate_limit()

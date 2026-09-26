@@ -1,7 +1,11 @@
 # Load and check environment variables before anything else
-from utils.env_check import load_and_check_env_variables  # Import the environment check function
+from utils.env_check import (  # Import the environment check function
+    configure_whatsapp_rust_logging,
+    load_and_check_env_variables,
+)
 
 load_and_check_env_variables()
+configure_whatsapp_rust_logging()
 
 import os
 import re
@@ -128,6 +132,7 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.profit_comparison_db import init_db as ensure_profit_comparison_tables_exist
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
@@ -768,6 +773,7 @@ def setup_environment(app):
                 ("Alert Log DB", ensure_alert_log_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                ("Sandbox Profit Comparison DB", ensure_profit_comparison_tables_exist),
                 ("Agent DB", ensure_agent_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
                 # scheduler.start(). That DDL would otherwise run further down

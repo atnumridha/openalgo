@@ -15,12 +15,15 @@ import {
   fetchStrategyOrderbook,
   fetchStrategyPositions,
   fetchStrategyTradebook,
+  getLiveAuthorization,
   getStrategy,
   killSwitch,
   LIVE_POLL_MS,
   listEvents,
   listOrders,
+  listProfitComparisons,
   listRuns,
+  type ProfitComparison,
   type RoundTrip,
   reconcileBrokerOrders,
   reconcileBrokerTrades,
@@ -1540,7 +1543,13 @@ export function TradesTab({
 // Events tab
 // ---------------------------------------------------------------------------
 
-function EventsTab({ events }: { events: StrategyEvent[] }) {
+export function eventRefreshInterval(isRunning: boolean): number {
+  // Recovery can emit a critical event after the strategy has stopped. Keep
+  // the audit/delivery view current without a live tick subscription.
+  return isRunning ? SAFETY_POLL_MS : 30_000
+}
+
+export function EventsTab({ events }: { events: StrategyEvent[] }) {
   if (events.length === 0) {
     return (
       <Card>
@@ -1558,7 +1567,8 @@ function EventsTab({ events }: { events: StrategyEvent[] }) {
       <CardHeader>
         <CardTitle>Audit trail</CardTitle>
         <CardDescription>
-          Every event the strategy module publishes lands here, newest first.
+          Every event the strategy module publishes lands here, newest first. WhatsApp status
+          records upstream acceptance, not proof of human receipt.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1566,16 +1576,44 @@ function EventsTab({ events }: { events: StrategyEvent[] }) {
           {events.map((event) => (
             <div
               key={event.id}
-              className="grid grid-cols-[170px_140px_60px_1fr] items-start gap-2 border-b border-border/40 py-1.5 text-sm last:border-0"
+              className="grid gap-2 border-b border-border/40 py-2 text-sm last:border-0 sm:grid-cols-[170px_140px_60px_minmax(0,1fr)] sm:items-start"
             >
               <span className="font-mono text-xs text-muted-foreground">{formatIst(event.ts)}</span>
-              <Badge variant="outline" className="w-fit font-mono text-[10px]">
-                {event.kind}
-              </Badge>
+              <span className="flex flex-wrap items-center gap-1">
+                <Badge variant="outline" className="w-fit font-mono text-[10px]">
+                  {event.kind}
+                </Badge>
+                <span className="font-mono text-[10px] text-muted-foreground">#{event.id}</span>
+              </span>
               <span className={cn('font-mono text-[10px]', severityClass(event.severity))}>
                 {event.severity}
               </span>
-              <span className="whitespace-pre-wrap">{event.message}</span>
+              <div className="min-w-0 space-y-1">
+                <p className="whitespace-pre-wrap break-words">{event.message}</p>
+                {event.whatsapp_delivery && (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <Badge
+                      variant={event.whatsapp_delivery.status === 'failed' ? 'destructive' : 'outline'}
+                      className="w-fit"
+                    >
+                      WhatsApp {event.whatsapp_delivery.status === 'sent'
+                        ? 'accepted'
+                        : event.whatsapp_delivery.status === 'late'
+                          ? 'accepted late'
+                          : event.whatsapp_delivery.status === 'sending'
+                            ? 'sending'
+                            : event.whatsapp_delivery.status}
+                    </Badge>
+                    <span>Event: {formatIst(event.whatsapp_delivery.event_ts)}</span>
+                    {event.whatsapp_delivery.last_attempt_at && (
+                      <span>Last attempt: {formatIst(event.whatsapp_delivery.last_attempt_at)}</span>
+                    )}
+                    {event.whatsapp_delivery.last_error && (
+                      <span className="break-words">{event.whatsapp_delivery.last_error}</span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -2505,6 +2543,89 @@ function HistoryTab({ runs, orders }: { runs: Run[]; orders: Order[] }) {
 // Detail page
 // ---------------------------------------------------------------------------
 
+const comparisonLabels = {
+  baseline: 'Existing rules',
+  early: 'Earlier protection',
+  room: 'More trend room',
+} as const
+
+export function ProfitComparisonTab({ records, loading }: { records: ProfitComparison[]; loading: boolean }) {
+  if (loading) return <p className="text-sm text-muted-foreground">Loading sandbox comparison…</p>
+  if (records.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Profit protection comparison</CardTitle>
+          <CardDescription>
+            No eligible sandbox entry yet. A confirmed single-position fill with a recorded stop and
+            broker connection is needed before the three rules can be compared.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        These are shadow calculations on the same sandbox entry. They place no extra orders. A trigger
+        without a fresh executable quote is an estimate, not a fill; fees remain unavailable.
+      </p>
+      {records.map((record) => (
+        <Card key={`${record.run_id}:${record.position_ref}`} className="overflow-hidden">
+          <CardHeader className="border-b border-border/60 bg-muted/30">
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+              <span className="font-mono">{record.exchange}:{record.symbol}</span>
+              <Badge variant="secondary">Sandbox · run #{record.run_id}</Badge>
+            </CardTitle>
+            <CardDescription>
+              Entry confirmed {formatIst(record.entry_at)} · risk budget {formatPnl(record.risk_budget)}
+              {record.last_observed_at
+                ? ` · last observation ${formatIst(record.last_observed_at)}`
+                : ' · awaiting a valid market observation'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto pt-4">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Rule</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Estimated realised</TableHead>
+                  <TableHead className="text-right">Peak</TableHead>
+                  <TableHead className="text-right">Giveback</TableHead>
+                  <TableHead>Evidence</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(Object.keys(comparisonLabels) as Array<keyof typeof comparisonLabels>).map((key) => {
+                  const profile = record.profiles[key]
+                  const giveback = profile.simulated_realized_pnl === null
+                    ? null
+                    : profile.peak_profit - profile.simulated_realized_pnl
+                  return (
+                    <TableRow key={key}>
+                      <TableCell className="font-medium">{comparisonLabels[key]}</TableCell>
+                      <TableCell>{profile.status.replaceAll('_', ' ')}</TableCell>
+                      <TableCell className="text-right font-mono">{formatPnl(profile.simulated_realized_pnl)}</TableCell>
+                      <TableCell className="text-right font-mono">{formatPnl(profile.peak_profit)}</TableCell>
+                      <TableCell className="text-right font-mono">{formatPnl(giveback)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {profile.exit_fill_quality === 'trigger_only_estimate'
+                          ? 'Trigger only — no executable quote'
+                          : profile.missed_fill ? 'Fill unavailable or partial' : profile.exit_fill_quality ?? 'Observing'}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 export default function StrategyDetail() {
   // Named to match the route, which declares :strategyId. Destructuring
   // `id` from it yields undefined, so every visit to /strategy/<n> failed
@@ -2533,6 +2654,22 @@ export default function StrategyDetail() {
     refetchInterval: (query) => (query.state.data?.status === 'running' ? SAFETY_POLL_MS : false),
   })
 
+  const liveAuthorizationQuery = useQuery({
+    queryKey: strategyQueryKeys.liveAuthorization(),
+    queryFn: getLiveAuthorization,
+    enabled: startDialogOpen && startMode === 'live',
+    staleTime: 0,
+  })
+  const liveAuthorization = liveAuthorizationQuery.data
+  const liveAuthorizationExpiry = liveAuthorization
+    ? Date.parse(liveAuthorization.expires_at)
+    : Number.NaN
+  const liveAuthorizationActive = Boolean(
+    liveAuthorization?.active &&
+      Number.isFinite(liveAuthorizationExpiry) &&
+      liveAuthorizationExpiry > Date.now()
+  )
+
   const isRunning = strategyQuery.data?.status === 'running'
   const live = useStrategyLive(validId ? numId : null, Boolean(isRunning))
 
@@ -2550,11 +2687,18 @@ export default function StrategyDetail() {
     refetchInterval: isRunning ? SAFETY_POLL_MS : false,
   })
 
+  const comparisonQuery = useQuery({
+    queryKey: strategyQueryKeys.profitComparisons(numId),
+    queryFn: () => listProfitComparisons(numId),
+    enabled: validId && activeTab === 'compare',
+    refetchInterval: isRunning && activeTab === 'compare' ? SAFETY_POLL_MS : false,
+  })
+
   const eventsQuery = useQuery({
     queryKey: strategyQueryKeys.events(numId),
     queryFn: () => listEvents(numId),
     enabled: validId,
-    refetchInterval: isRunning ? SAFETY_POLL_MS : false,
+    refetchInterval: eventRefreshInterval(isRunning),
   })
 
   const invalidateAll = () => {
@@ -2839,6 +2983,7 @@ export default function StrategyDetail() {
           <TabsTrigger value="risk">Risk</TabsTrigger>
           <TabsTrigger value="webhook">Webhook</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
+          <TabsTrigger value="compare">Compare</TabsTrigger>
         </TabsList>
 
         <TabsContent value="live" className="mt-4">
@@ -2903,6 +3048,12 @@ export default function StrategyDetail() {
         <TabsContent value="history" className="mt-4">
           <HistoryTab runs={runs} orders={orders} />
         </TabsContent>
+        <TabsContent value="compare" className="mt-4">
+          <ProfitComparisonTab
+            records={comparisonQuery.data ?? []}
+            loading={comparisonQuery.isLoading}
+          />
+        </TabsContent>
       </Tabs>
 
       <Dialog open={startDialogOpen} onOpenChange={setStartDialogOpen}>
@@ -2943,13 +3094,49 @@ export default function StrategyDetail() {
                 mode.
               </p>
             )}
+            {startMode === 'live' && strategy.live_enabled && liveAuthorizationQuery.isFetching && (
+              <output className="block rounded-md border p-2 text-xs text-muted-foreground">
+                Checking live automation authorization…
+              </output>
+            )}
+            {startMode === 'live' &&
+              strategy.live_enabled &&
+              !liveAuthorizationQuery.isFetching &&
+              !liveAuthorizationActive && (
+                <div
+                  className="space-y-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                  role="alert"
+                >
+                  <p>
+                    Live automation authorization is inactive for this trading session. Authorize
+                    the session before starting a live run.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setStartDialogOpen(false)
+                      navigate('/strategy')
+                    }}
+                  >
+                    Open authorization controls
+                  </Button>
+                </div>
+              )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setStartDialogOpen(false)}>
               Cancel
             </Button>
             <Button
-              disabled={startMutation.isPending || (startMode === 'live' && !strategy.live_enabled)}
+              disabled={
+                startMutation.isPending ||
+                (startMode === 'live' &&
+                  (!strategy.live_enabled ||
+                    liveAuthorizationQuery.isFetching ||
+                    !liveAuthorizationActive))
+              }
               onClick={() => startMutation.mutate(startMode)}
             >
               {startMutation.isPending ? 'Starting…' : `Start ${startMode}`}

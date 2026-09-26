@@ -366,8 +366,10 @@ class BrokerData:
                 sell_orders = depth_data.get("sell", [])
 
                 # Extract best bid and ask prices from depth
-                bid_price = float(buy_orders[0].get("price", 0)) if buy_orders else ltp_parsed
-                ask_price = float(sell_orders[0].get("price", 0)) if sell_orders else ltp_parsed
+                bid_price = float(buy_orders[0].get("price", 0)) if buy_orders else 0.0
+                ask_price = float(sell_orders[0].get("price", 0)) if sell_orders else 0.0
+                bid_qty = float(buy_orders[0].get("quantity", 0)) if buy_orders else 0.0
+                ask_qty = float(sell_orders[0].get("quantity", 0)) if sell_orders else 0.0
 
                 # Get total quantities (for reference)
                 total_buy_qty = quote_data.get("total_buy", 0)
@@ -385,6 +387,9 @@ class BrokerData:
                 return {
                     "bid": bid_price,
                     "ask": ask_price,
+                    "bid_qty": bid_qty,
+                    "ask_qty": ask_qty,
+                    "timestamp": quote_data.get("lstup_time"),
                     "open": float(ohlc_data.get("open", 0)),
                     "high": float(ohlc_data.get("high", 0)),
                     "low": float(ohlc_data.get("low", 0)),
@@ -597,7 +602,7 @@ class BrokerData:
 
         except Exception as e:
             logger.exception("Error fetching multiquotes")
-            raise Exception(f"Error fetching multiquotes: {e}")
+            raise Exception(f"Error fetching multiquotes: {e}") from e
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
@@ -747,6 +752,7 @@ class BrokerData:
                     "high": float(ohlc_data.get("high", 0)),
                     "low": float(ohlc_data.get("low", 0)),
                     "ltp": ltp,
+                    "timestamp": quote_data.get("lstup_time"),
                     "prev_close": float(ohlc_data.get("close", 0)),
                     "volume": float(quote_data.get("last_volume", 0)),
                     "oi": int(quote_data.get("open_int", 0)),

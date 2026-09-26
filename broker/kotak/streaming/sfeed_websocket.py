@@ -572,7 +572,7 @@ class KotakSFeedWebSocket:
         """
         buy = decoded.get("buy") or []
         sell = decoded.get("sell") or []
-        return {
+        quote = {
             "bid": buy[0]["price"] if buy else 0.0,
             "ask": sell[0]["price"] if sell else 0.0,
             "open": decoded.get("open_price", 0.0),
@@ -585,6 +585,9 @@ class KotakSFeedWebSocket:
             "tk": decoded.get("instrument_token", ""),
             "e": decoded.get("exchange_segment", ""),
         }
+        if decoded.get("last_trade_time") not in (None, 0, ""):
+            quote["ltt"] = decoded["last_trade_time"]
+        return quote
 
     def _to_quote_lite(self, decoded):
         """Mini touch line. Carries no OHLC or book, only a traded price.
@@ -593,7 +596,7 @@ class KotakSFeedWebSocket:
         treats a zero price field as "no update" and merges the last known
         value over it, so zeros are how you say "unchanged" in this contract.
         """
-        return {
+        quote = {
             "bid": 0.0,
             "ask": 0.0,
             "open": 0.0,
@@ -606,6 +609,9 @@ class KotakSFeedWebSocket:
             "tk": decoded.get("instrument_token", ""),
             "e": decoded.get("exchange_segment", ""),
         }
+        if decoded.get("last_trade_time") not in (None, 0, ""):
+            quote["ltt"] = decoded["last_trade_time"]
+        return quote
 
     def _to_depth(self, decoded):
         """Depth levels, padded to the 5 rows the adapter expects."""

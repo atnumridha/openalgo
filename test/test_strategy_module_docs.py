@@ -94,6 +94,7 @@ def _run_serializer_fields() -> set[str]:
         strategy_id=2,
         mode="sandbox",
         broker="sandbox",
+        broker_connection_id=None,
         started_at=None,
         stopped_at=None,
         stop_reason=None,
@@ -137,8 +138,19 @@ def _order_serializer_fields() -> set[str]:
 
 def test_strategy_api_documents_the_canonical_event_vocabulary() -> None:
     expected = tuple(store.EVENT_KINDS)
-    assert _category_vocabulary(_read(STRATEGY_API / "README.md")) == expected
-    assert _category_vocabulary(_read(STRATEGY_API / "events.md")) == expected
+    overview = _read(STRATEGY_API / "README.md")
+    events_endpoint = _read(STRATEGY_API / "events.md")
+    assert _category_vocabulary(overview) == expected
+    assert _category_vocabulary(events_endpoint) == expected
+    assert set(store.EVENT_KINDS).isdisjoint(store.AUTOMATION_EVENT_KINDS)
+    assert tuple(store.AUTOMATION_EVENT_KINDS) == (
+        "live_authorization_granted",
+        "live_authorization_revoked",
+        "live_authorization_expired",
+        "broker_data_unavailable",
+        "broker_data_recovered",
+    )
+    assert all(kind not in events_endpoint for kind in store.AUTOMATION_EVENT_KINDS)
 
 
 def test_strategy_api_documents_the_canonical_order_kind_vocabulary() -> None:
@@ -422,3 +434,45 @@ def test_service_reference_names_the_strategy_book_boundary() -> None:
     for name in account_services:
         assert f"`{name}`" in services_doc
         assert name in views
+
+
+def test_operator_docs_explain_automated_strategy_safety_workflow() -> None:
+    """Keep the operator-facing automation sequence and its safety gates visible."""
+    strategy_doc = _read(STRATEGY_API / "README.md").casefold()
+    whatsapp_doc = re.sub(r"\s+", " ", _read("docs/whatsapp.md").casefold())
+
+    for phrase in (
+        "starter pack",
+        "flow",
+        "ai",
+        "sandbox",
+        "live authorization",
+        "portfolio governor",
+        "exits remain allowed after revocation",
+        "successful broker reauthentication or reconnection",
+        "username or account change",
+        "kill switch",
+        "09:20",
+        "15:00",
+        "3 max positions",
+        "4% combined risk",
+        "20% cash reserve",
+        "long-option minimum-lot max 3%",
+        "4% daily-loss lock",
+        "3-stop session lock",
+        "2 stops => 30-minute cooldown",
+    ):
+        assert phrase in strategy_doc
+
+    for phrase in (
+        "whatsapp lifecycle notices",
+        "run started",
+        "live authorization granted",
+        "live authorization revoked",
+        "live authorization expired",
+        "portfolio governor admitted",
+        "stale-feed stop",
+        "kill switch",
+        "notification failure never blocks trading",
+    ):
+        assert phrase in whatsapp_doc

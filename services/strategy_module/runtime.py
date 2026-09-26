@@ -85,14 +85,16 @@ def _recover() -> dict | None:
 
 def _start_tick_feed(symbols_by_run: dict) -> None:
     """Register the risk hook, then resubscribe what recovery brought back."""
-    from services.strategy_module import engine
+    from services.strategy_module import comparison_lifecycle, engine
     from services.strategy_module.tick_feed import get_risk_tick_feed
 
     feed = get_risk_tick_feed()
     # This is the wire that makes the module react to the market. Both the
     # websocket and the REST fallback go through it, so a leg on the fallback
     # is evaluated on polled prices rather than merely displayed.
+    feed.set_notify(engine.handle_tick_source_event)
     feed.set_on_price(engine.process_tick)
+    feed.set_on_observation(comparison_lifecycle.observe_market_packet)
 
     for run_id, symbols in (symbols_by_run or {}).items():
         try:

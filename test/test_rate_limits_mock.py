@@ -89,7 +89,7 @@ class MockAPI:
         return 200, {"status": "success", "message": "Request processed"}
 
 
-def test_endpoint(api, endpoint, expected_limit, description):
+def check_endpoint(api, endpoint, expected_limit, description):
     """Test rate limiting for a specific endpoint"""
     print(f"\n{description}")
     print(f"Testing: {endpoint}")
@@ -131,7 +131,7 @@ def test_endpoint(api, endpoint, expected_limit, description):
         return False
 
 
-def test_rate_limit_reset(api, endpoint, limit):
+def check_rate_limit_reset(api, endpoint, limit):
     """Test that rate limits reset after time window"""
     print(f"\nTesting rate limit reset for {endpoint}")
     print("-" * 50)
@@ -162,7 +162,7 @@ def test_rate_limit_reset(api, endpoint, limit):
         return False
 
 
-def test_multiple_clients(api, endpoint, limit):
+def check_multiple_clients(api, endpoint, limit):
     """Test that different clients have separate rate limits"""
     print("\nTesting separate rate limits for different clients")
     print("-" * 50)
@@ -215,15 +215,15 @@ def main():
     ]
 
     for endpoint, limit, description in tests:
-        if not test_endpoint(api, endpoint, limit, description):
+        if not check_endpoint(api, endpoint, limit, description):
             all_passed = False
 
     # Test rate limit reset
-    if not test_rate_limit_reset(api, "/api/v1/placeorder", 10):
+    if not check_rate_limit_reset(api, "/api/v1/placeorder", 10):
         all_passed = False
 
     # Test multiple clients
-    if not test_multiple_clients(api, "/api/v1/placesmartorder", 2):
+    if not check_multiple_clients(api, "/api/v1/placesmartorder", 2):
         all_passed = False
 
     # Summary

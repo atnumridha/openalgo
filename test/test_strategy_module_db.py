@@ -10,6 +10,7 @@ test starts and ends with no rows for either test user.
 """
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -99,6 +100,23 @@ def _filled_order(
     return row
 
 
+def test_fill_evidence_rejects_exit_overfill_hidden_by_later_entry():
+    run = _run()
+    for kind, action, quantity in (
+        ("entry", "BUY", 1),
+        ("exit", "SELL", 2),
+        ("entry", "BUY", 1),
+    ):
+        _filled_order(
+            run.id, 1, kind, action, requested_qty=quantity,
+            status="complete", avg_price=100, filled_qty=quantity,
+        )
+
+    assert sm.filled_orders_have_usable_evidence(
+        [run.id], completed_run_ids=[run.id], run_realized={run.id: Decimal("0")}
+    ) is False
+
+
 @pytest.fixture(autouse=True)
 def clean_slate():
     # Start from a clean session; see the note in
@@ -134,12 +152,84 @@ def test_create_returns_the_strategy_and_list_reads_it_back():
     assert [row["name"] for row in sm.list_strategies(USER)] == ["Iron condor weekly"]
 
 
+def test_strategy_preserves_explicit_broker_connection_identity():
+    connection_id = "d3ea04bf-516f-4fde-a482-2878bc96cadb"
+    created, error = sm.create_strategy(USER, _config(broker_connection_id=connection_id))
+
+    assert error is None
+    assert created["broker_connection_id"] == connection_id
+    stored = sm.get_strategy(created["id"], USER)
+    assert sm.strategy_to_dict(stored)["broker_connection_id"] == connection_id
+    run = sm.create_run(created["id"], "sandbox", "kotak")
+    assert run.broker_connection_id == connection_id
+
+
 def test_a_new_strategy_is_sandbox_only_until_explicitly_enabled():
     # The whole point of the opt-in: a strategy discovered to be misconfigured
     # cannot have been placing real orders in the meantime.
     created, _ = sm.create_strategy(USER, _config())
 
     assert created["live_enabled"] is False
+
+
+def test_automation_state_transitions_persist_and_serialize_with_utc_timestamp():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    strategy_id = created["id"]
+    assert created["automation_state"] == "disabled"
+    assert created["automation_state_reason"] is None
+    assert created["automation_state_updated_at"] is None
+
+    for state in ("armed", "closing", "close_failed", "disabled"):
+        assert sm.set_automation_state(strategy_id, USER, state, reason="operator") == (
+            True, None
+        )
+        sm.db_session.expire_all()
+        row = sm.get_strategy(strategy_id, USER)
+        assert row.automation_state == state
+        assert row.automation_state_reason == "operator"
+        assert row.automation_state_updated_at is not None
+        serialized = sm.strategy_to_dict(row)
+        assert serialized["automation_state"] == state
+        assert serialized["automation_state_reason"] == "operator"
+        assert serialized["automation_state_updated_at"].endswith("+00:00")
+
+    ok, error = sm.set_automation_state(strategy_id, USER, "armed", reason=None)
+    assert (ok, error) == (True, None)
+    sm.db_session.expire_all()
+    row = sm.get_strategy(strategy_id, USER)
+    assert row.automation_state == "armed"
+    assert row.automation_state_reason is None
+    assert row.automation_state_updated_at is not None
+    assert sm.strategy_to_dict(row)["automation_state_reason"] is None
+
+
+def test_automation_state_rejects_unknown_values_without_changing_the_row():
+    created, _ = sm.create_strategy(USER, _config())
+    strategy_id = created["id"]
+
+    assert sm.set_automation_state(strategy_id, USER, "unexpected", reason="bad") == (
+        False, "Unknown automation state"
+    )
+    sm.db_session.expire_all()
+    row = sm.get_strategy(strategy_id, USER)
+    assert row.automation_state == "disabled"
+    assert row.automation_state_reason is None
+    assert row.automation_state_updated_at is None
+
+
+def test_automation_state_rejects_foreign_owner_without_changing_the_row():
+    created, _ = sm.create_strategy(USER, _config())
+    strategy_id = created["id"]
+
+    assert sm.set_automation_state(strategy_id, OTHER, "armed", reason="foreign") == (
+        False, "Strategy not found"
+    )
+    sm.db_session.expire_all()
+    row = sm.get_strategy(strategy_id, USER)
+    assert row.automation_state == "disabled"
+    assert row.automation_state_reason is None
+    assert row.automation_state_updated_at is None
 
 
 def test_the_webhook_token_is_returned_once_and_never_again():

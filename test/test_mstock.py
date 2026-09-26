@@ -11,11 +11,13 @@ load_dotenv()
 class TestMstockBroker(unittest.TestCase):
     def setUp(self):
         """Set up for the test case."""
-        # The test assumes that the OpenAlgo server is running and
-        # the user is already logged into the mstock broker.
-        self.api_key = os.getenv(
-            "OPENALGO_API_KEY", "3bb8d260915ff680a7258108c0483b9eb7675ced31309a36f5846366943ee9fa"
-        )
+        # This module contains a real place-order call. The normal suite must
+        # never contact a broker merely because a local server is running.
+        if os.getenv("OPENALGO_RUN_LIVE_BROKER_TESTS") != "1":
+            self.skipTest("Live broker integration tests require explicit opt-in")
+        self.api_key = os.getenv("OPENALGO_API_KEY")
+        if not self.api_key:
+            self.skipTest("OPENALGO_API_KEY is required for live broker tests")
         self.client = OAClient(api_key=self.api_key, host="http://127.0.0.1:5000")
 
     def test_place_order(self):
