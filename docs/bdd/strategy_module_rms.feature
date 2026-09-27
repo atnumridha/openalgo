@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:965, test/test_strategy_module_engine.py:928, test/test_strategy_module_scheduler.py:750
+  # Source: services/strategy_module/engine.py:966, test/test_strategy_module_engine.py:928, test/test_strategy_module_scheduler.py:750
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -72,7 +72,7 @@ Feature: Strategy module and risk management
     Then the first event changes only the order and position_ref it names
     And every repeat changes neither exposure nor realized P&L
 
-  # Source: test/test_strategy_residual_safety.py:201
+  # Source: test/test_strategy_residual_safety.py:205
   Scenario: A signal flip settles only the owner its fill names
     Given a leg has an outgoing superseded side and a live replacement side
     When the retried outgoing exit fills
