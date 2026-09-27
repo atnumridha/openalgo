@@ -12,19 +12,19 @@ const profiles = [
     id: 'regime50200',
     title: 'EMA 50/200 + regime',
     description: '5-minute crossover filtered by prior-day trend and volatility.',
-    exits: 'ATM option · 2R index target + protective option stop',
+    exits: 'ATM option · current stop up to ₹300 gross / 3R option target',
   },
   {
     id: 'ema915',
     title: 'EMA 9/15',
     description: 'Nifty pullback with Bank Nifty trend confirmation.',
-    exits: 'ITM option · 2R index target + protective option stop',
+    exits: 'ITM option · current stop up to ₹300 gross / 3R option target',
   },
   {
     id: 'box15',
     title: 'Opening-box breakout',
     description: 'First 1-minute breakout of the completed 09:15–09:30 Nifty range.',
-    exits: 'ATM option · 10-point option stop / 20-point option target',
+    exits: 'ATM option · current stop up to ₹300 gross / 3R option target',
   },
 ] as const
 
@@ -56,7 +56,9 @@ export function ScalpingStrategies({
         <div>
           <h2 className="text-lg font-semibold">Top three research candidates</h2>
           <p className="text-sm text-muted-foreground">
-            Experimental shortlist, ordered by historical net win %. These are 15-minute research results under modeled base costs, not live results.
+            Experimental shortlist, ordered by historical net win %. The 27 September 2026 research
+            used earlier exit and risk rules, 15-minute holds and modeled base costs. These are
+            not results for the current ₹300/3R recipe or live trading.
           </p>
         </div>
         {!complete && (
@@ -82,7 +84,7 @@ export function ScalpingStrategies({
               <CardHeader className="space-y-2 pb-2">
                 <CardTitle className="text-base">{profile.title}</CardTitle>
                 {research && <p className="text-xs text-muted-foreground">
-                  Historical wins: {research.winPercent.toFixed(2)}% · {research.wins}/{research.trades} trades
+                  Earlier-rule wins: {research.winPercent.toFixed(2)}% · {research.wins}/{research.trades} trades
                 </p>}
                 <p className="text-sm text-muted-foreground">{profile.description}</p>
                 <p className="text-xs text-muted-foreground">{profile.exits} · 15-minute limit</p>
@@ -122,7 +124,8 @@ export function ScalpingStrategies({
         })}
       </div>
       <p className="text-xs text-muted-foreground">
-        One Nifty option lot · ₹20,000
+        Current entries use one Nifty option lot, a price stop capped at ₹300 gross and a 3R
+        option target before charges. ₹20,000
         premium ceiling based on the ₹25,000 research assumption; your saved account budget may be
         lower. Enable the shared capital profile and costs in{' '}
         <Link className="underline" to="/strategy/research">

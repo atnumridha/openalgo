@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
@@ -64,4 +64,27 @@ it('stops armed live automation and prevents changing mode while active', async 
   expect(screen.getByRole('button', { name: 'Use sandbox' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Stop automation' }))
   expect(cb.onStop).toHaveBeenCalledWith(row)
+})
+
+it('shows current cash exits on every card and qualifies the earlier-rule ranking', () => {
+  show()
+  const shortlist = screen.getByRole('region', { name: 'Scalping strategies' })
+  expect(shortlist).toHaveTextContent(/27 September 2026.*earlier exit and risk rules/)
+  expect(shortlist).toHaveTextContent(/not results for the current ₹300\/3R recipe/)
+  const expected = [
+    ['EMA 9/15', 'ITM option', '46.58%', '102/219'],
+    ['EMA 50/200 + regime', 'ATM option', '46.43%', '13/28'],
+    ['Opening-box breakout', 'ATM option', '41.04%', '71/173'],
+  ]
+  const cards = shortlist.querySelectorAll('[data-slot="card"]')
+  expect(cards).toHaveLength(3)
+  expected.forEach(([title, contract, winRate, counts], index) => {
+    const card = cards[index] as HTMLElement
+    expect(within(card).getByText(title)).toBeInTheDocument()
+    expect(card).toHaveTextContent(contract)
+    expect(card).toHaveTextContent(/current stop up to ₹300 gross \/ 3R option target/)
+    expect(card).toHaveTextContent('15-minute limit')
+    expect(card).toHaveTextContent(`Earlier-rule wins: ${winRate} · ${counts} trades`)
+  })
+  expect(shortlist).toHaveTextContent('before charges')
 })
