@@ -7,6 +7,7 @@ import pytz
 
 from database import trading_risk_db as ledger
 from database.engine_factory import create_db_engine
+from services.risk.budget import current_policy, legacy_policy
 from services.strategy_module import trading_budget as service
 
 NOW = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 26, 10))
@@ -44,6 +45,7 @@ FACTS = SimpleNamespace(
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", legacy_policy())
     engine = create_db_engine(f"sqlite:///{tmp_path}/risk.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -60,6 +62,19 @@ def test_missing_costs_blocks_entry_and_explicit_costs_reserve_full_risk():
     decision, ref = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "sandbox", FACTS, NOW)
     assert decision.allowed and ref == "p1"
     assert ledger.status("u", "sandbox", "2026-09-26")["reserved_risk"] == D("940")
+
+
+def test_current_managed_admission_caps_gross_and_reserves_fees(monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    ledger.set_costs("new", COSTS)
+    over = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("301")})
+    assert service.reserve_entry("new", STRATEGY, [LEG], "sandbox", "sandbox", over, NOW)[0].code == "per_trade_risk_exceeded"
+    facts = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("300")})
+    decision, ref = service.reserve_entry("new", STRATEGY, [LEG], "sandbox", "sandbox", facts, NOW)
+    assert decision.allowed and ref == "p1"
+    snapshot = ledger.status("new", "sandbox", "2026-09-26")
+    assert snapshot["per_trade_limit"] == D("300")
+    assert snapshot["reserved_risk"] == D("340")
 
 
 def test_fees_can_make_a_nominally_affordable_stop_unaffordable():

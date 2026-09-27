@@ -1,6 +1,7 @@
-"""Pure, shared two-bucket capital policy. No clock, database or broker access."""
+"""Pure versioned capital policy. No clock, database or broker access."""
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -16,6 +17,16 @@ class BudgetPolicy:
     drawdown_pct: Decimal = Decimal("0.20")
     cash_buffer_pct: Decimal = Decimal("0.20")
     version: str = "two-bucket-v1"
+    per_trade_limit: Decimal | None = None
+
+
+def legacy_policy(capital=Decimal("10000")):
+    return BudgetPolicy(capital=capital)
+
+
+def current_policy(capital=Decimal("25000")):
+    return BudgetPolicy(capital=capital, first_trade_limit=ZERO, later_trades_limit=ZERO,
+                        per_trade_limit=Decimal("300"), version="shared-300-3r-v1")
 
 
 @dataclass(frozen=True)
@@ -27,6 +38,8 @@ class BudgetTrade:
     planned_risk: Decimal
     net_pnl: Decimal = ZERO
     filled: bool = False
+    close_sequence: int | None = None
+    completion_day: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,20 +51,37 @@ class BudgetDecision:
     metrics: dict[str, Any] = field(default_factory=dict)
 
 
-def budget_snapshot(policy, trades, session_day, equity, peak_equity, paused=False):
+def budget_snapshot(policy, trades, session_day, equity, peak_equity, paused=False, *, daily_stopped=False):
     """Losses spend budgets; gains never refill them. Open risk is reserved."""
     if not all(value.is_finite() for value in (equity, peak_equity)) or peak_equity <= 0:
         raise ValueError("Finite equity and a positive equity peak are required")
     active = [t for t in trades if t.status != "void"]
     for trade in active:
         if (
-            trade.bucket not in {"first", "later"}
+            trade.bucket not in {"first", "later", "shared"}
             or trade.status not in {"pending", "open", "closed"}
             or not trade.planned_risk.is_finite()
             or trade.planned_risk < 0
             or not trade.net_pnl.is_finite()
         ):
             raise ValueError("Incomplete trade risk evidence")
+    if policy.version == "shared-300-3r-v1":
+        for trade in active:
+            if trade.status == "closed":
+                if not trade.filled:
+                    if trade.net_pnl != ZERO:
+                        raise ValueError("Unfilled close has net P&L")
+                    continue
+                try:
+                    if date.fromisoformat(trade.completion_day).isoformat() != trade.completion_day:
+                        raise ValueError("Invalid completion day")
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Completion day is unavailable") from exc
+        today = [t for t in active if (
+            t.status == "closed" and t.filled and t.completion_day == session_day
+        ) or (t.status in {"pending", "open"} and t.session_day == session_day)]
+        return _shared_snapshot(policy, active, today, session_day, equity, peak_equity,
+                                paused, daily_stopped)
     today = [t for t in active if t.session_day == session_day]
     used = {"first": ZERO, "later": ZERO}
     actual_loss = {"first": ZERO, "later": ZERO}
@@ -100,11 +130,72 @@ def budget_snapshot(policy, trades, session_day, equity, peak_equity, paused=Fal
     }
 
 
-def evaluate_budget(policy, trades, session_day, equity, peak_equity, proposed_risk, paused=False):
+def _shared_snapshot(policy, active, today, session_day, equity, peak_equity, paused, daily_stopped):
+    closed = [t for t in today if t.status == "closed"]
+    sequences = [t.close_sequence for t in closed]
+    if any(not isinstance(seq, int) or seq <= 0 for seq in sequences) or len(set(sequences)) != len(sequences):
+        raise ValueError("Completion order is unavailable")
+    streak = 0
+    stopped = bool(daily_stopped)
+    for trade in sorted(closed, key=lambda item: item.close_sequence):
+        streak = streak + 1 if trade.net_pnl < 0 else 0
+        stopped = stopped or streak >= 3
+    actual_loss = sum((max(ZERO, -t.net_pnl) for t in today), ZERO)
+    # The open/pending mark may already include some of the planned loss. Reserve
+    # only the incremental amount, so adverse marks and costs are not double counted.
+    reserved = sum((max(ZERO, t.planned_risk + min(ZERO, t.net_pnl))
+                    for t in today if t.status in {"pending", "open"}), ZERO)
+    peak = max(peak_equity, equity)
+    drawdown = max(ZERO, peak - equity)
+    headroom = max(ZERO, peak * policy.drawdown_pct - drawdown - reserved)
+    pause = paused or drawdown >= peak * policy.drawdown_pct
+    daily_remaining = max(ZERO, policy.daily_limit - actual_loss - reserved)
+    return {
+        "policy_version": policy.version,
+        "exit_buckets": ["first", "later", "shared"] if pause or actual_loss >= policy.daily_limit else [],
+        "first_loss": ZERO, "later_loss": ZERO,
+        "first_remaining": None, "later_remaining": None,
+        "first_trade_used": False, "first_pending": False,
+        "equity": equity, "peak_equity": peak, "drawdown": drawdown,
+        "drawdown_headroom": headroom, "reserved_risk": reserved,
+        "daily_loss": actual_loss, "daily_remaining": daily_remaining,
+        "per_trade_limit": policy.per_trade_limit,
+        "consecutive_losses": streak, "daily_stopped": stopped,
+        "daily_stop_reason": "three_consecutive_losses" if stopped else None,
+        "prior_session_exposure": any(t.session_day != session_day and t.status in {"pending", "open"}
+                                      for t in active),
+        "paused": pause, "session_day": session_day,
+    }
+
+
+def evaluate_budget(policy, trades, session_day, equity, peak_equity, proposed_risk, paused=False,
+                    *, proposed_gross_risk=None, daily_stopped=False):
     try:
-        metrics = budget_snapshot(policy, trades, session_day, equity, peak_equity, paused)
+        metrics = budget_snapshot(policy, trades, session_day, equity, peak_equity, paused,
+                                  daily_stopped=daily_stopped)
     except (ValueError, ArithmeticError, AttributeError):
         return BudgetDecision(False, "risk_evidence_missing", "first", ZERO)
+    if policy.version == "shared-300-3r-v1":
+        available = min(metrics["daily_remaining"], metrics["drawdown_headroom"])
+        code = "entry_allowed"
+        gross = proposed_gross_risk
+        if gross is None or not gross.is_finite() or gross <= 0 or not proposed_risk.is_finite() or proposed_risk <= 0 or proposed_risk < gross:
+            code = "invalid_trade_risk"
+        elif gross > policy.per_trade_limit:
+            code = "per_trade_risk_exceeded"
+        elif paused:
+            code = "portfolio_paused"
+        elif metrics["paused"]:
+            code = "portfolio_drawdown"
+        elif metrics["prior_session_exposure"]:
+            code = "prior_session_exposure"
+        elif metrics["daily_stopped"]:
+            code = "consecutive_losses_stop"
+        elif proposed_risk > metrics["daily_remaining"]:
+            code = "daily_budget_exhausted"
+        elif proposed_risk > metrics["drawdown_headroom"]:
+            code = "drawdown_headroom"
+        return BudgetDecision(code == "entry_allowed", code, "shared", available, metrics)
     bucket = "later" if metrics["first_trade_used"] else "first"
     available = min(
         metrics[f"{bucket}_remaining"], metrics["daily_remaining"], metrics["drawdown_headroom"]

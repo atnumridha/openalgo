@@ -119,6 +119,10 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
         if reason:
             return _refusal("validated_live_release_required")
     reconcile_account(user, mode)
+    try:
+        ledger.ensure_current_policy(user, mode, day)
+    except ValueError:
+        return _refusal("risk_evidence_missing")
     current = ledger.list_trades(user, mode, active_only=True)
     expected = {}
     for row in current:
@@ -165,6 +169,7 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
             "policy_version": ledger.POLICY.version,
         },
         broker_cash=facts.available_cash,
+        gross_risk=facts.entry_risk if ledger.POLICY.version == "shared-300-3r-v1" else None,
     )
     if result.allowed and mode == "sandbox":
         try:

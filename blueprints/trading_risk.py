@@ -49,7 +49,15 @@ def status():
     accounts = {}
     for mode in ("sandbox", "live"):
         trading_budget.reconcile_account(user, mode)
-        accounts[mode] = ledger.status(user, mode, trading_budget.trading_day())
+        day = trading_budget.trading_day()
+        transition_blocked = None
+        try:
+            ledger.ensure_current_policy(user, mode, day)
+        except ValueError as error:
+            transition_blocked = str(error)
+        accounts[mode] = ledger.status(user, mode, day)
+        if transition_blocked:
+            accounts[mode]["policy_transition_blocked"] = transition_blocked
     return jsonify(
         status="success",
         data=_json(

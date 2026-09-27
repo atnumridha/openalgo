@@ -64,3 +64,68 @@ def test_previous_session_exposure_blocks_reset_and_overruns_count():
 def test_nonfinite_and_nonpositive_risk_is_rejected():
     for value in ["NaN", "Infinity", "0", "-1"]:
         assert not decision([], value).allowed
+
+
+def test_current_policy_uses_one_shared_loss_pool_and_a_separate_gross_cap():
+    policy = budget.current_policy()
+    trades = [
+        budget.BudgetTrade("winner", "2026-09-26", "shared", "closed", D("280"), D("700"), True, 1, "2026-09-26"),
+        budget.BudgetTrade("loser", "2026-09-26", "shared", "closed", D("280"), D("-1700"), True, 2, "2026-09-26"),
+    ]
+    allowed = budget.evaluate_budget(policy, trades, "2026-09-26", D("24000"), D("25000"), D("300"), proposed_gross_risk=D("290"))
+    assert allowed.allowed and allowed.available == D("300")
+    assert allowed.metrics["daily_remaining"] == D("300")
+    assert allowed.metrics["per_trade_limit"] == D("300")
+    assert budget.evaluate_budget(policy, trades, "2026-09-26", D("24000"), D("25000"), D("301"), proposed_gross_risk=D("290")).code == "daily_budget_exhausted"
+    assert budget.evaluate_budget(policy, [], "2026-09-26", D("25000"), D("25000"), D("340"), proposed_gross_risk=D("301")).code == "per_trade_risk_exceeded"
+
+
+def test_current_policy_latches_three_completed_losses_and_needs_order():
+    policy = budget.current_policy()
+    trades = [budget.BudgetTrade(str(i), "2026-09-26", "shared", "closed", D("100"), D(pnl), True, i, "2026-09-26") for i, pnl in enumerate(["-100", "0", "-100", "-100", "-100"], 1)]
+    result = budget.evaluate_budget(policy, trades, "2026-09-26", D("24600"), D("25000"), D("100"), proposed_gross_risk=D("100"))
+    assert result.code == "consecutive_losses_stop"
+    assert result.metrics["consecutive_losses"] == 3
+    assert result.metrics["daily_stopped"]
+    assert budget.evaluate_budget(policy, trades[:-1], "2026-09-26", D("24700"), D("25000"), D("100"), proposed_gross_risk=D("100")).allowed
+    incomplete = [budget.BudgetTrade("old", "2026-09-26", "first", "closed", D("100"), D("-100"), True)]
+    assert budget.evaluate_budget(policy, incomplete, "2026-09-26", D("24900"), D("25000"), D("100"), proposed_gross_risk=D("100")).code == "risk_evidence_missing"
+
+
+def test_current_daily_actual_loss_keeps_managed_exit_protection():
+    policy = budget.current_policy()
+    open_trade = budget.BudgetTrade("open", "2026-09-26", "shared", "open", D("300"), D("-2000"), True)
+    snapshot = budget.budget_snapshot(policy, [open_trade], "2026-09-26", D("23000"), D("25000"))
+    assert snapshot["daily_remaining"] == 0
+    assert "shared" in snapshot["exit_buckets"]
+    assert not snapshot["daily_stopped"]
+
+
+def test_current_unfilled_closed_row_does_not_reset_completed_loss_streak():
+    policy = budget.current_policy()
+    trades = [
+        budget.BudgetTrade("loss-1", "2026-09-26", "shared", "closed", D("100"), D("-100"), True, 1, "2026-09-26"),
+        budget.BudgetTrade("unfilled", "2026-09-26", "shared", "closed", D("100"), D("0"), False, 2, "2026-09-26"),
+        budget.BudgetTrade("loss-2", "2026-09-26", "shared", "closed", D("100"), D("-100"), True, 3, "2026-09-26"),
+        budget.BudgetTrade("loss-3", "2026-09-26", "shared", "closed", D("100"), D("-100"), True, 4, "2026-09-26"),
+    ]
+    result = budget.evaluate_budget(policy, trades, "2026-09-26", D("24700"), D("25000"), D("100"), proposed_gross_risk=D("80"))
+    assert result.code == "consecutive_losses_stop"
+    assert result.metrics["consecutive_losses"] == 3
+    assert result.metrics["daily_loss"] == D("300")
+
+
+def test_current_overnight_completion_spends_close_day_allowance_and_streak():
+    policy = budget.current_policy()
+    trades = [
+        budget.BudgetTrade("overnight", "2026-09-25", "shared", "closed", D("300"), D("-700"), True, 1, "2026-09-26"),
+        budget.BudgetTrade("today-1", "2026-09-26", "shared", "closed", D("300"), D("-600"), True, 2, "2026-09-26"),
+        budget.BudgetTrade("today-2", "2026-09-26", "shared", "closed", D("300"), D("-500"), True, 3, "2026-09-26"),
+    ]
+    result = budget.evaluate_budget(policy, trades, "2026-09-26", D("23200"), D("25000"), D("100"), proposed_gross_risk=D("80"))
+    assert result.metrics["daily_loss"] == D("1800")
+    assert result.metrics["daily_remaining"] == D("200")
+    assert result.metrics["consecutive_losses"] == 3
+    assert result.code == "consecutive_losses_stop"
+    yesterday = budget.budget_snapshot(policy, trades, "2026-09-25", D("23200"), D("25000"))
+    assert yesterday["daily_loss"] == 0

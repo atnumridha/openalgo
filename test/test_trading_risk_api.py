@@ -5,10 +5,12 @@ from blueprints import trading_risk as routes
 from database import trading_risk_db as ledger
 from database.engine_factory import create_db_engine
 from limiter import limiter
+from services.risk.budget import current_policy, legacy_policy
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", legacy_policy())
     engine = create_db_engine(f"sqlite:///{tmp_path}/risk.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -32,6 +34,96 @@ def test_risk_settings_require_session_and_show_distinct_budgets(client):
     assert data["costs"] is None
     assert data["accounts"]["sandbox"]["later_remaining"] == 1000
     assert data["policy"]["daily_limit"] == 2000
+
+
+def test_current_api_reports_shared_policy_fields(client, monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    with client.session_transaction() as session:
+        session["user"] = "new-owner"
+    data = client.get("/strategy/api/risk").json["data"]
+    account = data["accounts"]["sandbox"]
+    assert data["policy"]["version"] == "shared-300-3r-v1"
+    assert account["per_trade_limit"] == 300
+    assert account["daily_remaining"] == 2000
+    assert account["consecutive_losses"] == 0
+    assert account["daily_stopped"] is False
+    assert account["first_remaining"] is None
+
+
+def test_current_api_upgrades_idle_existing_account_without_changing_allocation(client, monkeypatch):
+    ledger.review_allocation("owner", "sandbox", 25000, "Existing funded capital", "2026-09-26")
+    before = ledger.status("owner", "sandbox", "2026-09-26")
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    with client.session_transaction() as session:
+        session["user"] = "owner"
+    data = client.get("/strategy/api/risk").json["data"]
+    after = data["accounts"]["sandbox"]
+    assert after["policy_version"] == "shared-300-3r-v1"
+    assert after["per_trade_limit"] == 300
+    assert after["daily_remaining"] == 2000
+    assert after["capital"] == 25000
+    assert after["allocation_revision"] == before["allocation_revision"]
+
+
+def test_current_api_reports_transition_block_when_legacy_exposure_remains(client, monkeypatch):
+    from decimal import Decimal
+
+    from services.strategy_module.trading_budget import trading_day
+
+    assert ledger.reserve("owner", "sandbox", "legacy-open", trading_day(), Decimal("100"), Decimal("1000"), "index", "sandbox", 1, {}).allowed
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    with client.session_transaction() as session:
+        session["user"] = "owner"
+    account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
+    assert account["policy_version"] == "two-bucket-v1"
+    assert "exposure" in account["policy_transition_blocked"]
+    assert account["reserved_risk"] == 100
+
+
+def test_current_api_counts_overnight_loss_on_completion_day(client, monkeypatch):
+    from datetime import date, datetime, timedelta
+    from decimal import Decimal
+    from zoneinfo import ZoneInfo
+
+    from services.strategy_module.trading_budget import trading_day
+
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    today = trading_day()
+    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    ledger.ensure_current_policy("overnight-owner", "sandbox", yesterday)
+    assert ledger.reserve("overnight-owner", "sandbox", "prior", yesterday, Decimal("150"), Decimal("2000"), "index", "sandbox", 1, {}, gross_risk=Decimal("100")).allowed
+    ledger.update_trade("overnight-owner", "sandbox", "prior", status="closed", net_pnl=Decimal("-150"), filled=True, evidence={}, completed_at=datetime.fromisoformat(f"{today}T10:00:00").replace(tzinfo=ZoneInfo("Asia/Kolkata")))
+    with client.session_transaction() as session:
+        session["user"] = "overnight-owner"
+    account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
+    assert account["daily_loss"] == 150
+    assert account["daily_remaining"] == 1850
+    assert account["consecutive_losses"] == 1
+
+
+@pytest.mark.parametrize(
+    ("observed", "active_day"),
+    [
+        ("2026-09-27T02:59:59+05:30", "2026-09-26"),
+        ("2026-09-27T03:00:00+05:30", "2026-09-27"),
+    ],
+)
+def test_current_api_uses_session_reset_for_completed_loss(client, monkeypatch, observed, active_day):
+    from datetime import datetime
+    from decimal import Decimal
+
+    monkeypatch.setenv("SESSION_EXPIRY_TIME", "03:00")
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    ledger.ensure_current_policy("reset-owner", "sandbox", "2026-09-26")
+    assert ledger.reserve("reset-owner", "sandbox", "prior", "2026-09-26", Decimal("150"), Decimal("2000"), "index", "sandbox", 1, {}, gross_risk=Decimal("100")).allowed
+    ledger.update_trade("reset-owner", "sandbox", "prior", status="closed", net_pnl=Decimal("-150"), filled=True, evidence={}, completed_at=datetime.fromisoformat(observed))
+    monkeypatch.setattr(routes.trading_budget, "trading_day", lambda: active_day)
+    with client.session_transaction() as session:
+        session["user"] = "reset-owner"
+    account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
+    assert account["daily_loss"] == 150
+    assert account["daily_remaining"] == 1850
+    assert account["consecutive_losses"] == 1
 
 
 def test_missing_cost_fields_and_unreviewed_resume_are_rejected(client):

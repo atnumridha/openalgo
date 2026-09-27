@@ -17,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    and_,
     func,
     inspect,
     or_,
@@ -28,15 +29,16 @@ from sqlalchemy.orm import Session, declarative_base
 from database.engine_factory import create_db_engine
 from services.risk.budget import (
     BudgetDecision,
-    BudgetPolicy,
     BudgetTrade,
     budget_snapshot,
+    current_policy,
     evaluate_budget,
+    legacy_policy,
 )
 
 engine = create_db_engine()
 Base = declarative_base()
-POLICY = BudgetPolicy()
+POLICY = current_policy()
 ZERO = Decimal("0")
 
 
@@ -48,6 +50,11 @@ class RiskAccount(Base):
     allocation_revision = Column(Integer, nullable=False, default=0, server_default=text("0"))
     paused = Column(Boolean, nullable=False, default=False)
     pause_reason = Column(Text, nullable=True)
+    policy_version = Column(String(40), nullable=False, default=POLICY.version,
+                            server_default=text("'two-bucket-v1'"))
+    close_sequence = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    daily_stop_day = Column(String(10), nullable=True)
+    daily_stop_reason = Column(String(80), nullable=True)
 
 
 class RiskTrade(Base):
@@ -67,12 +74,23 @@ class RiskTrade(Base):
     run_id = Column(Integer, nullable=True, index=True)
     details = Column(JSON, nullable=False, default=dict)
     evidence = Column(JSON, nullable=False, default=dict)
+    closed_at = Column(String(40), nullable=True)
+    close_sequence = Column(Integer, nullable=True)
+    completion_day = Column(String(10), nullable=True)
 
 
 class RiskSettings(Base):
     __tablename__ = "trading_risk_settings"
     user_id = Column(String(80), primary_key=True)
     costs = Column(JSON, nullable=True)
+
+
+class RiskDayStop(Base):
+    __tablename__ = "trading_risk_day_stop"
+    scope = Column(String(180), primary_key=True)
+    session_day = Column(String(10), primary_key=True)
+    reason = Column(String(80), nullable=False)
+    at = Column(String(40), nullable=False)
 
 
 class RiskReview(Base):
@@ -87,6 +105,33 @@ class RiskReview(Base):
 def init_db():
     Base.metadata.create_all(engine)
     ensure_allocation_revision(engine)
+    ensure_policy_columns(engine)
+
+
+def ensure_policy_columns(target_engine):
+    """Preserve existing accounts as legacy and leave unknown close times unknown."""
+    additions = {
+        "trading_risk_account": {
+            "policy_version": "VARCHAR(40) NOT NULL DEFAULT 'two-bucket-v1'",
+            "close_sequence": "INTEGER NOT NULL DEFAULT 0",
+            "daily_stop_day": "VARCHAR(10)",
+            "daily_stop_reason": "VARCHAR(80)",
+        },
+        "trading_risk_trade": {
+            "closed_at": "VARCHAR(40)",
+            "close_sequence": "INTEGER",
+            "completion_day": "VARCHAR(10)",
+        },
+    }
+    inspector = inspect(target_engine)
+    for table, columns in additions.items():
+        if not inspector.has_table(table):
+            continue
+        present = {column["name"] for column in inspector.get_columns(table)}
+        for name, definition in columns.items():
+            if name not in present:
+                with target_engine.begin() as db:
+                    db.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def allocation_revision_missing(target_engine):
@@ -124,7 +169,8 @@ def _account(user, mode):
             )
             if account is None:
                 account = RiskAccount(
-                    scope=scope, capital=POLICY.capital, peak=POLICY.capital, paused=False
+                    scope=scope, capital=POLICY.capital, peak=POLICY.capital, paused=False,
+                    policy_version=POLICY.version,
                 )
                 db.add(account)
                 db.flush()
@@ -135,12 +181,27 @@ def _account(user, mode):
             raise
 
 
+def _policy(account):
+    if account.policy_version == "shared-300-3r-v1":
+        return current_policy(capital=account.capital)
+    if account.policy_version == "two-bucket-v1":
+        return legacy_policy(capital=account.capital)
+    raise ValueError("Unknown risk policy version")
+
+
 def _snapshot(db, account, day):
+    policy = _policy(account)
+    relevant = or_(RiskTrade.session_day == day,
+                   RiskTrade.status.in_(["pending", "open"]))
+    if policy.version == "shared-300-3r-v1":
+        relevant = or_(relevant, RiskTrade.completion_day == day,
+                       and_(RiskTrade.status == "closed", RiskTrade.filled.is_(True),
+                            RiskTrade.completion_day.is_(None)))
     rows = list(
         db.scalars(
             select(RiskTrade).where(
                 RiskTrade.scope == account.scope,
-                or_(RiskTrade.session_day == day, RiskTrade.status.in_(["pending", "open"])),
+                relevant,
             )
         )
     )
@@ -152,11 +213,26 @@ def _snapshot(db, account, day):
     equity = account.capital + Decimal(net)
     account.peak = max(account.peak, equity)
     trades = [
-        BudgetTrade(r.ref, r.session_day, r.bucket, r.status, r.planned_risk, r.net_pnl, r.filled)
+        BudgetTrade(r.ref, r.session_day, r.bucket, r.status, r.planned_risk, r.net_pnl,
+                    r.filled, r.close_sequence, r.completion_day)
         for r in rows
     ]
-    result = budget_snapshot(BudgetPolicy(capital=account.capital), trades, day, equity, account.peak, account.paused)
+    day_stop = db.get(RiskDayStop, (account.scope, day))
+    result = budget_snapshot(policy, trades, day, equity, account.peak, account.paused,
+                             daily_stopped=day_stop is not None or account.daily_stop_day == day)
+    if result.get("daily_stopped") and day_stop is None:
+        day_stop = RiskDayStop(scope=account.scope, session_day=day,
+                               reason=result["daily_stop_reason"] or account.daily_stop_reason,
+                               at=datetime.now(UTC).isoformat())
+        db.add(day_stop)
+    if day_stop is not None:
+        result["daily_stopped"] = True
+        result["daily_stop_reason"] = day_stop.reason
+        if account.daily_stop_day is None or day >= account.daily_stop_day:
+            account.daily_stop_day = day
+            account.daily_stop_reason = day_stop.reason
     result["capital"] = account.capital
+    result["policy_version"] = account.policy_version
     result["allocation_revision"] = account.allocation_revision
     if result["paused"] and not account.paused:
         account.paused = True
@@ -172,9 +248,34 @@ def status(user, mode, day):
 
 def budget_state(user, mode, day):
     """Return the same durable equity, peak and bucket ledger used by admission."""
+    ensure_current_policy(user, mode, day)
     with _account(user, mode) as (db, account):
         snapshot, trades, _ = _snapshot(db, account, day)
         return snapshot, trades
+
+
+def ensure_current_policy(user, mode, day):
+    """Upgrade an idle legacy account when current-day close order is known."""
+    if POLICY.version != "shared-300-3r-v1":
+        return
+    with _account(user, mode) as (db, account):
+        if account.policy_version == POLICY.version:
+            return
+        if account.policy_version != "two-bucket-v1":
+            raise ValueError("Unknown risk policy version")
+        if db.scalar(select(RiskTrade.ref).where(
+            RiskTrade.scope == account.scope,
+            RiskTrade.status.in_(["pending", "open"]),
+        )) is not None:
+            raise ValueError("Unresolved legacy exposure requires reconciliation")
+        if db.scalar(select(RiskTrade.ref).where(
+            RiskTrade.scope == account.scope,
+            RiskTrade.status == "closed",
+            RiskTrade.filled.is_(True),
+            or_(RiskTrade.close_sequence.is_(None), RiskTrade.completion_day.is_(None)),
+        )) is not None:
+            raise ValueError("Legacy close order or completion day is unavailable")
+        account.policy_version = POLICY.version
 
 
 def review_allocation(user, mode, capital, reason, day):
@@ -211,16 +312,23 @@ def review_allocation(user, mode, capital, reason, day):
 
 
 def reserve(
-    user, mode, ref, day, risk, premium, segment, broker, strategy_id, details, *, broker_cash=None
+    user, mode, ref, day, risk, premium, segment, broker, strategy_id, details, *, broker_cash=None,
+    gross_risk=None,
 ):
     if not ref or len(ref) > 64 or segment not in {"index", "mcx"}:
         raise ValueError("A position reference and supported options segment are required")
     if not premium.is_finite() or premium <= 0:
         raise ValueError("A finite positive entry premium is required")
     with _account(user, mode) as (db, account):
-        metrics, trades, rows = _snapshot(db, account, day)
+        try:
+            metrics, trades, rows = _snapshot(db, account, day)
+        except ValueError:
+            return BudgetDecision(False, "risk_evidence_missing", "shared", ZERO)
+        if details.get("policy_version") and details["policy_version"] != account.policy_version:
+            return BudgetDecision(False, "policy_version_mismatch", "shared", ZERO, metrics)
         decision = evaluate_budget(
-            BudgetPolicy(capital=account.capital), trades, day, metrics["equity"], account.peak, risk, account.paused
+            _policy(account), trades, day, metrics["equity"], account.peak, risk, account.paused,
+            proposed_gross_risk=gross_risk, daily_stopped=metrics.get("daily_stopped", False),
         )
         if db.get(RiskTrade, (account.scope, ref)) is not None:
             return BudgetDecision(
@@ -280,12 +388,16 @@ def reserve(
                 strategy_id=strategy_id,
                 details=details,
                 evidence={},
+                closed_at=None,
+                close_sequence=None,
+                completion_day=None,
             )
         )
         return decision
 
 
-def update_trade(user, mode, ref, *, status, net_pnl, filled, evidence, expected=None):
+def update_trade(user, mode, ref, *, status, net_pnl, filled, evidence, expected=None,
+                 completed_at=None):
     if status not in {"pending", "open", "closed", "void"} or not net_pnl.is_finite():
         raise ValueError("Invalid risk evidence")
     with _account(user, mode) as (db, account):
@@ -300,15 +412,33 @@ def update_trade(user, mode, ref, *, status, net_pnl, filled, evidence, expected
             return False
         if status == "void" and (filled or row.filled):
             raise ValueError("A filled trade cannot be voided")
-        if row.status == "closed" and status == "pending":
-            raise ValueError("A completed trade cannot become an unfilled order")
+        if status == "closed" and not (filled or row.filled):
+            raise ValueError("An unfilled reservation cannot be closed")
+        if row.status == "closed" and status != "closed":
+            raise ValueError("A completed trade cannot be reopened")
+        previous_evidence = {key: value for key, value in (row.evidence or {}).items()
+                             if key != "_ledger_revision"}
+        if (row.status == status and row.net_pnl == net_pnl and row.filled == (filled or row.filled)
+                and previous_evidence == evidence):
+            return True
+        if status == "closed" and row.status != "closed":
+            from services.strategy_module import session
+
+            at = completed_at if completed_at is not None else datetime.now(UTC)
+            if not isinstance(at, datetime) or at.tzinfo is None or at.utcoffset() is None:
+                raise ValueError("A timezone-aware completion instant is required")
+            account.close_sequence = int(account.close_sequence or 0) + 1
+            row.close_sequence = account.close_sequence
+            row.closed_at = at.astimezone(UTC).isoformat()
+            row.completion_day = session.session_day(at.astimezone(session.IST)).isoformat()
         row.status, row.net_pnl, row.filled = status, net_pnl, filled or row.filled
         row.evidence = {
             **evidence,
             "_ledger_revision": int((row.evidence or {}).get("_ledger_revision", 0)) + 1,
         }
         db.flush()
-        _snapshot(db, account, row.session_day)
+        _snapshot(db, account, row.completion_day if status == "closed" and
+                  account.policy_version == "shared-300-3r-v1" else row.session_day)
         return True
 
 
