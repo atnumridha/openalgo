@@ -3,7 +3,8 @@
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from test_trading_research import fees, payload
+from test_trading_research import current_payload as payload
+from test_trading_research import fees
 
 from database.trading_research_db import ResearchStore
 from services.research import jobs
@@ -44,7 +45,7 @@ def test_development_requires_enough_sessions_to_seal_last_sixty(store):
         create_run(store, 60)
 
 
-def test_queued_capital_is_hash_bound_and_legacy_request_uses_ten_thousand(store):
+def test_queued_capital_is_hash_bound_and_new_requests_default_to_twenty_five_thousand(store):
     imported = jobs.import_dataset(store, "alice", payload(80))
     request = {
         "dataset_id": imported["id"],
@@ -53,9 +54,9 @@ def test_queued_capital_is_hash_bound_and_legacy_request_uses_ten_thousand(store
         "costs": fees(),
     }
     legacy = jobs.queue_run(store, "alice", request)
-    larger = jobs.queue_run(store, "alice", request | {"capital": 25000})
-    assert legacy["configuration"]["capital"] == 10000
-    assert larger["configuration"]["capital"] == 25000
+    larger = jobs.queue_run(store, "alice", request | {"capital": 30000})
+    assert legacy["configuration"]["capital"] == 25000
+    assert larger["configuration"]["capital"] == 30000
     assert legacy["configuration_hash"] != larger["configuration_hash"]
 
 

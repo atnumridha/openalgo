@@ -13,6 +13,8 @@ from services.research.groww_algorithmic import signals as regime_signals
 from services.research.scalp_strategies import ema_reversal_signals, macd_features, macd_signals
 from services.research.tradejini_scalping import tradejini_signals
 from services.risk import PositionRisk, evaluate_position
+from services.risk.budget import current_policy
+from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit, pacing_config
 
 IST = ZoneInfo("Asia/Kolkata")
 PROFILES = {
@@ -170,18 +172,21 @@ def index_context(signal, entry):
 
 
 def trade_context(profile, signal, entry):
-    if profile == "box15":
-        at = datetime.fromisoformat(signal["timestamp"])
-        return {
-            "direction": signal["direction"],
-            "signal_at": at.isoformat(),
-            "deadline": (at + timedelta(minutes=15)).isoformat(),
-            "exit_basis": "option_premium",
-            "profile": profile,
-        }
     if profile not in PROFILES:
         raise ValueError("Unknown scalping profile")
-    return index_context(signal, entry) | {"exit_basis": "underlying_index", "profile": profile}
+    # Validate the original technical signal; its index target is not the new exit.
+    original = {} if profile == "box15" else index_context(signal, entry)
+    at = datetime.fromisoformat(signal["timestamp"])
+    return original | {
+        "direction": signal["direction"],
+        "signal_at": at.isoformat(),
+        "deadline": (at + timedelta(minutes=15)).isoformat(),
+        "exit_basis": "option_premium",
+        "profile": profile,
+        "risk_recipe": CASH_RISK_RECIPE,
+        "risk_policy_version": current_policy().version,
+        "pacing": pacing_config(),
+    }
 
 
 def require_origin(strategy, owner, mode):
@@ -258,6 +263,11 @@ def prepare(strategy, owner, api_key, mode):
     profile = strategy["scalp_profile"]
     context = trade_context(
         profile, signal, None if profile == "box15" else quote_price(client, "NIFTY", "NSE_INDEX")
+    )
+    from services.strategy_module.ml_forest import require_replay_pacing
+
+    require_replay_pacing(
+        strategy["id"], mode, signal["timestamp"], "15:20", pacing=context["pacing"]
     )
     context["automation_epoch"] = strategy.get("automation_state_updated_at")
     if datetime.fromisoformat(context["deadline"]).strftime("%H:%M") > "15:20":
@@ -338,7 +348,7 @@ def require_option_liquidity(leg, context, client):
 
 
 def protect_leg(leg, context, client):
-    """Additional premium cap; index SL/2R is managed separately."""
+    """New contexts use one-lot cash exits; recorded legacy contexts retain their recipe."""
     from services.strategy_module.symbol_resolver import _parse_expiry
 
     expiry = _parse_expiry(leg["expiry"])
@@ -357,8 +367,8 @@ def protect_leg(leg, context, client):
         raise ValueError("One option lot exceeds the ₹20,000 premium ceiling")
     if profile in {"box15", "regime50200"}:
         require_option_liquidity(leg, context, client)
-    # ₹800 gross stop leaves space inside the ₹1,000 shared net-risk pool.
-    # The account admission computes actual modeled fees/slippage and can refuse.
+    # Retain the former technical distance as the input to the new cash cap.
+    # Unversioned recorded contexts retain their legacy premium protection.
     step = Decimal("0.05")
     stop_points = (
         Decimal("10")
@@ -370,9 +380,15 @@ def protect_leg(leg, context, client):
     )
     if stop_points <= 0 or stop_points >= premium:
         raise ValueError("Option stop cannot be represented at the price tick")
+    target_points = 20 if profile == "box15" else None
+    if context.get("risk_recipe") == CASH_RISK_RECIPE:
+        stop, target, gross = cash_exit(premium, stop_points, leg)
+        stop_points = Decimal(str(premium)) - stop
+        target_points = float(target - Decimal(str(premium)))
+        context["gross_planned_risk"] = float(gross)
     leg.update(
         sl_pts=float(stop_points),
-        target_pts=20 if profile == "box15" else None,
+        target_pts=target_points,
         trail={},
         risk_unit="points",
     )

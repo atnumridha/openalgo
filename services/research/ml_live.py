@@ -16,7 +16,8 @@ from services.research.ml import (
 from services.research.ml_artifact import predict_probabilities, validate_artifact
 from services.research.replay import _tick, research_capital
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
-from services.risk.budget import BudgetPolicy, evaluate_budget
+from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
+from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit
 
 
 def validate_completed_rows(rows, now, symbol, *, minutes=1, settle_seconds=5):
@@ -142,26 +143,29 @@ def entry_plan(
     ledger=(),
     paused=False,
     risk_recipe=ML_RISK_RECIPE,
+    daily_stopped=False,
 ):
     """Use replay's tick, fee, affordability and shared budget math at observed entry."""
     amount = research_capital({"capital": capital})
     equity = Decimal(str(equity if equity is not None else amount))
     peak = Decimal(str(peak if peak is not None else equity))
     day = day or datetime.now().date().isoformat()
-    policy = BudgetPolicy(capital=amount)
-    if risk_recipe != ML_RISK_RECIPE:
+    current = risk_recipe == CASH_RISK_RECIPE
+    policy = current_policy(amount) if current else BudgetPolicy(capital=amount)
+    if risk_recipe not in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
         raise ValueError("Frozen ML admission risk recipe changed")
     if not isfinite(float(entry)) or not isfinite(float(atr)) or entry <= 0 or atr < 0:
         raise ValueError("Current option entry or volatility is invalid")
     exact = Decimal(str(entry))
-    stop = Decimal(
-        str(
-            _tick(exact - max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5")), contract)
-        )
-    )
+    technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
+    if current:
+        stop, target, _ = cash_exit(exact, technical, contract)
+    else:
+        stop = Decimal(str(_tick(exact - technical, contract)))
+        target = Decimal(str(_tick(exact + (exact - stop) * 2, contract, up=True)))
     distance = exact - stop
-    target = Decimal(str(_tick(exact + distance * 2, contract, up=True)))
-    if not 20 <= entry <= 120 or distance <= 0 or distance > exact * Decimal(".25"):
+    filter_distance = technical if current else distance
+    if not 20 <= entry <= 120 or distance <= 0 or filter_distance > exact * Decimal(".25"):
         raise ValueError("Entry gap violates the premium or volatility filter")
     units_value = contract["lot_size"] * contract["multiplier"]
     if not isfinite(float(units_value)) or units_value <= 0 or int(units_value) != units_value:
@@ -171,6 +175,8 @@ def entry_plan(
     max_lots = min(
         10000, int((min(equity, amount) * (1 - policy.cash_buffer_pct)) / (exact * units))
     )
+    if current:
+        max_lots = min(max_lots, 1)
     for lots in range(1, max_lots + 1):
         quantity_units = units * lots
         debit = exact * quantity_units
@@ -178,7 +184,17 @@ def entry_plan(
         if debit + entry_fee > min(equity, amount) * (1 - policy.cash_buffer_pct):
             break
         planned = planned_entry_risk(distance * quantity_units, debit, costs)
-        decision = evaluate_budget(policy, ledger, day, equity, peak, planned, paused=paused)
+        decision = evaluate_budget(
+            policy,
+            ledger,
+            day,
+            equity,
+            peak,
+            planned,
+            paused=paused,
+            proposed_gross_risk=distance * quantity_units if current else None,
+            daily_stopped=daily_stopped,
+        )
         if not decision.allowed:
             break
         admitted = (lots, planned, decision.bucket)
@@ -194,5 +210,6 @@ def entry_plan(
         "sl_pts": float(distance),
         "target_pts": float(target - exact),
         "planned_risk": float(planned),
+        "gross_planned_risk": float(distance * units * lots),
         "budget_bucket": bucket,
     }

@@ -80,12 +80,12 @@ def fees(**overrides):
 
 def test_scoped_costs_refuse_history_from_a_different_exchange():
     data = dataset.validate_dataset(payload())
-    valid = replay.validate_configuration(
+    valid = legacy_configuration(
         data, "trend_breakout", {}, fees(exchange="NFO", broker="kotak"), 42
     )
     assert valid["costs"]["exchange"] == "NFO"
     with pytest.raises(ValueError, match="exchange"):
-        replay.validate_configuration(
+        legacy_configuration(
             data, "trend_breakout", {}, fees(exchange="BFO", broker="kotak"), 42
         )
 
@@ -138,12 +138,12 @@ def test_costs_must_be_explicit_finite_and_cover_data_dates():
     data = dataset.validate_dataset(payload())
     for costs in ({}, fees(stt_sell_rate=None), fees(effective_to="2025-12-31")):
         with pytest.raises(ValueError):
-            replay.validate_configuration(data, "trend_breakout", {}, costs)
+            legacy_configuration(data, "trend_breakout", {}, costs)
 
 
 def test_closed_bar_signal_next_option_bar_stop_first_and_costs():
     data = dataset.validate_dataset(payload())
-    config = replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+    config = legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     report = replay.run_replay(data, config)
     trade = report["trades"][0]
     assert trade["signal_at"] == "2026-01-01T09:30:00+05:30"
@@ -159,11 +159,11 @@ def test_research_capital_is_validated_hashed_and_changes_whole_lot_affordabilit
     data = dataset.validate_dataset(payload())
     for invalid in (0, -1, True, float("nan"), "infinite"):
         with pytest.raises(ValueError, match="capital"):
-            replay.validate_configuration(
+            legacy_configuration(
                 data, "trend_breakout", {"lookback": 2}, fees(), capital=invalid
             )
-    legacy = replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
-    larger = replay.validate_configuration(
+    legacy = legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+    larger = legacy_configuration(
         data, "trend_breakout", {"lookback": 2}, fees(), capital=25000
     )
     assert legacy["capital"] == 10000
@@ -174,13 +174,13 @@ def test_research_capital_is_validated_hashed_and_changes_whole_lot_affordabilit
     data = dataset.validate_dataset(body)
     small = replay.run_replay(
         data,
-        replay.validate_configuration(
+        legacy_configuration(
             data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
         ),
     )
     large = replay.run_replay(
         data,
-        replay.validate_configuration(
+        legacy_configuration(
             data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0), capital=25000
         ),
     )
@@ -205,7 +205,7 @@ def test_missing_next_contract_bar_rejects_without_fabricating_fill():
     body["rows"] = [r for r in body["rows"] if r["symbol"] == "NIFTY" or "09:20:" in r["timestamp"]]
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["trades"] == []
     assert report["rejections"]["missing_next_option_bar"] > 0
@@ -216,7 +216,7 @@ def test_vwap_refuses_missing_underlying_volume():
     body["rows"][0].pop("volume")
     data = dataset.validate_dataset(body)
     with pytest.raises(ValueError, match="volume"):
-        replay.validate_configuration(data, "vwap_pullback", {}, fees())
+        legacy_configuration(data, "vwap_pullback", {}, fees())
 
 
 def test_whole_lot_affordability_and_no_profit_budget_replenishment():
@@ -224,7 +224,7 @@ def test_whole_lot_affordability_and_no_profit_budget_replenishment():
     body["metadata"]["contracts"][0]["lot_size"] = 1000
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["trades"] == []
     assert report["rejections"]["unaffordable_whole_lot"] > 0
@@ -239,7 +239,7 @@ def test_history_cannot_use_underlying_bars_across_data_gaps():
     ]
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert all(trade["signal_at"] != "2026-01-01T09:35:00+05:30" for trade in report["trades"])
 
@@ -258,7 +258,7 @@ def test_missing_option_bar_during_exposure_does_not_jump_to_a_later_fill():
     body["rows"][-1].update(low=50)
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["trades"] == []
     assert report["incomplete_outcomes"][0]["reason"] == "missing_option_bar_during_exposure"
@@ -302,7 +302,7 @@ def test_gap_loss_spends_remaining_daily_budget_and_drawdown_persists():
                 row.update(open=50, high=51, low=49, close=50)
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert len(report["trades"]) == 1
     assert report["trades"][0]["net_pnl"] < -2000
@@ -316,18 +316,18 @@ def test_no_real_underlying_volume_is_not_treated_as_observed_zero():
         row.pop("volume", None)
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["trades"]
     with pytest.raises(ValueError, match="volume"):
-        replay.validate_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
+        legacy_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
 
 
 def test_tiny_contract_search_is_bounded_even_when_fees_exhaust_risk(monkeypatch):
     body = payload()
     body["metadata"]["contracts"][0].update(lot_size=1, multiplier=0.000001)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2}, fees(brokerage_per_order=1000)
     )
     calls = 0
@@ -376,7 +376,7 @@ def test_option_exit_uses_breach_kind_and_known_open_before_ambiguous_extremes(
             if row["timestamp"][11:16] > "09:35":
                 row.update(gap)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
     )
     first = replay.run_replay(data, config)["trades"][0]
@@ -398,7 +398,7 @@ def test_marked_net_equity_peak_drawdown_exits_and_stays_paused_after_recovery()
             else:
                 row.update(open=100, high=101, low=99, close=100)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2, "target_pct": 5}, fees(slippage_bps=0)
     )
     report = replay.run_replay(data, config)
@@ -422,7 +422,7 @@ def test_intrabar_drawdown_exit_uses_peak_from_previous_observed_close():
             elif row["timestamp"][11:16] == "09:40":
                 row.update(open=200, high=210, low=120, close=200)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2, "target_pct": 5}, fees(slippage_bps=0)
     )
     report = replay.run_replay(data, config)
@@ -438,7 +438,7 @@ def test_stop_filled_before_drawdown_boundary_does_not_consume_later_candle_low(
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
         data,
-        replay.validate_configuration(
+        legacy_configuration(
             data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
         ),
     )
@@ -457,7 +457,7 @@ def test_incomplete_oos_suppresses_bootstrap_and_unbounded_profit_factor():
             else:
                 row.update(open=100, high=101, low=99, close=100)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
     )
     report = replay.evaluate_experiment(data, config)
@@ -471,13 +471,13 @@ def test_incomplete_oos_suppresses_bootstrap_and_unbounded_profit_factor():
 def test_vwap_requires_explicit_session_open_and_preserves_it_in_provenance():
     data = dataset.validate_dataset(payload())
     with pytest.raises(ValueError, match="session_open"):
-        replay.validate_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
+        legacy_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
     body = payload()
     body["metadata"]["session_open"] = "09:15"
     data = dataset.validate_dataset(body)
     assert data["metadata"]["session_open"] == "09:15"
     assert (
-        replay.validate_configuration(data, "vwap_pullback", {"lookback": 2}, fees())["candidate"]
+        legacy_configuration(data, "vwap_pullback", {"lookback": 2}, fees())["candidate"]
         == "vwap_pullback"
     )
 
@@ -492,9 +492,9 @@ def test_vwap_rejects_missing_opening_underlying_bar_even_with_no_internal_gaps(
     ]
     data = dataset.validate_dataset(body)
     with pytest.raises(ValueError, match="Incomplete underlying session 2026-01-02"):
-        replay.validate_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
+        legacy_configuration(data, "vwap_pullback", {"lookback": 2}, fees())
     # Trend lookbacks may start from a later observed window without a VWAP claim.
-    assert replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+    assert legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
 
 
 @pytest.mark.parametrize("opening", ["tomorrow", "09:15:30", "00:30", "15:30", 915])
@@ -503,3 +503,17 @@ def test_invalid_session_open_is_rejected_on_import(opening):
     body["metadata"]["session_open"] = opening
     with pytest.raises(ValueError, match="session_open"):
         dataset.validate_dataset(body)
+
+
+def legacy_configuration(*args, **kwargs):
+    """Archived evidence fixtures retain their original stop/target and capital."""
+    kwargs.setdefault("capital", 10000)
+    return replay.validate_configuration(*args, **kwargs, policy_version="two-bucket-v1")
+
+
+def current_payload(*args, **kwargs):
+    """New research fixtures must carry the tick evidence needed by the cash stop."""
+    body = payload(*args, **kwargs)
+    for contract in body["metadata"]["contracts"]:
+        contract["tick_size"] = .05
+    return body

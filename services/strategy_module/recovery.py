@@ -752,10 +752,22 @@ def _recover_run(run_id: int) -> RecoveredRun:
     checkpoint = store.latest_checkpoint(run_id) or {}
     config_legs = _config_legs(strategy_id)
     if scalp_context:
+        # Earlier ML contexts recorded the exact distances under their entry-plan
+        # names. Recover those original facts; never apply today's exit recipe.
+        stop = scalp_context.get("premium_stop_points")
+        target = scalp_context.get("premium_target_points")
+        if "premium_stop_points" not in scalp_context and scalp_context.get("profile") == "ml_forest":
+            stop = scalp_context.get("sl_pts")
+            target = scalp_context.get("target_pts")
+        stop_value, target_value = _float(stop), _float(target)
+        if stop_value is None or not math.isfinite(stop_value) or stop_value <= 0:
+            raise _ManagedRecoveryError("Persisted scalping stop geometry is unavailable")
+        if scalp_context.get("profile") == "ml_forest" and (
+            target_value is None or not math.isfinite(target_value) or target_value <= 0
+        ):
+            raise _ManagedRecoveryError("Persisted ML target geometry is unavailable")
         for leg in config_legs.values():
-            leg.update(sl_pts=scalp_context["premium_stop_points"],
-                       target_pts=scalp_context.get("premium_target_points"),
-                       trail={}, risk_unit="points")
+            leg.update(sl_pts=stop, target_pts=target, trail={}, risk_unit="points")
 
     rebuilt = _rebuild_state(
         run_id,

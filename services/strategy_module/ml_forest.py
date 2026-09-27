@@ -13,7 +13,7 @@ from services.research.ml import require_recent_seed
 from services.research.ml_artifact import validate_artifact
 from services.research.ml_live import entry_plan, score_observed
 from services.research.replay import FILTER_RULES
-from services.risk.admission import ML_RISK_RECIPE
+from services.risk.cash_exit import CASH_RISK_RECIPE, current_configuration, pacing_config
 from services.risk.qualification import final_screen_passes
 from services.strategy_module import scalping
 
@@ -21,23 +21,28 @@ IST = ZoneInfo("Asia/Kolkata")
 MAX_CONTRACTS = 80
 
 
-def require_replay_pacing(strategy_id, mode, signal_at, session_close):
+def require_replay_pacing(strategy_id, mode, signal_at, session_close, *, pacing=None):
     """Apply the filtered replay's next-bar cutoff, filled-entry cap and cooldown."""
     from database import strategy_module_db
 
+    rules = FILTER_RULES if pacing is None else pacing
+    if pacing is not None and pacing != pacing_config(pacing.get("cooldown_minutes")):
+        raise ValueError("Invalid bound entry pacing")
     signal = datetime.fromisoformat(signal_at)
     next_bar = signal + timedelta(minutes=1)
     if next_bar.date() != signal.date() or next_bar.strftime("%H:%M") >= session_close:
-        raise scalping.WaitingForSignal("ML next-bar entry is beyond the research session close")
+        raise scalping.WaitingForSignal(
+            "Strategy next-bar entry is beyond the research session close"
+        )
     pace = strategy_module_db.ml_filled_entry_pace(strategy_id, mode, signal.date().isoformat())
     if pace["active"]:
-        raise scalping.WaitingForSignal("An earlier ML entry still has open exposure")
-    if pace["entries"] >= FILTER_RULES["daily_trade_cap"]:
-        raise scalping.WaitingForSignal("ML daily filled-entry cap has been reached")
+        raise scalping.WaitingForSignal("An earlier strategy entry still has open exposure")
+    if rules["daily_trade_cap"] is not None and pace["entries"] >= rules["daily_trade_cap"]:
+        raise scalping.WaitingForSignal("Strategy daily filled-entry cap has been reached")
     if pace["last_exit"] and signal - datetime.fromisoformat(pace["last_exit"]) < timedelta(
-        minutes=FILTER_RULES["cooldown_minutes"]
+        minutes=rules["cooldown_minutes"]
     ):
-        raise scalping.WaitingForSignal("ML post-exit cooldown has not elapsed")
+        raise scalping.WaitingForSignal("Strategy post-exit cooldown has not elapsed")
 
 
 def frozen_model(owner, strategy):
@@ -248,7 +253,7 @@ def prepare(strategy, owner, api_key, mode):
     origin = scalping.require_origin(strategy, owner, mode)
     final, artifact = frozen_model(owner, strategy)
     config = final["configuration"]
-    if config.get("risk_recipe") != ML_RISK_RECIPE:
+    if not current_configuration(config):
         raise ValueError("Frozen ML admission risk recipe differs from executable admission")
     if config.get("capital") != 25000:
         raise ValueError("Frozen ML allocation differs from the ₹25,000 research allocation")
@@ -278,7 +283,11 @@ def prepare(strategy, owner, api_key, mode):
     except ValueError as exc:
         raise scalping.WaitingForSignal(str(exc)) from exc
     require_replay_pacing(
-        strategy["id"], mode, scored["signal_at"], data["metadata"]["session_close"]
+        strategy["id"],
+        mode,
+        scored["signal_at"],
+        data["metadata"]["session_close"],
+        pacing=config["pacing"],
     )
     quote = scalping.quote_price(client, scored["symbol"], "NFO")
     snapshot, ledger = trading_risk_db.budget_state(
@@ -299,13 +308,18 @@ def prepare(strategy, owner, api_key, mode):
         peak=snapshot["peak_equity"],
         ledger=ledger,
         paused=snapshot["paused"],
+        daily_stopped=snapshot.get("daily_stopped", False),
         risk_recipe=config["risk_recipe"],
     )
     if (datetime.now(IST) - datetime.fromisoformat(scored["signal_at"])).total_seconds() > 55:
         raise scalping.WaitingForSignal("Frozen ML signal expired while fetching broker evidence")
     scalping.require_origin(strategy, owner, mode)
     require_replay_pacing(
-        strategy["id"], mode, scored["signal_at"], data["metadata"]["session_close"]
+        strategy["id"],
+        mode,
+        scored["signal_at"],
+        data["metadata"]["session_close"],
+        pacing=config["pacing"],
     )
     claim = flow_db.claim_execution_bar(
         origin["execution_id"], origin["workflow_id"], datetime.fromisoformat(scored["signal_at"])
@@ -323,7 +337,12 @@ def prepare(strategy, owner, api_key, mode):
     return {
         **scored,
         **plan,
+        "premium_stop_points": plan["sl_pts"],
+        "premium_target_points": plan["target_pts"],
         "profile": "ml_forest",
+        "risk_recipe": CASH_RISK_RECIPE,
+        "risk_policy_version": config["risk_policy_version"],
+        "pacing": config["pacing"],
         "exit_basis": "option_premium",
         "deadline": min(
             signal_at + timedelta(minutes=config["ml_settings"]["max_hold_minutes"]), close_at

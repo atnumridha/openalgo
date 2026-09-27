@@ -2371,7 +2371,7 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
                           'brokerage_per_order': 20, 'exchange_rate': 0, 'sebi_rate': 0, 'gst_rate': 0,
                           'stamp_buy_rate': 0, 'stt_sell_rate': 0, 'slippage_bps': 0})
     config = _config()
-    config['legs'][0].update(position='B', sl_pts=10, target_pts=20)
+    config['legs'][0].update(position='B', sl_pts=4, target_pts=12)
     sid = _make(config)
     calls = []
     def dispatch(**kwargs):
@@ -2379,7 +2379,7 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
         assert len(rows) == 1
         assert rows[0]['status'] == 'pending'
         assert rows[0]['run_id'] is not None
-        assert rows[0]['planned_risk'] == Decimal('790')
+        assert rows[0]['planned_risk'] == Decimal('340')
         calls.append(kwargs)
         return DispatchResult(ok=not unknown, unknown=unknown, broker_order_id=None if unknown else 'SB-managed', error='timeout' if unknown else None)
     try:
@@ -2396,8 +2396,9 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
 
 
 def test_scalp_run_persists_dynamic_stop_and_direction_before_dispatch(api_key, monkeypatch):
-    from services.strategy_module import scalping, automation_control
     from datetime import timedelta
+
+    from services.strategy_module import automation_control, scalping
     config = _config(scalp_profile='ema915', broker_connection_id='test-connection')
     config['legs'][0]['position'] = 'B'
     sid = _make(config)

@@ -56,7 +56,7 @@ def test_invalid_execution_resolution_is_rejected(minutes):
 
 def test_minute_target_precedes_later_stop_without_using_later_underlying_bar():
     data = dataset.validate_dataset(minute_payload())
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
     )
     report = replay.run_replay(data, config)
@@ -76,7 +76,7 @@ def test_missing_minute_during_exposure_is_incomplete():
     ]
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["metrics"]["net_pnl"] is None
     assert report["incomplete_outcomes"][0]["reason"] == "missing_option_bar_during_exposure"
@@ -89,7 +89,7 @@ def test_same_minute_ambiguity_is_disclosed_and_remains_stop_first():
             r.update(high=130, low=70)
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+        data, legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     )
     assert report["trades"][0]["exit_reason"] == "stop_loss"
     assert report["trades"][0]["ambiguous_exit"] is True
@@ -142,11 +142,11 @@ def test_independent_trend_rejects_breakout_against_previous_trend():
 def test_filtered_requires_minute_execution_and_ticks():
     data = dataset.validate_dataset(payload())
     with pytest.raises(ValueError, match="one-minute"):
-        replay.validate_configuration(data, "trend_breakout_filtered", {}, fees())
+        legacy_configuration(data, "trend_breakout_filtered", {}, fees())
     body = filtered_payload()
     del body["metadata"]["contracts"][0]["tick_size"]
     with pytest.raises(ValueError, match="tick_size"):
-        replay.validate_configuration(
+        legacy_configuration(
             dataset.validate_dataset(body), "trend_breakout_filtered", {}, fees()
         )
 
@@ -175,7 +175,7 @@ def test_filtered_refuses_ineligible_contracts(change, reason):
             r.update(high=140, low=60)
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout_filtered", {}, fees())
+        data, legacy_configuration(data, "trend_breakout_filtered", {}, fees())
     )
     assert report["trades"] == []
     assert report["rejections"][reason] > 0
@@ -193,7 +193,7 @@ def test_filtered_cooldown_and_daily_cap_limit_reentries():
         ):
             r.update(high=125, close=120)
     data = dataset.validate_dataset(body)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout_filtered", {}, fees(slippage_bps=0)
     )
     report = replay.run_replay(data, config)
@@ -223,7 +223,7 @@ def test_filtered_only_selects_observed_affordable_contract_and_uses_past_atr():
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
         data,
-        replay.validate_configuration(data, "trend_breakout_filtered", {}, fees(slippage_bps=0)),
+        legacy_configuration(data, "trend_breakout_filtered", {}, fees(slippage_bps=0)),
     )
     first = report["trades"][0]
     assert first["symbol"] == "NIFTY_CE"
@@ -239,7 +239,7 @@ def test_filtered_rejects_unaffordable_quote_before_pending_entry():
     body["metadata"]["contracts"][0]["lot_size"] = 100
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
-        data, replay.validate_configuration(data, "trend_breakout_filtered", {}, fees())
+        data, legacy_configuration(data, "trend_breakout_filtered", {}, fees())
     )
     assert report["trades"] == []
     assert report["rejections"]["unaffordable_signal_quote"] > 0
@@ -258,7 +258,7 @@ def test_exact_tick_target_is_not_rounded_up_by_binary_float_noise():
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
         data,
-        replay.validate_configuration(data, "trend_breakout_filtered", {}, fees(slippage_bps=0)),
+        legacy_configuration(data, "trend_breakout_filtered", {}, fees(slippage_bps=0)),
     )
     first = report["trades"][0]
     assert first["target_price"] == 24.15
@@ -274,8 +274,14 @@ def test_original_candidate_retains_percentage_target_with_tick_rounding():
     data = dataset.validate_dataset(body)
     report = replay.run_replay(
         data,
-        replay.validate_configuration(
+        legacy_configuration(
             data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
         ),
     )
     assert report["trades"][0]["target_price"] == 120.10
+
+
+def legacy_configuration(*args, **kwargs):
+    """Existing fixtures exercise archived two-bucket/2R behavior explicitly."""
+    kwargs.setdefault("capital", 10000)
+    return replay.validate_configuration(*args, **kwargs, policy_version="two-bucket-v1")

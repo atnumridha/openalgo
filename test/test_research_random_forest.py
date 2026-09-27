@@ -142,11 +142,19 @@ def test_ml_empty_opportunities_has_actionable_error(monkeypatch):
 
 
 def test_frozen_final_all_ineligible_options_reports_rejections(monkeypatch):
-    from services.risk.admission import ML_RISK_RECIPE
+    from services.risk.cash_exit import CASH_RISK_RECIPE as ML_RISK_RECIPE
 
-    artifact = {"test": "frozen"}
+    artifact = {
+        "test": "frozen",
+        "risk_recipe": ML_RISK_RECIPE,
+        "risk_policy_version": "shared-300-3r-v1",
+    }
     configuration = {
         "risk_recipe": ML_RISK_RECIPE,
+        "risk_policy_version": "shared-300-3r-v1",
+        "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
+        "max_hold_minutes": 5,
+        "parameters": {"stop_pct": 0.1, "target_pct": 0.3},
         "costs": fees(),
         "capital": 25000,
         "ml_settings": {"max_hold_minutes": 5},
@@ -170,8 +178,7 @@ def test_frozen_final_all_ineligible_options_reports_rejections(monkeypatch):
 
 def test_nonadjacent_final_seed_is_rejected_before_holdout_consumption(monkeypatch):
     from services.research.ml import require_recent_seed
-    from services.risk.admission import ML_RISK_RECIPE
-    from services.risk.budget import BudgetPolicy
+    from services.risk.cash_exit import CASH_RISK_RECIPE as ML_RISK_RECIPE
 
     require_recent_seed("2026-04-23", "2026-04-24")
     require_recent_seed("2026-04-24", "2026-04-28")  # weekend and a short holiday
@@ -179,9 +186,12 @@ def test_nonadjacent_final_seed_is_rejected_before_holdout_consumption(monkeypat
         require_recent_seed("2025-03-27", "2026-04-24")
     configuration = {
         "engine_version": jobs.ENGINE_VERSION,
-        "risk_policy_version": BudgetPolicy().version,
         "implementation_hash": jobs.implementation_hash(),
         "risk_recipe": ML_RISK_RECIPE,
+        "risk_policy_version": "shared-300-3r-v1",
+        "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
+        "max_hold_minutes": 5,
+        "parameters": {"stop_pct": 0.1, "target_pct": 0.3},
     }
     run = {"id": 9, "kind": "ml", "dataset_id": 7, "configuration": configuration}
     sessions = ["2025-03-27"] + pd.date_range("2026-04-24", periods=60).strftime(
@@ -203,7 +213,11 @@ def test_nonadjacent_final_seed_is_rejected_before_holdout_consumption(monkeypat
     with pytest.raises(ValueError, match="not recent.*2025-03-27.*2026-04-24"):
         jobs.queue_final(Store(), "alice", 9)
 
-    artifact = {"test": "frozen"}
+    artifact = {
+        "test": "frozen",
+        "risk_recipe": ML_RISK_RECIPE,
+        "risk_policy_version": "shared-300-3r-v1",
+    }
     parent = {
         "kind": "ml",
         "status": "completed",
@@ -263,6 +277,8 @@ def test_ml_queue_worker_frozen_final_reuses_exact_json_model(store, monkeypatch
     assert report["split"]["oos_sessions"] == 6
     assert report["ml"]["accuracy"]["labelled_observations"] > 0
     assert report["ml"]["deployment_supported"] is True
+    assert report["ml"]["artifact"]["risk_recipe"] == "one-lot-cash300-3r-v1"
+    assert report["ml"]["artifact"]["risk_policy_version"] == "shared-300-3r-v1"
     assert report["configuration_hash"] == run["configuration_hash"]
     assert store.get_run("alice", run["id"])["status"] == "completed"
     frozen = store.freeze_run("alice", run["id"])

@@ -104,7 +104,7 @@ def run_portfolio_study(data, costs, *, capital=25000, include_ml=True, protecte
         schedule = bound_rule_schedule(data, family, development)
         for hold in (5, 10, 15):
             config = validate_configuration(
-                data, "trend_breakout_filtered", {}, costs, capital=capital
+                data, "trend_breakout_filtered", {}, costs, capital=capital, policy_version=BudgetPolicy().version
             )
             config.update(
                 max_hold_minutes=hold,
@@ -127,7 +127,7 @@ def run_portfolio_study(data, costs, *, capital=25000, include_ml=True, protecte
     if include_ml:
         for hold in (5, 10, 15):
             config = validate_configuration(
-                data, "trend_breakout_filtered", {}, costs, capital=capital
+                data, "trend_breakout_filtered", {}, costs, capital=capital, policy_version=BudgetPolicy().version
             )
             config.update(
                 risk_policy_version=BudgetPolicy().version,

@@ -221,8 +221,14 @@ export interface RiskAccount {
   peak_equity: number
   drawdown: number
   drawdown_headroom: number
-  first_remaining: number
-  later_remaining: number
+  first_remaining: number | null
+  later_remaining: number | null
+  policy_version?: string
+  per_trade_limit?: number
+  consecutive_losses?: number
+  daily_stopped?: boolean
+  daily_stop_reason?: string | null
+  policy_transition_blocked?: string | null
   daily_remaining: number
   paused: boolean
   pause_reason: string | null
@@ -234,6 +240,7 @@ export interface TradingRisk {
   enabled: boolean
   policy: {
     capital: number
+    per_trade_limit?: number
     first_trade_limit: number
     later_trades_limit: number
     daily_limit: number

@@ -5,7 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from flask import Flask
-from test_trading_research import fees, payload
+from test_trading_research import current_payload as payload
+from test_trading_research import fees
 
 from blueprints import trading_research
 from database.trading_research_db import ResearchStore

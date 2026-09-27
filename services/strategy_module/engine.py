@@ -770,6 +770,7 @@ def _resolve_all_legs(
                 "exchange": outcome.exchange,
                 "segment": outcome.segment,
                 "lot_size": outcome.lotsize,
+                "tick_size": outcome.tick_size,
                 "underlying": outcome.underlying,
                 "lots": outcome.lots,
                 "quantity": outcome.quantity,

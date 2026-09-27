@@ -72,7 +72,11 @@ def isolated_strategy_state(monkeypatch: pytest.MonkeyPatch):
     from services import quotes_service
 
     zone = pytz.timezone("Asia/Kolkata")
-    today = datetime.now(zone).date()
+    from services.strategy_module import session
+
+    # Runs keep real timestamps; align the synthetic quote/decision day to the
+    # same trading session even when this suite runs before the 03:00 reset.
+    today = session.session_day(datetime.now(zone))
     session_now = zone.localize(datetime(today.year, today.month, today.day, 10, 30))
     monkeypatch.setattr(portfolio_governor, "_facts_now", lambda: session_now)
     monkeypatch.setattr(portfolio_governor, "_decision_now", lambda: session_now)

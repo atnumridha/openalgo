@@ -74,7 +74,7 @@ const overview = () => ({
       defaults: {
         lookback: 20,
         stop_pct: 0.1,
-        target_pct: 0.2,
+        target_pct: 0.3,
         volume_ratio: 1.2,
         pullback_tolerance: 0.002,
       },
@@ -92,11 +92,18 @@ const risk = () => ({
     daily_limit: 2000,
     drawdown_pct: 0.2,
     cash_buffer_pct: 0.2,
-    version: 'two-bucket-v1',
+    version: 'shared-300-3r-v1',
+    per_trade_limit: 300,
   },
   costs,
   accounts: {
     sandbox: {
+      policy_version: 'shared-300-3r-v1',
+      capital: 25000,
+      per_trade_limit: 300,
+      consecutive_losses: 3,
+      daily_stopped: true,
+      daily_stop_reason: 'three_consecutive_losses',
       equity: 9500,
       peak_equity: 10000,
       drawdown: 500,
@@ -213,7 +220,7 @@ describe('Research workspace', () => {
     )
   })
 
-  it('queues a parameter search with displayed percentage values converted once', async () => {
+  it('queues signal parameter searches while the cash exit recipe stays fixed', async () => {
     rest.post.mockResolvedValue({
       data: { status: 'success', data: { ...run, status: 'queued', report: null } },
     })
@@ -224,18 +231,15 @@ describe('Research workspace', () => {
     await userEvent.selectOptions(screen.getByLabelText('Research dataset'), '7')
     await userEvent.selectOptions(screen.getByLabelText('Test type'), 'optimization')
     await userEvent.type(screen.getByLabelText('Lookback bars — values to compare'), '10, 20')
-    await userEvent.type(
-      screen.getByLabelText('Stop-loss distance (%) — values to compare'),
-      '10, 15'
-    )
-    expect(screen.getByText('4 combinations · maximum 256')).toBeVisible()
+    expect(screen.queryByLabelText('Stop-loss distance (%) — values to compare')).toBeNull()
+    expect(screen.getByText('2 combinations · maximum 256')).toBeVisible()
     await userEvent.click(screen.getByRole('button', { name: 'Compare parameters' }))
     await waitFor(() =>
       expect(rest.post).toHaveBeenCalledWith(
         '/strategy/api/research/runs',
         expect.objectContaining({
           run_kind: 'optimization',
-          parameter_grid: { lookback: [10, 20], stop_pct: [0.1, 0.15] },
+          parameter_grid: { lookback: [10, 20] },
         })
       )
     )
@@ -391,14 +395,16 @@ describe('Research workspace', () => {
     )
   })
 
-  it('separates first and later loss budgets and marks missing account evidence unavailable', async () => {
+  it('shows the shared daily stop and cash risk without obsolete bucket explanations', async () => {
     renderResearch()
     await userEvent.click(await screen.findByText('View budget details and pause rules'))
     const sandbox = await screen.findByRole('region', { name: 'Sandbox risk budget' })
-    expect(sandbox).toHaveTextContent('First filled trade remaining')
-    expect(sandbox).toHaveTextContent('₹600.00')
-    expect(sandbox).toHaveTextContent('All later trades remaining')
-    expect(sandbox).toHaveTextContent('₹900.00')
+    expect(sandbox).toHaveTextContent('Per-trade price-stop limit')
+    expect(sandbox).toHaveTextContent('₹300.00')
+    expect(sandbox).toHaveTextContent('Consecutive completed losses3')
+    expect(sandbox).toHaveTextContent('Day blocked')
+    expect(sandbox).toHaveTextContent('Three consecutive completed net losses')
+    expect(sandbox).not.toHaveTextContent('First filled trade remaining')
     expect(screen.getByRole('region', { name: 'Live risk budget' })).toHaveTextContent(
       'Unavailable'
     )
@@ -479,7 +485,7 @@ describe('Research workspace', () => {
         parameters: {
           lookback: 20,
           stop_pct: 0.1,
-          target_pct: 0.2,
+          target_pct: 0.3,
           volume_ratio: 1.2,
           pullback_tolerance: 0.002,
         },
@@ -778,7 +784,8 @@ describe('Research workspace', () => {
         costs: { ...costs, schedule_id: 'Historical fee version', stt_sell_rate: 0.002 },
         engine_version: 'v1',
         dataset_hash: 'dataset123',
-        risk_policy_version: 'two-bucket-v1',
+        risk_policy_version: 'shared-300-3r-v1',
+    per_trade_limit: 300,
       },
     }
     rest.get.mockImplementation((url: string) =>
@@ -801,4 +808,27 @@ describe('Research workspace', () => {
     await userEvent.click(screen.getByText('Edit fee details'))
     expect(screen.getByLabelText('STT on sell (%)')).toHaveValue(0.1)
   })
+})
+
+it('qualifies the setup summary when Live remains on the legacy policy', async () => {
+  const mixed = risk()
+  rest.get.mockImplementation((url: string) => Promise.resolve({
+    data: { status: 'success', data: url === '/strategy/api/risk' ? {
+      ...mixed,
+      accounts: { ...mixed.accounts, live: {
+        ...mixed.accounts.sandbox, policy_version: 'two-bucket-v1',
+        first_remaining: 1000, later_remaining: 1000, per_trade_limit: null,
+        policy_transition_blocked: 'Unresolved legacy exposure requires reconciliation',
+      } },
+    } : overview() },
+  }))
+  renderResearch()
+  const setup = await screen.findByRole('region', { name: 'Setup status' })
+  await waitFor(() => expect(setup).toHaveTextContent('Policy transition needed'))
+  expect(setup).toHaveTextContent('Legacy policy still active: Live')
+  expect(setup).toHaveTextContent('Current ₹300 / 3R limits apply only to upgraded modes')
+  expect(setup).not.toHaveTextContent('Your managed strategy entries share these limits')
+  expect(setup).not.toHaveTextContent('Shared limits enabled')
+  expect(rest.post).not.toHaveBeenCalled()
+  expect(rest.put).not.toHaveBeenCalled()
 })

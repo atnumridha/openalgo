@@ -199,25 +199,38 @@ function Budget({
     <section aria-label={`${name} risk budget`} className="rounded-lg border p-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h3 className="font-medium">{name}</h3>
-        <Badge variant={enabled && account?.paused ? 'destructive' : 'outline'}>
+        <Badge variant={enabled && (account?.paused || account?.daily_stopped) ? 'destructive' : 'outline'}>
           {!enabled
             ? 'Profile inactive'
             : account
-              ? account.paused
-                ? 'Entries paused'
-                : 'Budget monitored'
+              ? account.daily_stopped
+                ? 'Day blocked'
+                : account.paused
+                  ? 'Entries paused'
+                  : 'Budget monitored'
               : 'Unavailable'}
         </Badge>
       </div>
       <dl className="grid grid-cols-2 gap-4">
         <Metric label="Reviewed capital allocation" value={money(account?.capital)} />
-        <Metric label="First filled trade remaining" value={money(account?.first_remaining)} />
-        <Metric label="All later trades remaining" value={money(account?.later_remaining)} />
+        {account?.policy_version === 'two-bucket-v1' ? <>
+          <Metric label="Legacy first filled trade remaining" value={money(account.first_remaining)} />
+          <Metric label="Legacy later trades remaining" value={money(account.later_remaining)} />
+        </> : <>
+          <Metric label="Per-trade price-stop limit" value={money(account?.per_trade_limit)} />
+          <Metric label="Consecutive completed losses" value={number(account?.consecutive_losses)} />
+        </>}
         <Metric label="Daily remaining" value={money(account?.daily_remaining)} />
         <Metric label="Drawdown headroom" value={money(account?.drawdown_headroom)} />
         <Metric label="Equity" value={money(account?.equity)} />
         <Metric label="Reserved risk" value={money(account?.reserved_risk)} />
       </dl>
+      {account?.daily_stop_reason && <p className="text-sm text-destructive">
+        {account.daily_stop_reason === 'three_consecutive_losses'
+          ? 'Three consecutive completed net losses: new entries are blocked for this trading day. Protective exits remain active.'
+          : account.daily_stop_reason}
+      </p>}
+      {account?.policy_transition_blocked && <p className="text-sm text-destructive">{account.policy_transition_blocked}</p>}
       {account?.pause_reason && <p className="text-sm text-destructive">{account.pause_reason}</p>}
       <p className="text-xs text-muted-foreground">
         {account
@@ -315,7 +328,7 @@ function Metrics({ metrics }: { metrics: ResearchMetrics }) {
         <Metric label="Maximum drawdown" value={number(metrics.max_drawdown_pct, '%')} />
         <Metric label="Trades" value={number(metrics.trade_count)} />
         <Metric label="Win rate" value={number(metrics.win_rate, '%')} />
-        <Metric label="Longest losing streak" value={number(metrics.max_losing_streak)} />
+        <Metric label="Longest losing streak (across days)" value={number(metrics.max_losing_streak)} />
         <Metric label="Ending equity" value={money(metrics.ending_equity)} />
         <Metric label="Bars with exposure" value={number(metrics.exposure_bars)} />
         <Metric
@@ -370,6 +383,10 @@ export default function Research() {
     enabled: selectedRun !== null,
     refetchInterval: (query) => (activeRun(query.state.data) ? 3_000 : false),
   })
+  const legacyModes = Object.entries(risk.data?.accounts ?? {})
+    .filter(([, account]) => account?.policy_transition_blocked || account?.policy_version === 'two-bucket-v1')
+    .map(([mode]) => mode === 'sandbox' ? 'Sandbox' : 'Live')
+  const transitionPending = legacyModes.length > 0
   const candidate = overview.data?.candidates.find((item) => item.id === candidateId)
   const selectedDataset = overview.data?.datasets.find((item) => item.id === Number(datasetId))
   const currentRun = detail.data
@@ -613,7 +630,9 @@ export default function Research() {
                   ? 'Loading your setup…'
                   : !risk.data?.enabled
                     ? 'Set up your trading costs'
-                    : !overview.data?.datasets.length
+                    : transitionPending
+                      ? 'Reconcile earlier risk policy'
+                      : !overview.data?.datasets.length
                       ? 'Add history for your first test'
                       : 'Test and review your strategy'}
             </h2>
@@ -624,13 +643,15 @@ export default function Research() {
               : risk.isPending
                 ? 'Loading'
                 : risk.data?.enabled
-                  ? 'Shared limits enabled'
+                  ? transitionPending ? 'Policy transition needed' : 'Shared limits enabled'
                   : 'Shared limits off'}
           </Badge>
         </div>
         <p className="max-w-3xl text-sm text-muted-foreground">
           {risk.data?.enabled
-            ? 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
+            ? transitionPending
+              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current ₹300 / 3R limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
+              : 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
             : 'Your existing flows keep their current rules. Complete step 1 to apply these shared limits to managed Strategy Module entries. Saving this setup does not start trading.'}
         </p>
         {risk.error && (
@@ -643,14 +664,14 @@ export default function Research() {
             <Metric label="Sandbox allocation" value={money(risk.data.accounts.sandbox?.capital)} />
             <Metric label="Live allocation" value={money(risk.data.accounts.live?.capital)} />
             <Metric
-              label="First trade: planned loss limit"
-              value={money(risk.data.policy.first_trade_limit)}
+              label={transitionPending ? "Current profile price-stop limit" : "Per-trade price-stop limit"}
+              value={money(risk.data.policy.per_trade_limit)}
             />
             <Metric
-              label="All later trades share"
-              value={money(risk.data.policy.later_trades_limit)}
+              label="Gross reward / stop"
+              value="3R before charges"
             />
-            <Metric label="Daily planned loss limit" value={money(risk.data.policy.daily_limit)} />
+            <Metric label="Shared daily net-loss allowance" value={money(risk.data.policy.daily_limit)} />
           </dl>
         )}
         <p className="text-xs text-muted-foreground">
@@ -860,8 +881,9 @@ export default function Research() {
                 A {number(risk.data.policy.drawdown_pct * 100, '%')} fall from peak allocated equity
                 pauses new entries across days. A{' '}
                 {number(risk.data.policy.cash_buffer_pct * 100, '%')} cash buffer stays uncommitted.
-                First-trade allowance cannot transfer to later trades. These limits cover managed
-                Strategy Module entries only.
+                Completed losses after charges consume a shared ₹2,000 daily allowance; wins do not refill it.
+                Three consecutive completed net losses block entries for the rest of the trading day.
+                Protective exits continue. These limits cover managed Strategy Module entries only.
               </p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Budget
@@ -1056,8 +1078,8 @@ export default function Research() {
                   />
                   <p className="text-sm text-muted-foreground">
                     New experiments start at ₹25,000. This amount sets whole-lot affordability and
-                    the 20% portfolio drawdown limit; the first and later trade risk limits remain
-                    ₹1,000 each, with a ₹2,000 daily limit and 20% cash buffer. Planned risk is not
+                    the 20% portfolio drawdown limit. One option lot risks at most ₹300 before charges,
+                    with an exact gross 3R target, a shared ₹2,000 daily net-loss allowance and 20% cash buffer. Planned risk is not
                     a guarantee of realized loss.
                   </p>
                 </div>
@@ -1132,7 +1154,7 @@ export default function Research() {
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Requires one-minute option history with tick sizes. Uses the filtered
-                        execution rules, a volatility-aware 10% stop and a 2R target. Labels and
+                        execution rules, one lot with a tick-rounded price stop capped at ₹300 and an exact 3R target before charges. Labels and
                         replay exits share the selected 5, 10 or 15-minute limit. Training balances
                         sessions and reduces the weight of overlapping trades.
                       </p>
@@ -1162,11 +1184,10 @@ export default function Research() {
                   {runKind !== 'ml' && candidateId === 'trend_breakout_filtered' && (
                     <p className="text-sm text-muted-foreground">
                       Uses 8/21-bar prior trend, 1–7 days to expiry, observed liquidity and
-                      whole-lot affordability. Maximum 3 entries per day, with 15 minutes between an
-                      exit and the next signal. Requires one-minute option bars and contract tick
-                      sizes. Stop distance is the greater of the value below and 1.5 times recent
-                      minute volatility, capped at 25% of premium. Target / stop sets the reward
-                      multiple.
+                      whole-lot affordability. One lot per entry, a 5-minute post-exit cooldown and a
+                      15-minute maximum holding time. Three consecutive net losses stop new entries for the day.
+                      Requires one-minute option bars and contract tick sizes. Technical stop distance is capped
+                      at ₹300 per lot and rounded toward entry; the target is exactly 3R before charges.
                     </p>
                   )}
                 </div>
@@ -1183,7 +1204,7 @@ export default function Research() {
                         <Label htmlFor={`parameter-${key}`}>{parameterLabels[key] ?? key}</Label>
                         <Input
                           id={`parameter-${key}`}
-                          disabled={runKind === 'ml'}
+                          disabled={runKind === 'ml' || key === 'target_pct'}
                           type="number"
                           step="any"
                           value={
@@ -1194,10 +1215,11 @@ export default function Research() {
                             setParameters((previous) => ({
                               ...previous,
                               [key]: event.target.value,
+                              ...(key === 'stop_pct' ? { target_pct: String(Number((Number(event.target.value) * 3).toFixed(10))) } : {}),
                             }))
                           }
                         />
-                        {runKind === 'optimization' && (
+                        {runKind === 'optimization' && !['stop_pct', 'target_pct'].includes(key) && (
                           <>
                             <Label htmlFor={`grid-${key}`}>
                               {parameterLabels[key] ?? key} — values to compare

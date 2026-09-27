@@ -126,11 +126,11 @@ def test_non_ml_campaign_binding_stales_after_allocation_round_trip(tmp_path, mo
         "live_allocation_revision": ledger.status("alice", "live", "2026-01-02")["allocation_revision"],
     })
     first = context.current_binding("alice", 1)
-    assert first["sandbox_capital"] == 10000 and first["sandbox_allocation_revision"] == 0
-    ledger.review_allocation("alice", "sandbox", 25000, "Reviewed new funding", "2026-01-02")
+    assert first["sandbox_capital"] == 25000 and first["sandbox_allocation_revision"] == 0
+    ledger.review_allocation("alice", "sandbox", 10000, "Reviewed reduced funding", "2026-01-02")
     raised = context.current_binding("alice", 1)
     assert raised["binding_hash"] != first["binding_hash"]
-    ledger.review_allocation("alice", "sandbox", 10000, "Reviewed returned funding", "2026-01-02")
+    ledger.review_allocation("alice", "sandbox", 25000, "Reviewed returned funding", "2026-01-02")
     restored = context.current_binding("alice", 1)
     assert restored["sandbox_capital"] == first["sandbox_capital"]
     assert restored["sandbox_allocation_revision"] == 2

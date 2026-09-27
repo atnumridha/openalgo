@@ -16,7 +16,8 @@ from services.research.costs import order_cost
 from services.research.replay import _filtered_contract, _slipped, _tick, research_capital
 from services.risk import BreachReason, PositionRisk, evaluate_position
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
-from services.risk.budget import BudgetPolicy, evaluate_budget
+from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
+from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit
 
 MAX_SEED_GAP_DAYS = 7
 
@@ -56,7 +57,9 @@ def technical_features(frame, *, include_volume=False):
     out = pd.DataFrame(index=f.index)
     for n in (1, 3, 6, 12):
         out[f"return_{n}"] = c.pct_change(n, fill_method=None)
-    emas = {n: c.ewm(span=n, adjust=False, min_periods=n).mean() for n in (8, 9, 12, 15, 21, 26, 50)}
+    emas = {
+        n: c.ewm(span=n, adjust=False, min_periods=n).mean() for n in (8, 9, 12, 15, 21, 26, 50)
+    }
     for n in (8, 9, 15, 21, 50):
         out[f"ema_{n}_distance"] = c / emas[n] - 1
     out["trend_spread"] = (emas[8] - emas[21]) / c
@@ -159,19 +162,34 @@ def label_option_trade(
     slip = costs["slippage_bps"] / 10000
     entry = _slipped(rows[start]["open"], slip, contract, buy=True)
     exact = Decimal(str(entry))
-    stop = _tick(exact - max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5")), contract)
+    technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
+    if risk_recipe == CASH_RISK_RECIPE:
+        try:
+            stop, target, _ = cash_exit(exact, technical, contract)
+            stop, target = float(stop), float(target)
+        except ValueError:
+            return None
+    else:
+        stop = _tick(exact - technical, contract)
+        target = _tick(exact + (exact - Decimal(str(stop))) * 2, contract, up=True)
     distance = exact - Decimal(str(stop))
-    target = _tick(exact + distance * 2, contract, up=True)
-    if not 20 <= entry <= 120 or distance > exact * Decimal(".25"):
+    filter_distance = technical if risk_recipe == CASH_RISK_RECIPE else distance
+    if not 20 <= entry <= 120 or filter_distance > exact * Decimal(".25"):
         return None
     units = contract["lot_size"] * contract["multiplier"]
     entry_fee = order_cost(Decimal(str(entry * units)), "BUY", costs)
     capital = research_capital({"capital": capital})
-    policy = BudgetPolicy(capital=capital)
+    policy = (
+        current_policy(capital)
+        if risk_recipe == CASH_RISK_RECIPE
+        else BudgetPolicy(capital=capital)
+    )
     if Decimal(str(entry * units)) + entry_fee > capital * (1 - policy.cash_buffer_pct):
         return None
-    if risk_recipe == ML_RISK_RECIPE:
-        planned = planned_entry_risk(distance * Decimal(str(units)), Decimal(str(entry * units)), costs)
+    if risk_recipe in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
+        planned = planned_entry_risk(
+            distance * Decimal(str(units)), Decimal(str(entry * units)), costs
+        )
     elif risk_recipe is None:
         stop_fill = _slipped(stop, slip, contract)
         planned = (
@@ -183,7 +201,17 @@ def label_option_trade(
         raise ValueError("Unsupported ML admission risk recipe")
     if planned <= 0:
         return None
-    admission = evaluate_budget(policy, (), signal_at[:10], capital, capital, planned)
+    admission = evaluate_budget(
+        policy,
+        (),
+        signal_at[:10],
+        capital,
+        capital,
+        planned,
+        proposed_gross_risk=distance * Decimal(str(units))
+        if risk_recipe == CASH_RISK_RECIPE
+        else None,
+    )
     if not admission.allowed:
         return None
     risk = PositionRisk(entry_price=entry, quantity=units, stop_price=stop, target_price=target)
@@ -215,6 +243,10 @@ def label_option_trade(
             ).quantize(Decimal(".01"))
             return {
                 "net_r": float(net / planned),
+                "gross_planned_risk": float(distance * Decimal(str(units))),
+                "planned_risk": float(planned),
+                "stop_price": stop,
+                "target_price": target,
                 "net_pnl": float(net),
                 "entry_at": rows[start]["timestamp"],
                 "exit_at": at,
@@ -309,11 +341,15 @@ def build_opportunities(
     risk_recipe=None,
 ):
     """Opportunity eligibility uses only data observable at the signal timestamp."""
-    if risk_recipe not in (None, ML_RISK_RECIPE):
+    if risk_recipe not in (None, ML_RISK_RECIPE, CASH_RISK_RECIPE):
         raise ValueError("Unsupported ML admission risk recipe")
     meta = data["metadata"]
     capital = research_capital({"capital": capital})
-    policy = BudgetPolicy(capital=capital)
+    policy = (
+        current_policy(capital)
+        if risk_recipe == CASH_RISK_RECIPE
+        else BudgetPolicy(capital=capital)
+    )
     if check_cancel:
         check_cancel()
     by_time, by_contract_day = defaultdict(dict), defaultdict(list)

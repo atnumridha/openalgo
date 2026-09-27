@@ -2837,3 +2837,36 @@ def test_scalp_recovery_without_checkpoint_preserves_premium_exit(profile, targe
     assert decision.breached is (profile == "box15")
     if target:
         assert decision.reason.value == "target"
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('with_checkpoint', [False, True])
+def test_ml_recovery_keeps_persisted_exit_geometry_and_deadline(legacy, with_checkpoint):
+    from services.strategy_module.risk_adapter import evaluate_leg
+
+    sid = _strategy(legs=[dict(_leg(position='B', sl_pts=30), target_pts=90)], scalp_profile='ml_forest')
+    run_id = _run(sid)
+    stop, target, quantity = (10, 20, 150) if legacy else (4, 12, 75)
+    context = {'profile': 'ml_forest', 'symbol': CE, 'quantity': quantity,
+               'sl_pts': stop, 'target_pts': target, 'exit_basis': 'option_premium',
+               'deadline': '2026-05-01T10:15:00+05:30'}
+    if not legacy:
+        context.update(risk_recipe='one-lot-cash300-3r-v1',
+                       premium_stop_points=stop, premium_target_points=target)
+    store.get_run(run_id).scalp_context = dict(context)
+    store.db_session.commit()
+    _order(run_id, action='BUY', avg=100, qty=quantity, filled_qty=quantity, position_ref='ml-position')
+    if with_checkpoint:
+        _checkpoint(run_id, {'1': _cp_leg(position='B', qty=quantity, sl_pts=stop,
+                                   target_pts=target, effective_sl=100-stop+1,
+                                   effective_target=100+target, position_ref='ml-position')})
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok, recovered.error
+    leg = state.get_run_state(run_id)['legs']['1']
+    assert (leg['symbol'], leg['qty'], leg['entry_avg']) == (CE, quantity, 100)
+    assert (leg['sl_pts'], leg['target_pts']) == (stop, target)
+    assert store.get_run(run_id).scalp_context == context
+    assert evaluate_leg(leg, 100+target).reason.value == 'target'
+    if with_checkpoint:
+        assert leg['effective_sl'] == 100-stop+1
+        assert leg['effective_target'] == 100+target

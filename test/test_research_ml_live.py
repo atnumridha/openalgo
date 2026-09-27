@@ -149,7 +149,7 @@ def test_entry_planner_matches_replay_on_identical_entry_and_contract():
         slippage_bps=10, brokerage_per_order=0, exchange_rate=0.0003553, stt_sell_rate=0.0015
     )
     schedule = {"2026-01-01T10:00:00+05:30": {"direction": "CE", "symbol": "NIFTY_CE"}}
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout_filtered", {}, costs, capital=25000
     )
     config.update(
@@ -428,3 +428,9 @@ def test_filled_entry_pacing_reads_isolated_durable_orders(monkeypatch):
     finally:
         session.close()
         engine.dispose()
+
+
+def legacy_configuration(*args, **kwargs):
+    """Existing fixtures exercise archived two-bucket/2R behavior explicitly."""
+    kwargs.setdefault("capital", 10000)
+    return replay.validate_configuration(*args, **kwargs, policy_version="two-bucket-v1")

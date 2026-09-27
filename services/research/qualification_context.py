@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from services.research.dataset import digest
-from services.risk.budget import BudgetPolicy
+from services.risk.budget import current_policy
 
 _RUNTIME = frozenset(
     {
@@ -248,7 +248,7 @@ def current_binding(owner, strategy_id, strategy_config=None, costs=None):
         "live_capital": float(risk["live_capital"]) if risk.get("live_capital") is not None else None,
         "sandbox_allocation_revision": risk.get("sandbox_allocation_revision"),
         "live_allocation_revision": risk.get("live_allocation_revision"),
-        "risk_policy_version": BudgetPolicy().version,
+        "risk_policy_version": current_policy().version,
         **{key: value for key, value in broker.items() if key != "broker_epoch"},
     }
     if strategy.get("ml_final_run_id"):

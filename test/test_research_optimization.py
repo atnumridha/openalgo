@@ -3,7 +3,8 @@
 import copy
 
 import pytest
-from test_trading_research import fees, payload
+from test_trading_research import current_payload as payload
+from test_trading_research import fees
 from test_trading_research_jobs import store as research_store_fixture
 
 store = research_store_fixture
@@ -20,7 +21,7 @@ def queued_search(store):
         {
             "dataset_id": imported["id"],
             "candidate": "trend_breakout",
-            "parameters": {"stop_pct": 0.15, "target_pct": 0.3},
+            "parameters": {"stop_pct": 0.15, "target_pct": 0.45},
             "parameter_grid": {"lookback": [2, 3]},
             "run_kind": "optimization",
             "costs": fees(),
@@ -31,15 +32,15 @@ def queued_search(store):
 def test_optimizer_keeps_fixed_parameters_and_selects_deterministically():
     data = validate_dataset(payload(80))
     args = (data, "trend_breakout", {"lookback": [3, 2]}, fees())
-    result = jobs.optimize_experiment(*args, parameters={"stop_pct": 0.15, "target_pct": 0.3})
+    result = jobs.optimize_experiment(*args, parameters={"stop_pct": 0.15, "target_pct": 0.45})
     assert all(c["parameters"]["stop_pct"] == 0.15 for c in result["candidates"])
-    assert all(c["parameters"]["target_pct"] == 0.3 for c in result["candidates"])
+    assert all(c["parameters"]["target_pct"] == 0.45 for c in result["candidates"])
     again = jobs.optimize_experiment(
         data,
         "trend_breakout",
         {"lookback": [2, 3]},
         fees(),
-        parameters={"stop_pct": 0.15, "target_pct": 0.3},
+        parameters={"stop_pct": 0.15, "target_pct": 0.45},
     )
     assert result == again
     assert result["holdout_consumed"] is False
@@ -123,3 +124,44 @@ def test_oversized_grid_is_rejected_before_per_value_dataset_validation(monkeypa
     monkeypatch.setattr(jobs, "validate_configuration", unexpected)
     with pytest.raises(ValueError, match="256"):
         jobs.validate_parameter_grid({}, "trend_breakout", {"lookback": list(range(300))}, fees())
+
+
+@pytest.mark.parametrize("cooldown", [0, 15])
+def test_queued_search_preserves_bound_pacing_in_evaluations_and_promotion(
+    store, monkeypatch, cooldown
+):
+    imported = jobs.import_dataset(store, "alice", payload(80))
+    run = jobs.queue_run(
+        store,
+        "alice",
+        {
+            "dataset_id": imported["id"],
+            "candidate": "trend_breakout",
+            "costs": fees(),
+            "run_kind": "optimization",
+            "parameter_grid": {"lookback": [2, 3]},
+            "cooldown_minutes": cooldown,
+        },
+    )
+    observed = []
+    original = jobs.evaluate_experiment
+
+    def evaluate(data, configuration, *args, **kwargs):
+        observed.append(copy.deepcopy(configuration))
+        return original(data, configuration, *args, **kwargs)
+
+    monkeypatch.setattr(jobs, "evaluate_experiment", evaluate)
+    assert store.acquire_worker("worker")
+    report = jobs.process_job(store, "worker", store.claim_job("worker"))
+    assert len(observed) == 2
+    assert all(
+        c["pacing"] == {"cooldown_minutes": cooldown, "daily_trade_cap": None} for c in observed
+    )
+    assert report["configuration_hash"] == run["configuration_hash"]
+    assert [c["configuration_hash"] for c in report["candidates"]] == [
+        jobs.digest(c) for c in observed
+    ]
+    assert report["best_report"]["configuration_hash"] == jobs.digest(report["best_configuration"])
+    promoted = jobs.queue_optimized_best(store, "alice", run["id"])
+    assert promoted["configuration"]["pacing"]["cooldown_minutes"] == cooldown
+    assert promoted["configuration_hash"] == jobs.digest(promoted["configuration"])

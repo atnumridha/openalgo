@@ -31,7 +31,8 @@ from services.research.replay import (
     validate_configuration,
 )
 from services.risk.admission import ML_RISK_RECIPE
-from services.risk.budget import BudgetPolicy
+from services.risk.budget import current_policy
+from services.risk.cash_exit import CASH_RISK_RECIPE, current_configuration
 
 
 def implementation_hash():
@@ -50,12 +51,15 @@ def implementation_hash():
         "services/research/analytics.py",
         "portfolio/analytics.py",
         "services/research/jobs.py",
+        "services/research/low_risk_study.py",
         "services/risk/budget.py",
         "services/risk/admission.py",
+        "services/risk/cash_exit.py",
         "services/risk/position.py",
         "services/risk/models.py",
         "services/strategy_module/ml_forest.py",
         "services/strategy_module/engine.py",
+        "services/strategy_module/recovery.py",
         "services/strategy_module/trading_budget.py",
         "services/strategy_module/scalping.py",
         "database/strategy_module_db.py",
@@ -91,7 +95,8 @@ def optimize_experiment(
     *,
     parameters=None,
     check_cancel=None,
-    capital=10000,
+    capital=25000,
+    cooldown_minutes=5,
 ):
     """Evaluate a bounded deterministic parameter grid on development sessions only."""
     if len(data["sessions"]) < 80:
@@ -100,8 +105,16 @@ def optimize_experiment(
         )
     ordered, candidate_count = validate_parameter_grid(data, candidate, parameter_grid, costs, seed)
 
-    base = validate_configuration(data, candidate, parameters or {}, costs, seed, capital=capital)
-    base["risk_policy_version"] = BudgetPolicy().version
+    base = validate_configuration(
+        data,
+        candidate,
+        parameters or {},
+        costs,
+        seed,
+        capital=capital,
+        cooldown_minutes=cooldown_minutes,
+    )
+    base["risk_policy_version"] = current_policy().version
     base["implementation_hash"] = implementation_hash()
     results = []
     scored = []
@@ -172,6 +185,8 @@ def validate_parameter_grid(data, candidate, parameter_grid, costs, seed=42):
         raise ValueError("Parameter grid must be a non-empty object")
     if any(not isinstance(key, str) or not key for key in parameter_grid):
         raise ValueError("Parameter grid keys must be non-empty names")
+    if set(parameter_grid) & {"stop_pct", "target_pct"}:
+        raise ValueError("Cash-stop and 3R exit settings are fixed during parameter search")
     unknown = set(parameter_grid) - set(DEFAULTS)
     if unknown:
         raise ValueError(f"Unknown rule parameters: {sorted(unknown)}")
@@ -278,10 +293,11 @@ def validate_ml_settings(value):
     return settings
 
 
-def run_ml_experiment(data, configuration, *, check_cancel=None):
+def run_ml_experiment(data, configuration, *, check_cancel=None, include_schedule=False):
+    current_configuration(configuration)
     settings = validate_ml_settings(configuration.get("ml_settings"))
     risk_recipe = configuration.get("risk_recipe")
-    if risk_recipe not in (None, ML_RISK_RECIPE):
+    if risk_recipe not in (None, ML_RISK_RECIPE, CASH_RISK_RECIPE):
         raise ValueError("Unsupported ML admission risk recipe")
     if len(data["sessions"]) < 80:
         raise ValueError(
@@ -333,6 +349,11 @@ def run_ml_experiment(data, configuration, *, check_cancel=None):
         threshold=settings["threshold"],
         check_cancel=check_cancel,
     )
+    if current_configuration(configuration):
+        model["artifact"].update(
+            risk_recipe=CASH_RISK_RECIPE, risk_policy_version=current_policy().version
+        )
+        model["model_hash"] = digest(model["artifact"])
     replay_configuration = dict(configuration)
     replay_configuration["max_hold_minutes"] = settings["max_hold_minutes"]
     replay_configuration["research_signal_hash"] = digest(model["schedule"])
@@ -356,6 +377,15 @@ def run_ml_experiment(data, configuration, *, check_cancel=None):
     )
     return {
         **oos_report,
+        **(
+            {
+                "research_signals": model["schedule"],
+                "replay_configuration": replay_configuration,
+                "evaluated_sessions": oos_sessions,
+            }
+            if include_schedule
+            else {}
+        ),
         "oos": oos_report,
         "stress": stress_report,
         "rejections": {**rejected, **oos_report["rejections"]},
@@ -391,11 +421,16 @@ def run_ml_experiment(data, configuration, *, check_cancel=None):
 
 def run_ml_final_experiment(data, configuration, parent, *, check_cancel=None):
     """Score sealed sessions with the frozen parent forest; never fit or relabel it."""
-    if configuration.get("risk_recipe") != ML_RISK_RECIPE:
+    if not current_configuration(configuration):
         raise ValueError("Frozen ML admission risk recipe is missing or changed")
     ml_report = (parent.get("report") or {}).get("ml") or {}
     artifact = ml_report.get("artifact")
     validate_artifact(artifact)
+    if (
+        artifact.get("risk_recipe") != CASH_RISK_RECIPE
+        or artifact.get("risk_policy_version") != current_policy().version
+    ):
+        raise ValueError("Frozen ML artifact belongs to an earlier exit or risk recipe")
     model_hash = digest(artifact)
     if (
         parent.get("kind") != "ml"
@@ -424,14 +459,18 @@ def run_ml_final_experiment(data, configuration, parent, *, check_cancel=None):
         labels=True,
         max_hold_minutes=configuration["ml_settings"]["max_hold_minutes"],
         capital=research_capital(configuration),
-        risk_recipe=ML_RISK_RECIPE,
+        risk_recipe=configuration["risk_recipe"],
         check_cancel=check_cancel,
     )
     if opportunities.empty:
-        raise ValueError(f"Frozen ML model has no eligible final opportunities; filters: {rejected}")
+        raise ValueError(
+            f"Frozen ML model has no eligible final opportunities; filters: {rejected}"
+        )
     target = opportunities[opportunities.timestamp.str[:10].isin(final_days)].copy()
     if target.empty:
-        raise ValueError(f"Frozen ML model has no eligible final opportunities; filters: {rejected}")
+        raise ValueError(
+            f"Frozen ML model has no eligible final opportunities; filters: {rejected}"
+        )
     features = _require_frame_columns(target, ML_FEATURES).to_numpy(dtype=float)
     scores = predict_probabilities(artifact, features)
     schedule = signal_schedule(target, scores, configuration["ml_settings"]["threshold"])
@@ -441,26 +480,43 @@ def run_ml_final_experiment(data, configuration, parent, *, check_cancel=None):
         research_signal_hash=digest(schedule),
         research_model_hash=model_hash,
     )
-    report = run_replay(
-        data, replay_config, final_days, check_cancel, research_signals=schedule
-    )
+    report = run_replay(data, replay_config, final_days, check_cancel, research_signals=schedule)
     stress = run_replay(
         data, replay_config, final_days, check_cancel, stress=True, research_signals=schedule
     )
     report.update(
         stress=stress,
         rejections={**rejected, **report["rejections"]},
-        split={"kind": "final", "evaluated_sessions": 60, "holdout_sessions": 60,
-               "frozen_parent_run_id": parent["id"], "refitted": False},
-        ml={"model_hash": model_hash, "artifact_hash": model_hash,
+        split={
+            "kind": "final",
+            "evaluated_sessions": 60,
+            "holdout_sessions": 60,
+            "frozen_parent_run_id": parent["id"],
+            "refitted": False,
+        },
+        ml={
+            "model_hash": model_hash,
+            "artifact_hash": model_hash,
             "training_hash": artifact["training_hash"],
-            "prediction_hash": digest([{"timestamp": row.timestamp, "direction": row.direction,
-                                        "symbol": row.symbol, "probability": float(score)}
-                                       for row, score in zip(target.itertuples(index=False), scores, strict=True)]),
-            "accuracy": prediction_accuracy(target, scores, configuration["ml_settings"]["threshold"]),
-            "signal_count": len(schedule), "deployment_supported": True,
+            "prediction_hash": digest(
+                [
+                    {
+                        "timestamp": row.timestamp,
+                        "direction": row.direction,
+                        "symbol": row.symbol,
+                        "probability": float(score),
+                    }
+                    for row, score in zip(target.itertuples(index=False), scores, strict=True)
+                ]
+            ),
+            "accuracy": prediction_accuracy(
+                target, scores, configuration["ml_settings"]["threshold"]
+            ),
+            "signal_count": len(schedule),
+            "deployment_supported": True,
             "deployment_reason": "Frozen final was scored without refitting. Installation requires historical gates and explicit operator action.",
-            "cross_validation": ml_report["cross_validation"]},
+            "cross_validation": ml_report["cross_validation"],
+        },
         configuration_hash=digest(configuration),
         dataset_hash=configuration["dataset_hash"],
         risk_policy_version=configuration["risk_policy_version"],
@@ -481,8 +537,8 @@ def historical_ml_reason(final, parent):
     if (
         not isinstance(config, dict)
         or config.get("engine_version") != ENGINE_VERSION
-        or config.get("risk_policy_version") != BudgetPolicy().version
-        or config.get("risk_recipe") != ML_RISK_RECIPE
+        or config.get("risk_policy_version") != current_policy().version
+        or config.get("risk_recipe") != CASH_RISK_RECIPE
         or config.get("implementation_hash") != implementation_hash()
         or digest(config) != parent.get("configuration_hash")
         or digest(final.get("configuration")) != final.get("configuration_hash")
@@ -491,6 +547,15 @@ def historical_ml_reason(final, parent):
     artifact = (parent.get("report") or {}).get("ml", {}).get("artifact")
     try:
         validate_artifact(artifact)
+    except ValueError as exc:
+        return str(exc)
+    if (
+        artifact.get("risk_recipe") != CASH_RISK_RECIPE
+        or artifact.get("risk_policy_version") != current_policy().version
+    ):
+        return "Frozen ML artifact belongs to an earlier exit or risk recipe"
+    try:
+        current_configuration(config)
     except ValueError as exc:
         return str(exc)
     hash_value = digest(artifact)
@@ -537,7 +602,8 @@ def queue_run(store, owner, payload):
         payload.get("parameters", {}),
         payload.get("costs"),
         seed,
-        capital=payload.get("capital", 10000),
+        capital=payload.get("capital", 25000),
+        cooldown_minutes=payload.get("cooldown_minutes", 5),
     )
     if run_kind == "optimization":
         parameter_grid, candidate_count = validate_parameter_grid(
@@ -559,9 +625,10 @@ def queue_run(store, owner, payload):
             or configuration["parameters"] != DEFAULTS
         ):
             raise ValueError(
-                "ML uses filtered minute execution with fixed 10% volatility-aware stops and 2R targets; use the default rule parameters"
+                "ML uses filtered minute execution with one-lot cash stops up to ₹300 and gross 3R targets; use the default rule parameters"
             )
         configuration["ml_settings"] = validate_ml_settings(payload.get("ml_settings"))
+        configuration["max_hold_minutes"] = configuration["ml_settings"]["max_hold_minutes"]
         settings = configuration["ml_settings"]
         if (
             int(len(data["sessions"][:-60]) * 0.7)
@@ -571,9 +638,9 @@ def queue_run(store, owner, payload):
                 "More development sessions are needed for training folds before the out-of-sample period"
             )
         configuration["ml_dependencies"] = dependency
-        configuration["risk_recipe"] = ML_RISK_RECIPE
+        configuration["risk_recipe"] = CASH_RISK_RECIPE
         configuration["run_kind"] = run_kind
-    configuration["risk_policy_version"] = BudgetPolicy().version
+    configuration["risk_policy_version"] = current_policy().version
     configuration["implementation_hash"] = implementation_hash()
     return store.queue_run(
         owner,
@@ -610,7 +677,7 @@ def queue_optimized_best(store, owner, run_id):
         raise ValueError("The search configuration does not match its evidence")
     if (
         configuration.get("engine_version") != ENGINE_VERSION
-        or configuration.get("risk_policy_version") != BudgetPolicy().version
+        or configuration.get("risk_policy_version") != current_policy().version
         or configuration.get("implementation_hash") != implementation_hash()
     ):
         raise ValueError("The optimized version differs from the current rules or risk policy")
@@ -640,7 +707,7 @@ def queue_final(store, owner, run_id):
         raise LookupError("Research run not found")
     if (
         run["configuration"]["engine_version"] != ENGINE_VERSION
-        or run["configuration"].get("risk_policy_version") != BudgetPolicy().version
+        or run["configuration"].get("risk_policy_version") != current_policy().version
         or run["configuration"].get("implementation_hash") != implementation_hash()
     ):
         raise ValueError("The frozen version differs from the current rules or risk policy")
@@ -648,7 +715,9 @@ def queue_final(store, owner, run_id):
     if data is None:
         raise ValueError("The frozen dataset is unavailable")
     if run["kind"] == "ml":
-        for previous_day, session_day in zip(data["sessions"][-61:-1], data["sessions"][-60:], strict=True):
+        for previous_day, session_day in zip(
+            data["sessions"][-61:-1], data["sessions"][-60:], strict=True
+        ):
             require_recent_seed(previous_day, session_day)
         ml_report = (run.get("report") or {}).get("ml") or {}
         validate_artifact(ml_report.get("artifact"))
@@ -682,11 +751,15 @@ def process_job(store, token, run, *, should_stop=None):
         if (
             run["configuration_hash"] != digest(run["configuration"])
             or run["configuration"]["engine_version"] != ENGINE_VERSION
-            or run["configuration"].get("risk_policy_version") != BudgetPolicy().version
+            or run["configuration"].get("risk_policy_version") != current_policy().version
             or run["configuration"].get("implementation_hash") != implementation_hash()
         ):
             raise ValueError("Rules or risk policy changed after this job was queued")
-        run_kind = run["kind"] if run["kind"] == "final" else run["configuration"].get("run_kind", run["kind"])
+        run_kind = (
+            run["kind"]
+            if run["kind"] == "final"
+            else run["configuration"].get("run_kind", run["kind"])
+        )
         if run_kind == "optimization":
             report = optimize_experiment(
                 data,
@@ -696,6 +769,7 @@ def process_job(store, token, run, *, should_stop=None):
                 run["configuration"]["seed"],
                 parameters=run["configuration"]["parameters"],
                 capital=research_capital(run["configuration"]),
+                cooldown_minutes=run["configuration"]["pacing"]["cooldown_minutes"],
                 check_cancel=check_cancel,
             )
             report["configuration_hash"] = run["configuration_hash"]
@@ -706,7 +780,9 @@ def process_job(store, token, run, *, should_stop=None):
             parent = store.get_run(run["owner"], run["parent_run_id"])
             if parent is None:
                 raise ValueError("Frozen ML parent run is unavailable")
-            report = run_ml_final_experiment(data, run["configuration"], parent, check_cancel=check_cancel)
+            report = run_ml_final_experiment(
+                data, run["configuration"], parent, check_cancel=check_cancel
+            )
         elif run_kind == "ml":
             if run["configuration"].get("ml_dependencies") != ml_dependencies():
                 raise ValueError(

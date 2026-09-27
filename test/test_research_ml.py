@@ -57,7 +57,7 @@ def test_option_volume_features_are_real_and_underlying_volume_is_not_invented()
 
 def test_research_schedule_prevents_rule_fallback_and_is_hash_bound():
     data = dataset.validate_dataset(minute_payload())
-    config = replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+    config = legacy_configuration(data, "trend_breakout", {"lookback": 2}, fees())
     assert replay.run_replay(data, config)["metrics"]["trade_count"] > 0
     config["research_signal_hash"] = dataset.digest({})
     empty = replay.run_replay(data, config, research_signals={})
@@ -71,7 +71,7 @@ def test_research_schedule_prevents_rule_fallback_and_is_hash_bound():
 
 def test_research_schedule_enters_after_closed_signal_and_checks_direction():
     data = dataset.validate_dataset(minute_payload())
-    config = replay.validate_configuration(data, "trend_breakout", {"lookback": 200}, fees())
+    config = legacy_configuration(data, "trend_breakout", {"lookback": 200}, fees())
     schedule = {"2026-01-01T09:30:00+05:30": "CE"}
     config["research_signal_hash"] = dataset.digest(schedule)
     result = replay.run_replay(data, config, research_signals=schedule)
@@ -150,7 +150,7 @@ def test_scalp_labels_and_replay_share_time_limit_and_ignore_later_wins():
     assert label["exit_reason"] == "time_limit" and label["net_r"] < 0
     data = dataset.validate_dataset(body)
     schedule = {"2026-01-01T09:30:00+05:30": "CE"}
-    config = replay.validate_configuration(data, "trend_breakout", {}, costs)
+    config = legacy_configuration(data, "trend_breakout", {}, costs)
     config.update(max_hold_minutes=5, research_signal_hash=dataset.digest(schedule))
     report = replay.run_replay(data, config, research_signals=schedule)
     assert report["trades"][0]["exit_at"] == label["exit_at"]
@@ -225,7 +225,7 @@ def test_scored_contract_cannot_be_replaced_when_stress_makes_it_unaffordable():
         {"timestamp": ["2026-01-01T10:00:00+05:30"], "direction": ["CE"], "symbol": ["NIFTY_CE"]}
     )
     schedule = signal_schedule(table, [0.5], 0.2)
-    config = replay.validate_configuration(
+    config = legacy_configuration(
         data, "trend_breakout_filtered", {}, fees(slippage_bps=30, brokerage_per_order=20)
     )
     config["research_signal_hash"] = dataset.digest(schedule)
@@ -255,3 +255,9 @@ def test_validation_ambiguity_cannot_pass_evidence_gate():
         validation_qualifies({"base": good, "stress": dict(good, ambiguous_exit_count=1)}) is False
     )
     assert validation_qualifies({"base": dict(good, net_pnl=None), "stress": good}) is False
+
+
+def legacy_configuration(*args, **kwargs):
+    """Existing fixtures exercise archived two-bucket/2R behavior explicitly."""
+    kwargs.setdefault("capital", 10000)
+    return replay.validate_configuration(*args, **kwargs, policy_version="two-bucket-v1")

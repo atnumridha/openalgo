@@ -15,20 +15,33 @@ from services.research.costs import (
 from services.research.dataset import digest
 from services.risk import BreachReason, PositionRisk, evaluate_position
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
-from services.risk.budget import BudgetPolicy, BudgetTrade, budget_snapshot, evaluate_budget
+from services.risk.budget import (
+    BudgetPolicy,
+    BudgetTrade,
+    budget_snapshot,
+    current_policy,
+    evaluate_budget,
+)
+from services.risk.cash_exit import (
+    CASH_RISK_RECIPE,
+    cash_exit,
+    current_configuration,
+    pacing_config,
+)
 
-DEFAULTS = {
+LEGACY_DEFAULTS = {
     "lookback": 20,
     "stop_pct": 0.10,
     "target_pct": 0.20,
     "volume_ratio": 1.2,
     "pullback_tolerance": 0.002,
 }
+DEFAULTS = LEGACY_DEFAULTS | {"target_pct": 0.30}
 CANDIDATES = [
     {
         "id": "trend_breakout_filtered",
         "name": "Filtered breakout · minute execution",
-        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, volatility-aware stops and a 15-minute cooldown. Research hypothesis, not proven profitable.",
+        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, one-lot cash stops up to ₹300, gross 3R targets and a 5-minute cooldown. Research hypothesis, not proven profitable.",
         "defaults": DEFAULTS,
     },
     {
@@ -44,7 +57,7 @@ CANDIDATES = [
         "defaults": DEFAULTS,
     },
 ]
-ENGINE_VERSION = "closed-bar-rules-v2"
+ENGINE_VERSION = "closed-bar-cash-3r-v3"
 FILTER_RULES = {
     "fast_bars": 8,
     "slow_bars": 21,
@@ -76,12 +89,26 @@ def research_capital(config):
     return amount
 
 
-def validate_configuration(data, candidate, parameters, costs, seed=42, *, capital=10000):
+def validate_configuration(
+    data,
+    candidate,
+    parameters,
+    costs,
+    seed=42,
+    *,
+    capital=25000,
+    cooldown_minutes=5,
+    policy_version=None,
+):
     if candidate not in {c["id"] for c in CANDIDATES}:
         raise ValueError("Select a supported deterministic candidate")
     if not isinstance(parameters, dict) or set(parameters) - set(DEFAULTS):
         raise ValueError("Unknown rule parameters")
-    params = DEFAULTS | parameters
+    legacy = policy_version == BudgetPolicy().version
+    if policy_version not in (None, BudgetPolicy().version, current_policy().version):
+        raise ValueError("Unsupported risk policy version")
+    params = (LEGACY_DEFAULTS if legacy else DEFAULTS) | parameters
+    pace = pacing_config(cooldown_minutes)
     for key, (minimum, maximum) in {
         "lookback": (2, 200),
         "stop_pct": (0.001, 0.9),
@@ -90,6 +117,8 @@ def validate_configuration(data, candidate, parameters, costs, seed=42, *, capit
         "pullback_tolerance": (0, 0.05),
     }.items():
         params[key] = float(decimal_value(params[key], key, minimum=minimum, maximum=maximum))
+    if not legacy and Decimal(str(params["target_pct"])) != Decimal(str(params["stop_pct"])) * 3:
+        raise ValueError("Current cash recipe requires exactly 3R before charges")
     if params["lookback"] != int(params["lookback"]):
         raise ValueError("lookback must be a whole number")
     params["lookback"] = int(params["lookback"])
@@ -97,6 +126,8 @@ def validate_configuration(data, candidate, parameters, costs, seed=42, *, capit
         raise ValueError("seed must be a whole number between 0 and 4294967295")
     schedule = validate_cost_schedule(costs)
     validated_capital = research_capital({"capital": capital})
+    if not legacy and any(not c.get("tick_size") for c in data["metadata"]["contracts"]):
+        raise ValueError("Cash stop requires explicit contract tick_size")
     if candidate == "trend_breakout_filtered":
         if data["metadata"].get("execution_bar_minutes", data["metadata"]["bar_minutes"]) != 1:
             raise ValueError("Filtered breakout requires one-minute option execution bars")
@@ -138,10 +169,30 @@ def validate_configuration(data, candidate, parameters, costs, seed=42, *, capit
         "parameters": params,
         "costs": schedule,
         "seed": seed,
-        "engine_version": ENGINE_VERSION,
+        "engine_version": "closed-bar-rules-v2" if legacy else ENGINE_VERSION,
+        **(
+            {}
+            if legacy
+            else {
+                "risk_policy_version": current_policy().version,
+                "risk_recipe": CASH_RISK_RECIPE,
+                "pacing": pace,
+                "max_hold_minutes": 15,
+            }
+        ),
         "dataset_hash": data["content_hash"],
         "capital": int(validated_capital),
-        **({"filters": dict(FILTER_RULES)} if candidate == "trend_breakout_filtered" else {}),
+        **(
+            {
+                "filters": {
+                    k: v
+                    for k, v in FILTER_RULES.items()
+                    if legacy or k not in ("cooldown_minutes", "daily_trade_cap")
+                }
+            }
+            if candidate == "trend_breakout_filtered"
+            else {}
+        ),
     }
 
 
@@ -342,8 +393,13 @@ def run_replay(
         type(max_hold_minutes) is not int or max_hold_minutes not in (5, 10, 15)
     ):
         raise ValueError("Research holding time must be 5, 10 or 15 minutes")
+    current = current_configuration(config)
+    pace = config["pacing"] if current else FILTER_RULES
     risk_recipe = config.get("risk_recipe")
-    if risk_recipe is not None and (risk_recipe != ML_RISK_RECIPE or config["candidate"] != "trend_breakout_filtered"):
+    if risk_recipe is not None and (
+        risk_recipe not in (ML_RISK_RECIPE, CASH_RISK_RECIPE)
+        or (risk_recipe == ML_RISK_RECIPE and config["candidate"] != "trend_breakout_filtered")
+    ):
         raise ValueError("Unsupported ML admission risk recipe")
     if research_signals is None and "research_signal_hash" in config:
         raise ValueError("The recorded research signal schedule is required")
@@ -394,7 +450,10 @@ def run_replay(
     last_exit = None
     daily_entries = 0
     initial_capital = research_capital(config)
-    policy, ledger = BudgetPolicy(capital=initial_capital), []
+    policy, ledger = (
+        (current_policy(initial_capital) if current else BudgetPolicy(capital=initial_capital)),
+        [],
+    )
     equity = peak = initial_capital
     history, trades, rejections = [], [], Counter()
     underlying_session_complete = True
@@ -454,9 +513,19 @@ def run_replay(
                     contract,
                     up=True,
                 )
+                if current:
+                    try:
+                        stop, target, _ = cash_exit(exact_entry, distance, contract)
+                        exact_distance = exact_entry - stop
+                        stop, target = float(stop), float(target)
+                    except ValueError:
+                        rejections["invalid_cash_stop_tick"] += 1
+                        pending = None
+                        continue
                 entry_gap = filtered and (
                     not FILTER_RULES["min_premium"] <= entry <= FILTER_RULES["max_premium"]
-                    or exact_distance > exact_entry * Decimal(str(FILTER_RULES["max_stop_pct"]))
+                    or (distance if current else exact_distance)
+                    > exact_entry * Decimal(str(FILTER_RULES["max_stop_pct"]))
                 )
                 lot_units = contract["lot_size"] * contract["multiplier"]
                 one_premium = Decimal(str(entry * lot_units))
@@ -465,15 +534,19 @@ def run_replay(
                 )
                 if entry_gap:
                     max_lots = 0
+                if current:
+                    max_lots = min(max_lots, 1)
                 admitted = None
+                rejected_code = "budget_or_drawdown_limit"
                 low_lots, high_lots = 1, min(max_lots, 10000)
                 while low_lots <= high_lots:
                     lots = (low_lots + high_lots) // 2
                     units = lot_units * lots
                     entry_fees = order_cost(Decimal(str(entry * units)), "BUY", costs)
-                    if risk_recipe == ML_RISK_RECIPE:
-                        planned = planned_entry_risk(exact_distance * Decimal(str(units)),
-                                                     Decimal(str(entry * units)), costs)
+                    if risk_recipe in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
+                        planned = planned_entry_risk(
+                            exact_distance * Decimal(str(units)), Decimal(str(entry * units)), costs
+                        )
                     else:
                         planned_exit = _slipped(stop, slip, contract)
                         planned = (
@@ -487,12 +560,22 @@ def run_replay(
                         high_lots = lots - 1
                         continue
                     decision = evaluate_budget(
-                        policy, ledger, day, equity, peak, planned, paused=drawdown_paused
+                        policy,
+                        ledger,
+                        day,
+                        equity,
+                        peak,
+                        planned,
+                        paused=drawdown_paused,
+                        proposed_gross_risk=exact_distance * Decimal(str(units))
+                        if current
+                        else None,
                     )
                     if decision.allowed:
                         admitted = (lots, units, entry_fees, planned, decision.bucket)
                         low_lots = lots + 1
                     else:
+                        rejected_code = decision.code if current else "budget_or_drawdown_limit"
                         high_lots = lots - 1
                 if admitted:
                     daily_entries += 1
@@ -517,9 +600,7 @@ def run_replay(
                     rejections[
                         "entry_gap_filter"
                         if entry_gap
-                        else (
-                            "unaffordable_whole_lot" if max_lots < 1 else "budget_or_drawdown_limit"
-                        )
+                        else ("unaffordable_whole_lot" if max_lots < 1 else rejected_code)
                     ] += 1
             pending = None
         if active:
@@ -621,10 +702,19 @@ def run_replay(
                         net_pnl=float(net),
                         exit_reason=reason,
                         planned_risk=float(active["planned"]),
+                        gross_planned_risk=float(
+                            (Decimal(str(active["entry_price"])) - Decimal(str(risk.stop_price)))
+                            * Decimal(str(active["units"]))
+                        ),
+                        completion_sequence=len(trades) + 1,
+                        completion_day=day,
                         budget_bucket=active["bucket"],
                         ambiguous_exit=ambiguous_exit,
                         stop_price=risk.stop_price,
                         target_price=risk.target_price,
+                    )
+                    trade["risk_reserve_headroom"] = (
+                        trade["planned_risk"] - trade["gross_planned_risk"]
                     )
                     trades.append(trade)
                     ledger.append(
@@ -636,10 +726,16 @@ def run_replay(
                             active["planned"],
                             net_pnl=net,
                             filled=True,
+                            close_sequence=len(trades),
+                            completion_day=day,
                         )
                     )
                     equity += net
                     peak = max(peak, equity)
+                    trade["budget_after_close"] = {
+                        k: float(v) if isinstance(v, Decimal) else v
+                        for k, v in budget_snapshot(policy, ledger, day, equity, peak).items()
+                    }
                     active = None
                     last_exit = datetime.fromisoformat(at)
                     if len(trades) >= 5000:
@@ -690,15 +786,19 @@ def run_replay(
                 if entry_at[:10] != day or entry_at[11:16] >= meta["session_close"]:
                     rejections["after_entry_cutoff"] += 1
                     continue
-                if filtered:
-                    if daily_entries >= FILTER_RULES["daily_trade_cap"]:
+                if filtered or current:
+                    if (
+                        pace["daily_trade_cap"] is not None
+                        and daily_entries >= pace["daily_trade_cap"]
+                    ):
                         rejections["daily_trade_cap"] += 1
                         continue
                     if last_exit and datetime.fromisoformat(at) - last_exit < timedelta(
-                        minutes=FILTER_RULES["cooldown_minutes"]
+                        minutes=pace["cooldown_minutes"]
                     ):
                         rejections["cooldown"] += 1
                         continue
+                if filtered:
                     contract, atr = _filtered_contract(
                         contracts,
                         bars,
@@ -752,6 +852,13 @@ def run_replay(
     metrics["max_observed_open_drawdown_pct"] = round(max_open_drawdown, 4)
     metrics["peak_equity"] = float(peak.quantize(Decimal("0.01")))
     metrics["drawdown_paused"] = drawdown_paused
+    if current:
+        metrics["daily_stop_count"] = len(
+            {t["completion_day"] for t in trades if t["budget_after_close"]["daily_stopped"]}
+        )
+        metrics["max_daily_losing_streak"] = max(
+            (t["budget_after_close"]["consecutive_losses"] for t in trades), default=0
+        )
     metrics["equity_mark_convention"] = (
         "Net liquidation equity at observed opens/closes; adverse lows use the previously observed peak."
     )
@@ -778,6 +885,8 @@ def run_replay(
             "Some candles touched both protective exit and target; stop-first results are conservative assumptions, not observed order."
         )
     return {
+        "risk_policy_version": policy.version,
+        "pacing": dict(pace),
         "metrics": metrics,
         "session_analytics": session_analytics(
             {"trades": trades, "incomplete_outcomes": incomplete},

@@ -820,7 +820,7 @@ export default function StrategyList() {
           <CardTitle>Saved strategies</CardTitle>
           <p className="text-sm text-muted-foreground">
             Highest historical win % first · 15-minute research variants · wins after modeled base costs.
-            Different samples and current risk rules limit comparisons; these are not live win rates.
+            These results used earlier exit and risk rules, before the ₹300 / 3R recipe. They are not current-policy or live win rates.
           </p>
           <CardDescription>
             P&amp;L columns are live for running strategies and reflect the last-run snapshot for
@@ -900,7 +900,7 @@ export default function StrategyList() {
                         </Link>
                         {research && (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Historical wins: <span className="font-medium tabular-nums">{research.winPercent.toFixed(2)}%</span>
+                            Earlier-rule historical wins: <span className="font-medium tabular-nums">{research.winPercent.toFixed(2)}%</span>
                             {' '}· {research.wins}/{research.trades} trades
                           </p>
                         )}

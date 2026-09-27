@@ -3,7 +3,8 @@
 import math
 
 import pytest
-from test_trading_research import fees, payload
+from test_trading_research import current_payload as payload
+from test_trading_research import fees
 
 from services.research import replay
 from services.research.dataset import validate_dataset
