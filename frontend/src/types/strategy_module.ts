@@ -181,7 +181,16 @@ export interface FinalizedRunSummary {
 /** A strategy as the list endpoint returns it: everything but the legs. */
 export interface StrategySummary {
   id: number
-  scalp_profile?: 'ema915' | 'macd200' | 'ema5' | 'regime50200' | 'box15' | null
+  scalp_profile?:
+    | 'ema915'
+    | 'macd200'
+    | 'ema5'
+    | 'regime50200'
+    | 'box15'
+    | 'sma_macd'
+    | 'bollinger'
+    | 'ml_forest'
+    | null
   name: string
   strategy_kind: StrategyKind
   direction: StrategyDirection

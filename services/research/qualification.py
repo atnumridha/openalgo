@@ -147,7 +147,16 @@ def create_campaign(owner, payload):
         raise ValueError(
             "Choose a complete, profitable sealed final screen with at least 20 trades."
         )
+    if (run.get("configuration") or {}).get("run_kind") == "ml":
+        from services.research.jobs import historical_ml_reason
+
+        parent = research_store().get_run(owner, run["parent_run_id"]) if run.get("parent_run_id") else None
+        reason = historical_ml_reason(run, parent or {})
+        if reason:
+            raise ValueError(reason)
     binding = current_binding(owner, payload["strategy_id"])
+    if (run.get("configuration") or {}).get("run_kind") == "ml" and binding.get("ml_final_run_id") != run["id"]:
+        raise ValueError("ML forward campaign must bind the installed strategy to this exact final model")
     if binding.get("risk_paused"):
         raise ValueError("Resolve the capital pause before enrolling a campaign.")
     # Freeze only required reference fields. Full reports may contain many

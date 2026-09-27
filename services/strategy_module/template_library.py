@@ -18,13 +18,30 @@ TEMPLATES = {
     "crudeoilm-momentum": "CRUDEOILM Momentum and Breakout Signal Receiver",
     "silverm-momentum": "SILVERM Momentum and Breakout Signal Receiver",
     "natgasmini-momentum": "NATGASMINI Momentum and Breakout Signal Receiver",
+    "conlan-sma-macd": "NIFTY SMA 5/34 Zero-Cross (Research)",
+    "conlan-bollinger": "NIFTY Bollinger 20/2 Reversal (Research)",
 }
+
+
+def definitions():
+    rows = list(starter_pack.starter_definitions())
+    for profile in ("sma_macd", "bollinger"):
+        row = starter_pack._option_definition(
+            TEMPLATES[f"conlan-{'sma-macd' if profile == 'sma_macd' else profile}"],
+            "CE",
+            entry_time="09:35",
+            exit_time="15:20",
+        )
+        row.update(scalp_profile=profile, overall_target_mtm=None, daily_loss_limit_inr=2000)
+        row["legs"][0].update(atm_offset="ATM", sl_pts=20, target_pts=None)
+        rows.append(row)
+    return rows
 
 
 def catalog(owner):
     from services.strategy_module.workflow_link import validate_workflow_link
 
-    definitions = {row["name"]: row for row in starter_pack.starter_definitions()}
+    presets = {row["name"]: row for row in definitions()}
     installed = {row["name"]: row for row in store.list_strategies(owner)}
     items = []
     for key, name in TEMPLATES.items():
@@ -40,7 +57,7 @@ def catalog(owner):
             {
                 "id": key,
                 "name": name,
-                "underlying": definitions[name]["underlying"],
+                "underlying": presets[name]["underlying"],
                 "installed_strategy_id": row["id"] if complete else None,
                 "installation_pending": row is not None and not complete,
             }
@@ -65,7 +82,7 @@ def install(owner, template_id):
         row = next((r for r in rows if r["name"] == name), None)
         created = False
         if row is None:
-            definition = next(r for r in starter_pack.starter_definitions() if r["name"] == name)
+            definition = next(r for r in definitions() if r["name"] == name)
             definition["broker_connection_id"] = _connection_for_owner(owner, rows)
             config, error = validate_strategy_config(definition)
             if error:
@@ -89,7 +106,16 @@ def install(owner, template_id):
             or row["live_enabled"]
         ):
             raise ValueError("Stop this strategy and select sandbox before adding its Flow")
-        graph = starter_workflows.workflow_definitions({name: row["id"]}, owner)[0]
+        if template_id.startswith("conlan-"):
+            from services.strategy_module.scalping_pack import workflow_definition
+
+            if row.get("scalp_profile") != next(
+                r["scalp_profile"] for r in definitions() if r["name"] == name
+            ):
+                raise ValueError("Existing strategy has different research rules")
+            graph = workflow_definition(row, row["id"], owner, row["broker_connection_id"])
+        else:
+            graph = starter_workflows.workflow_definitions({name: row["id"]}, owner)[0]
         errors = validate_workflow(graph, strict=True)
         if errors:
             raise ValueError("Template Flow is invalid")

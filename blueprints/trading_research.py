@@ -71,8 +71,14 @@ def overview():
     data = get_store().overview(session["user"])
     data.update(
         candidates=CANDIDATES,
+        capabilities={
+            "optimization_max_candidates": jobs.MAX_OPTIMIZATION_CANDIDATES,
+            "ml": jobs.ml_dependencies(),
+            "ml_live": True,
+        },
         limits={
-            "capital": 10000,
+            "capital": 25000,
+            "legacy_absent_capital": 10000,
             "first_trade_loss": 1000,
             "later_trades_loss": 1000,
             "daily_loss": 2000,
@@ -181,6 +187,12 @@ def cancel_run(run_id):
     return success(get_store().cancel_run(session["user"], run_id))
 
 
+@trading_research_bp.post("/runs/<int:run_id>/promote")
+@_api_limit
+def promote_run(run_id):
+    return success(jobs.queue_optimized_best(get_store(), session["user"], run_id), 202)
+
+
 @trading_research_bp.post("/runs/<int:run_id>/freeze")
 @_api_limit
 def freeze_run(run_id):
@@ -191,6 +203,14 @@ def freeze_run(run_id):
 @_api_limit
 def final_test(run_id):
     return success(jobs.queue_final(get_store(), session["user"], run_id), 202)
+
+
+@trading_research_bp.post("/runs/<int:run_id>/install-ml")
+@_api_limit
+def install_ml(run_id):
+    from services.research.ml_install import install
+
+    return success(install(session["user"], run_id), 201)
 
 
 @trading_research_bp.get("/runs/<int:run_id>/release")

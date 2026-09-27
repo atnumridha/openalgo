@@ -7,7 +7,7 @@ write transaction and NullPool; no network or broker calls occur under that lock
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import (
     JSON,
@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    inspect,
     or_,
     select,
     text,
@@ -44,6 +45,7 @@ class RiskAccount(Base):
     scope = Column(String(180), primary_key=True)
     capital = Column(Numeric(20, 4), nullable=False, default=10000)
     peak = Column(Numeric(20, 4), nullable=False, default=10000)
+    allocation_revision = Column(Integer, nullable=False, default=0, server_default=text("0"))
     paused = Column(Boolean, nullable=False, default=False)
     pause_reason = Column(Text, nullable=True)
 
@@ -84,6 +86,24 @@ class RiskReview(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+    ensure_allocation_revision(engine)
+
+
+def allocation_revision_missing(target_engine):
+    """Inspect without changing an existing risk account table."""
+    inspector = inspect(target_engine)
+    return inspector.has_table("trading_risk_account") and "allocation_revision" not in {
+        column["name"] for column in inspector.get_columns("trading_risk_account")
+    }
+
+
+def ensure_allocation_revision(target_engine):
+    """Add the durable revision to preexisting accounts without changing their facts."""
+    if allocation_revision_missing(target_engine):
+        with target_engine.begin() as db:
+            db.exec_driver_sql(
+                "ALTER TABLE trading_risk_account ADD COLUMN allocation_revision INTEGER NOT NULL DEFAULT 0"
+            )
 
 
 def _scope(user, mode):
@@ -135,7 +155,9 @@ def _snapshot(db, account, day):
         BudgetTrade(r.ref, r.session_day, r.bucket, r.status, r.planned_risk, r.net_pnl, r.filled)
         for r in rows
     ]
-    result = budget_snapshot(POLICY, trades, day, equity, account.peak, account.paused)
+    result = budget_snapshot(BudgetPolicy(capital=account.capital), trades, day, equity, account.peak, account.paused)
+    result["capital"] = account.capital
+    result["allocation_revision"] = account.allocation_revision
     if result["paused"] and not account.paused:
         account.paused = True
         account.pause_reason = "Portfolio drawdown reached 20% of peak net equity"
@@ -145,6 +167,46 @@ def _snapshot(db, account, day):
 
 def status(user, mode, day):
     with _account(user, mode) as (db, account):
+        return _snapshot(db, account, day)[0]
+
+
+def budget_state(user, mode, day):
+    """Return the same durable equity, peak and bucket ledger used by admission."""
+    with _account(user, mode) as (db, account):
+        snapshot, trades, _ = _snapshot(db, account, day)
+        return snapshot, trades
+
+
+def review_allocation(user, mode, capital, reason, day):
+    """Record an explicit funded-capital change with no outstanding exposure."""
+    try:
+        amount = Decimal(str(capital)) if not isinstance(capital, bool) else Decimal("NaN")
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Capital allocation must be ₹10,000 or ₹25,000") from exc
+    if mode not in {"sandbox", "live"} or amount not in {Decimal("10000"), Decimal("25000")}:
+        raise ValueError("Choose sandbox or live and a supported ₹10,000/₹25,000 allocation")
+    if not isinstance(reason, str) or not 3 <= len(reason.strip()) <= 1000:
+        raise ValueError("Record an allocation review reason between 3 and 1000 characters")
+    with _account(user, mode) as (db, account):
+        if db.scalar(select(RiskTrade.ref).where(
+            RiskTrade.scope == account.scope, RiskTrade.status.in_(["pending", "open"])
+        )) is not None:
+            raise ValueError("Reconcile all open or pending risk trades before changing allocation")
+        old = Decimal(account.capital)
+        if old == amount:
+            return _snapshot(db, account, day)[0]
+        prior_peak = Decimal(account.peak)
+        delta = amount - old
+        account.capital = amount
+        account.allocation_revision = int(account.allocation_revision or 0) + 1
+        # New funding changes net equity; preserve the accumulated peak/equity
+        # gap, pause state and every historical daily loss record.
+        account.peak = prior_peak + delta
+        db.add(RiskReview(scope=account.scope, at=datetime.now(UTC).isoformat(),
+                          reason=reason.strip(),
+                          details={"action": "allocation_review", "old_capital": str(old),
+                                   "new_capital": str(amount), "old_peak": str(prior_peak),
+                                   "new_peak": str(account.peak)}))
         return _snapshot(db, account, day)[0]
 
 
@@ -158,7 +220,7 @@ def reserve(
     with _account(user, mode) as (db, account):
         metrics, trades, rows = _snapshot(db, account, day)
         decision = evaluate_budget(
-            POLICY, trades, day, metrics["equity"], account.peak, risk, account.paused
+            BudgetPolicy(capital=account.capital), trades, day, metrics["equity"], account.peak, risk, account.paused
         )
         if db.get(RiskTrade, (account.scope, ref)) is not None:
             return BudgetDecision(

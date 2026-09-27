@@ -30,12 +30,12 @@ def owner(monkeypatch):
     flow_db.db_session.remove()
 
 
-def test_listing_nine_uninstalled_templates_never_creates_strategies(owner):
+def test_listing_uninstalled_templates_never_creates_strategies(owner):
     from services.strategy_module import template_library as library
 
     catalog = library.catalog(owner)
-    assert len(catalog) == 9
-    assert len({item["id"] for item in catalog}) == 9
+    assert len(catalog) == 11
+    assert len({item["id"] for item in catalog}) == 11
     assert all(item["installed_strategy_id"] is None for item in catalog)
     assert not store.list_strategies(owner)
     assert {item["underlying"] for item in catalog} == {
@@ -48,7 +48,7 @@ def test_listing_nine_uninstalled_templates_never_creates_strategies(owner):
     }
 
 
-@pytest.mark.parametrize("offset", range(9))
+@pytest.mark.parametrize("offset", range(11))
 def test_one_template_install_creates_only_one_stopped_sandbox_pair_and_is_repeatable(
     owner, offset
 ):

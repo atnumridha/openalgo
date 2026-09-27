@@ -115,6 +115,55 @@ def test_label_uses_next_minute_and_first_exit_not_a_later_winner():
     )
 
 
+def test_ml_label_affordability_uses_selected_capital_and_fees():
+    from services.research.ml import label_option_trade
+
+    body = minute_payload()
+    contract = dict(body["metadata"]["contracts"][0], lot_size=90)
+    rows = [row for row in body["rows"] if row["symbol"] == contract["symbol"]]
+    assert (
+        label_option_trade(rows, "2026-01-01T09:30:00+05:30", contract, 1, fees(), capital=10000)
+        is None
+    )
+    larger = label_option_trade(
+        rows, "2026-01-01T09:30:00+05:30", contract, 1, fees(), capital=25000
+    )
+    assert larger is not None
+
+
+def test_scalp_labels_and_replay_share_time_limit_and_ignore_later_wins():
+    from services.research.ml import label_option_trade
+
+    body = minute_payload()
+    contract = body["metadata"]["contracts"][0]
+    for row in body["rows"]:
+        if row["symbol"] == contract["symbol"]:
+            row.update(open=100, high=101, low=99, close=100)
+            if row["timestamp"][11:16] > "09:35":
+                row.update(open=130, high=140, low=125, close=135)
+    rows = [r for r in body["rows"] if r["symbol"] == contract["symbol"]]
+    costs = fees(slippage_bps=0)
+    label = label_option_trade(
+        rows, "2026-01-01T09:30:00+05:30", contract, 1, costs, max_hold_minutes=5
+    )
+    assert label["exit_at"] == "2026-01-01T09:35:00+05:30"
+    assert label["exit_reason"] == "time_limit" and label["net_r"] < 0
+    data = dataset.validate_dataset(body)
+    schedule = {"2026-01-01T09:30:00+05:30": "CE"}
+    config = replay.validate_configuration(data, "trend_breakout", {}, costs)
+    config.update(max_hold_minutes=5, research_signal_hash=dataset.digest(schedule))
+    report = replay.run_replay(data, config, research_signals=schedule)
+    assert report["trades"][0]["exit_at"] == label["exit_at"]
+    assert report["trades"][0]["exit_reason"] == "time_limit"
+    missing = [r for r in rows if r["timestamp"] != label["exit_at"]]
+    assert (
+        label_option_trade(
+            missing, "2026-01-01T09:30:00+05:30", contract, 1, costs, max_hold_minutes=5
+        )
+        is None
+    )
+
+
 def test_label_rejects_missing_exposure_bar_and_never_uses_next_session():
     from services.research.ml import label_option_trade
 

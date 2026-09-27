@@ -186,7 +186,17 @@ class ResearchStore:
         ):
             raise ValueError("Research run storage limit reached")
 
-    def queue_run(self, owner, dataset_id, configuration, configuration_hash, days, underlying):
+    def queue_run(
+        self,
+        owner,
+        dataset_id,
+        configuration,
+        configuration_hash,
+        days,
+        underlying,
+        *,
+        parent_run_id=None,
+    ):
         with self.sessions.begin() as session:
             self._capacity(session, owner)
             observed = session.scalars(
@@ -202,9 +212,11 @@ class ResearchStore:
             row = ResearchRun(
                 owner=owner,
                 dataset_id=dataset_id,
+                kind=configuration.get("run_kind", "development"),
                 candidate=configuration["candidate"],
                 configuration=configuration,
                 configuration_hash=configuration_hash,
+                parent_run_id=parent_run_id,
             )
             session.add(row)
             session.flush()
@@ -292,12 +304,20 @@ class ResearchStore:
             )
             if row is None:
                 raise LookupError("Research run not found")
-            if row.status != "completed" or row.kind != "development":
-                raise ValueError("Only a completed development version can be frozen")
+            if row.status != "completed" or row.kind not in {"development", "ml"}:
+                raise ValueError("Only a completed development or ML version can be frozen")
             if row.report.get("incomplete_outcomes") or row.report.get("oos", {}).get(
                 "incomplete_outcomes"
             ):
                 raise ValueError("Resolve incomplete dataset outcomes before freezing a version")
+            if row.kind == "ml":
+                from services.research.dataset import digest
+                from services.research.ml_artifact import validate_artifact
+
+                evidence = row.report.get("ml") or {}
+                validate_artifact(evidence.get("artifact"))
+                if digest(evidence["artifact"]) != evidence.get("model_hash"):
+                    raise ValueError("ML artifact differs from its development evidence")
             row.frozen_at = row.frozen_at or utcnow()
             return run_dict(row)
 
@@ -312,7 +332,7 @@ class ResearchStore:
                 if (
                     not parent.frozen_at
                     or parent.status != "completed"
-                    or parent.kind != "development"
+                    or parent.kind not in {"development", "ml"}
                 ):
                     raise ValueError("A completed frozen development version is required")
                 self._capacity(session, owner)

@@ -53,6 +53,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    and_,
     case,
     exists,
     inspect,
@@ -330,6 +331,8 @@ class SmStrategy(Base):
 
     legs = Column(JSON, nullable=False, default=list)
     scalp_profile = Column(String(20), nullable=True)
+    ml_final_run_id = Column(Integer, nullable=True)
+    ml_model_hash = Column(String(64), nullable=True)
 
     overall_sl_mtm = Column(Numeric(18, 2), nullable=True)
     overall_target_mtm = Column(Numeric(18, 2), nullable=True)
@@ -698,6 +701,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     for table, column, ddl in (
         ("sm_strategy", "scalp_profile", "VARCHAR(20)"),
+        ("sm_strategy", "ml_final_run_id", "INTEGER"),
+        ("sm_strategy", "ml_model_hash", "VARCHAR(64)"),
         ("sm_strategy_run", "scalp_context", "JSON"),
     ):
         if column not in {item["name"] for item in inspect(engine).get_columns(table)}:
@@ -959,6 +964,8 @@ def strategy_to_dict(row: SmStrategy, *, include_legs: bool = True) -> dict:
         "broker_connection_id": row.broker_connection_id,
         "strategy_kind": row.strategy_kind,
         "scalp_profile": row.scalp_profile,
+        "ml_final_run_id": row.ml_final_run_id,
+        "ml_model_hash": row.ml_model_hash,
         "direction": row.direction,
         "universe_tab": row.universe_tab,
         "underlying": row.underlying,
@@ -1182,6 +1189,8 @@ def create_strategy(user_id: str, config: dict) -> tuple[dict | None, str | None
             pricetype=config.get("pricetype", "MARKET"),
             legs=config.get("legs", []),
             scalp_profile=config.get("scalp_profile"),
+            ml_final_run_id=config.get("ml_final_run_id"),
+            ml_model_hash=config.get("ml_model_hash"),
             overall_sl_mtm=config.get("overall_sl_mtm"),
             overall_target_mtm=config.get("overall_target_mtm"),
             lock_profit=config.get("lock_profit"),
@@ -2383,6 +2392,47 @@ def list_runs(strategy_id: int, limit: int = 100) -> list[dict]:
     except Exception:
         logger.exception("Could not list runs for strategy %s", strategy_id)
         return []
+
+
+def ml_filled_entry_pace(strategy_id: int, mode: str, day: str) -> dict:
+    """Read durable filled ML entries and their latest terminal exit for one IST day."""
+    from datetime import date, time, timedelta
+    from zoneinfo import ZoneInfo
+
+    session_day = date.fromisoformat(day)
+    start = datetime.combine(session_day, time.min, ZoneInfo("Asia/Kolkata")).astimezone(UTC).replace(tzinfo=None)
+    end = datetime.combine(session_day + timedelta(days=1), time.min, ZoneInfo("Asia/Kolkata")).astimezone(UTC).replace(tzinfo=None)
+    try:
+        filled = or_(
+            SmStrategyOrder.filled_qty > 0,
+            and_(SmStrategyOrder.status == "complete", SmStrategyOrder.filled_qty.is_(None)),
+        )
+        runs = (
+            db_session.query(SmStrategyRun)
+            .join(SmStrategyOrder, SmStrategyOrder.run_id == SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.mode == mode,
+                SmStrategyRun.started_at >= start,
+                SmStrategyRun.started_at < end,
+                SmStrategyOrder.kind == "entry",
+                filled,
+            )
+            .distinct()
+            .all()
+        )
+        if any(run.stopped_at is None for run in runs):
+            return {"entries": len(runs), "active": True, "last_exit": None}
+        last_exit = max((run.stopped_at for run in runs), default=None)
+        return {
+            "entries": len(runs),
+            "active": False,
+            "last_exit": last_exit.replace(tzinfo=UTC).astimezone(ZoneInfo("Asia/Kolkata")).isoformat()
+            if last_exit else None,
+        }
+    except Exception as exc:
+        logger.exception("Could not read filled ML entry pace for strategy %s", strategy_id)
+        raise RuntimeError("Filled ML entry history is unavailable") from exc
 
 
 def list_open_runs() -> list[SmStrategyRun]:

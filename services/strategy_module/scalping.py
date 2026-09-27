@@ -16,11 +16,14 @@ from services.risk import PositionRisk, evaluate_position
 
 IST = ZoneInfo("Asia/Kolkata")
 PROFILES = {
+    "ml_forest": "NIFTY Frozen RandomForest",
     "regime50200": "NIFTY EMA 50/200 + Daily Regime",
     "ema915": "NIFTY EMA 9/15 + Bank Nifty",
     "box15": "NIFTY Opening Box Breakout",
     "macd200": "NIFTY MACD + EMA 200",
     "ema5": "NIFTY 5 EMA Reversal",
+    "sma_macd": "NIFTY SMA 5/34 Zero-Cross (Research)",
+    "bollinger": "NIFTY Bollinger 20/2 Reversal (Research)",
 }
 TOP_PROFILES = ("regime50200", "ema915", "box15")
 ITM_PROFILES = {"ema915", "macd200", "ema5"}
@@ -71,6 +74,12 @@ def closed_daily_frame(records, now):
 
 def signals_for_profile(profile, *, five=None, minute=None, bank=None, daily=None):
     """Use the same closed-bar rule functions as the frozen research variants."""
+    if profile in {"sma_macd", "bollinger"}:
+        from services.research.conlan import rule_signals
+
+        if len(five) < 35:
+            raise WaitingForSignal("Research rules need 35 completed five-minute candles")
+        return rule_signals(five, profile)
     if profile == "ema915":
         return signals(indicators(five), indicators(bank))
     if profile == "regime50200":

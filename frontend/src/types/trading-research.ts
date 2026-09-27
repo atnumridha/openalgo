@@ -1,4 +1,38 @@
 export type ResearchCandidateId = 'trend_breakout' | 'trend_breakout_filtered' | 'vwap_pullback'
+export type ResearchRunKind = 'development' | 'optimization' | 'ml' | 'final'
+
+export interface MLSettings {
+  folds: number
+  min_train_sessions: number
+  estimators: number
+  threshold: number
+  max_hold_minutes?: number
+}
+
+export interface PredictionAccuracy {
+  labelled_observations: number
+  unlabelled_observations: number
+  accuracy_pct: number | null
+  precision_pct: number | null
+  recall_pct: number | null
+  majority_baseline_pct: number | null
+}
+
+export interface ResearchOptimizationReport {
+  candidate_count: number
+  best_index: number
+  max_candidates: number
+  holdout_consumed: false
+  best_report: ResearchReport
+  best_configuration: { parameters: Record<string, number> }
+  candidates: Array<{
+    index: number
+    parameters: Record<string, number>
+    complete: boolean
+    metrics: ResearchMetrics
+    configuration_hash: string
+  }>
+}
 
 export interface CostSchedule {
   exchange?: 'NFO' | 'BFO' | 'MCX'
@@ -37,6 +71,7 @@ export interface ResearchCandidate {
 }
 
 export interface ResearchMetrics {
+  initial_capital?: number
   trade_count: number
   net_pnl: number | null
   expectancy: number | null
@@ -54,6 +89,42 @@ export interface ResearchMetrics {
 }
 
 export interface ResearchReport {
+  session_analytics?: {
+    session_count: number
+    annualization_sessions: number
+    convention: string
+    metrics: {
+      cagr?: number | null
+      volatility?: number | null
+      sharpe?: number | null
+      sortino?: number | null
+    }
+  }
+  ml?: {
+    artifact?: { feature_importance?: Record<string, number>; weighting?: string }
+    diagnostics?: {
+      brier_score: number | null
+      baseline_brier_score?: number | null
+      baseline_difference_95?: { lower_95: number; upper_95: number } | null
+      reliability: Array<{ mean_prediction: number; mean_actual: number; observations: number }>
+    }
+    accuracy: PredictionAccuracy
+    model_hash: string
+    prediction_hash: string
+    signal_count: number
+    deployment_supported: boolean
+    deployment_reason: string
+    cross_validation: {
+      model_metadata: {
+        folds_report: Array<{
+          fold: number
+          train_observations: number
+          validation_observations: number
+          accuracy: PredictionAccuracy
+        }>
+      }
+    }
+  }
   metrics: ResearchMetrics
   trades: Array<{
     symbol: string
@@ -96,9 +167,12 @@ export interface ResearchRun {
   dataset_id: number
   candidate: ResearchCandidateId
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
-  kind: 'development' | 'final'
+  kind: ResearchRunKind
   configuration_hash: string
   configuration?: {
+    capital?: number
+    run_kind?: ResearchRunKind
+    ml_settings?: MLSettings
     candidate: ResearchCandidateId
     parameters: Record<string, number>
     costs: CostSchedule
@@ -113,10 +187,15 @@ export interface ResearchRun {
   started_at: string | null
   finished_at: string | null
   error: string | null
-  report?: ResearchReport | null
+  report?: ResearchReport | ResearchOptimizationReport | null
 }
 
 export interface ResearchOverview {
+  capabilities?: {
+    optimization_max_candidates: number
+    ml: { available: boolean; reason?: string; sklearn_version?: string }
+    ml_live: boolean
+  }
   datasets: ResearchDataset[]
   runs: ResearchRun[]
   candidates: ResearchCandidate[]
@@ -125,6 +204,10 @@ export interface ResearchOverview {
 }
 
 export interface ResearchRunRequest {
+  capital: number
+  run_kind?: Exclude<ResearchRunKind, 'final'>
+  parameter_grid?: Record<string, number[]>
+  ml_settings?: MLSettings
   dataset_id: number
   candidate: ResearchCandidateId
   parameters: Record<string, number>
@@ -133,6 +216,7 @@ export interface ResearchRunRequest {
 }
 
 export interface RiskAccount {
+  capital: number
   equity: number
   peak_equity: number
   drawdown: number

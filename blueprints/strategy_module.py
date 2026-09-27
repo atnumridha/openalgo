@@ -1350,6 +1350,8 @@ def create_strategy():
     config, message = validate_strategy_config(payload)
     if message:
         return _error(message, 400)
+    if config.get("scalp_profile") == "ml_forest":
+        return _error("Install frozen ML strategies from a passing Research final run", 400)
 
     created, store_message = store.create_strategy(username, config)
     if not created:

@@ -58,6 +58,15 @@ def validate_cost_dates(schedule, days):
         raise ValueError("Cost schedule must cover every selected session date")
 
 
+def execution_economics(schedule):
+    """The rates that affect fills; historical assumption dates are provenance."""
+    if not isinstance(schedule, dict):
+        raise ValueError("A current cost schedule is required")
+    return {
+        key: str(decimal_value(schedule.get(key), key)) for key in NUMERIC_FIELDS
+    } | {key: schedule.get(key) for key in ("broker", "exchange")}
+
+
 def order_cost(notional: Decimal, side: str, schedule: dict) -> Decimal:
     """Fees for one filled order. Rates are fractions of turnover, not percent."""
     turnover = decimal_value(notional, "notional")

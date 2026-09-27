@@ -14,6 +14,7 @@ from services.research.costs import (
     validate_cost_dates,
     validate_cost_schedule,
 )
+from services.risk.admission import planned_entry_risk
 from services.risk.budget import BudgetDecision
 from services.strategy_module import session
 from utils.logging import get_logger
@@ -142,11 +143,8 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
         return _refusal("risk_evidence_missing")
     premium = facts.estimated_debit
     entry_fee = order_cost(premium, "BUY", costs)
-    # Using entry turnover for the stop-side fee is conservative for long
-    # options. Execution at worse prices is handled by the monitoring ledger.
-    exit_fee = order_cost(premium, "SELL", costs)
-    slippage = premium * Decimal(str(costs["slippage_bps"])) / Decimal("10000") * 2
-    risk = facts.entry_risk + entry_fee + exit_fee + slippage
+    # Preserve the established conservative guard arithmetic for all profiles.
+    risk = planned_entry_risk(facts.entry_risk, premium, costs)
     ref = str(leg.get("position_ref") or "")
     result = ledger.reserve(
         user,

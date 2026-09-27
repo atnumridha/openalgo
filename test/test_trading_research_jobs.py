@@ -44,6 +44,21 @@ def test_development_requires_enough_sessions_to_seal_last_sixty(store):
         create_run(store, 60)
 
 
+def test_queued_capital_is_hash_bound_and_legacy_request_uses_ten_thousand(store):
+    imported = jobs.import_dataset(store, "alice", payload(80))
+    request = {
+        "dataset_id": imported["id"],
+        "candidate": "trend_breakout",
+        "parameters": {"lookback": 2},
+        "costs": fees(),
+    }
+    legacy = jobs.queue_run(store, "alice", request)
+    larger = jobs.queue_run(store, "alice", request | {"capital": 25000})
+    assert legacy["configuration"]["capital"] == 10000
+    assert larger["configuration"]["capital"] == 25000
+    assert legacy["configuration_hash"] != larger["configuration_hash"]
+
+
 def test_worker_cannot_run_same_job_twice_and_cancel_is_durable(store):
     _, run = create_run(store)
     assert store.acquire_worker("first") is True

@@ -214,6 +214,8 @@ filterwarnings = [
 ]
 
 [dependency-groups]
+# Optional offline research models. No model is automatically enabled for trading.
+research = ["scikit-learn==1.7.2"]
 # Indicator analysis, charting and dashboards. Kept out of the main
 # dependency list so streamlit/yfinance/seaborn never reach a production
 # install -- PEP 735 groups are opt-in, so `uv sync` alone does not pull

@@ -107,9 +107,29 @@ ADDED_COLUMNS = (
         "VARCHAR(36)",
     ),
     (
+        "sm_strategy",
+        "scalp_profile",
+        "VARCHAR(20)",
+    ),
+    (
+        "sm_strategy",
+        "ml_final_run_id",
+        "INTEGER",
+    ),
+    (
+        "sm_strategy",
+        "ml_model_hash",
+        "VARCHAR(64)",
+    ),
+    (
         "sm_strategy_run",
         "broker_connection_id",
         "VARCHAR(36)",
+    ),
+    (
+        "sm_strategy_run",
+        "scalp_context",
+        "JSON",
     ),
     (
         "sm_strategy_order",

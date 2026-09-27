@@ -164,6 +164,159 @@ beforeEach(() => {
 })
 
 describe('Research workspace', () => {
+  it('queues ML with fixed execution rules and explains frozen final evaluation', async () => {
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          status: 'success',
+          data: url.endsWith('/risk')
+            ? risk()
+            : {
+                ...overview(),
+                candidates: [
+                  ...overview().candidates,
+                  { ...overview().candidates[0], id: 'trend_breakout_filtered' },
+                ],
+                capabilities: { ml: { available: true } },
+              },
+        },
+      })
+    )
+    rest.post.mockResolvedValue({
+      data: { status: 'success', data: { ...run, status: 'queued', kind: 'ml', report: null } },
+    })
+    renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
+    await userEvent.selectOptions(await screen.findByLabelText('Research dataset'), '7')
+    await userEvent.selectOptions(screen.getByLabelText('Test type'), 'ml')
+    expect(screen.queryByText(/Uses 8\/21-bar prior trend/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Lookback bars')).not.toBeInTheDocument()
+    expect(screen.getByText(/Freeze the fitted JSON model, then score the final sessions once without refitting/)).toBeVisible()
+    await userEvent.clear(screen.getByLabelText('Maximum holding time (minutes)'))
+    await userEvent.type(screen.getByLabelText('Maximum holding time (minutes)'), '5')
+    await userEvent.click(screen.getByRole('button', { name: 'Train and evaluate ML' }))
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith(
+        '/strategy/api/research/runs',
+        expect.objectContaining({
+          run_kind: 'ml',
+          candidate: 'trend_breakout_filtered',
+          ml_settings: {
+            folds: 3,
+            min_train_sessions: 10,
+            estimators: 200,
+            threshold: 0.5,
+            max_hold_minutes: 5,
+          },
+        })
+      )
+    )
+  })
+
+  it('queues a parameter search with displayed percentage values converted once', async () => {
+    rest.post.mockResolvedValue({
+      data: { status: 'success', data: { ...run, status: 'queued', report: null } },
+    })
+    renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
+    await screen.findByRole('option', { name: 'Imported provider data (90 sessions)' })
+    expect(screen.getByLabelText('Research capital (₹)')).toHaveValue(25000)
+    await userEvent.selectOptions(screen.getByLabelText('Research dataset'), '7')
+    await userEvent.selectOptions(screen.getByLabelText('Test type'), 'optimization')
+    await userEvent.type(screen.getByLabelText('Lookback bars — values to compare'), '10, 20')
+    await userEvent.type(
+      screen.getByLabelText('Stop-loss distance (%) — values to compare'),
+      '10, 15'
+    )
+    expect(screen.getByText('4 combinations · maximum 256')).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: 'Compare parameters' }))
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith(
+        '/strategy/api/research/runs',
+        expect.objectContaining({
+          run_kind: 'optimization',
+          parameter_grid: { lookback: [10, 20], stop_pct: [0.1, 0.15] },
+        })
+      )
+    )
+    expect(rest.put).not.toHaveBeenCalled()
+  })
+
+  it('shows search results and promotes a selected configuration without enabling trading', async () => {
+    const search = {
+      ...run,
+      kind: 'optimization',
+      report: {
+        candidate_count: 2,
+        best_index: 1,
+        holdout_consumed: false,
+        max_candidates: 256,
+        best_configuration: { parameters: { lookback: 10 } },
+        best_report: run.report,
+        candidates: [
+          {
+            index: 1,
+            parameters: { lookback: 10 },
+            complete: true,
+            metrics: run.report.metrics,
+            configuration_hash: 'abc',
+          },
+        ],
+      },
+    }
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          status: 'success',
+          data: url.endsWith('/risk')
+            ? risk()
+            : url.endsWith('/runs/9')
+              ? search
+              : { ...overview(), runs: [search] },
+        },
+      })
+    )
+    rest.post.mockResolvedValue({
+      data: { status: 'success', data: { ...run, id: 10, status: 'queued', report: null } },
+    })
+    renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
+    expect(await screen.findByText('Parameter comparison')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Freeze this version' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Test selected parameters' }))
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/research/runs/9/promote', {})
+    )
+    expect(rest.put).not.toHaveBeenCalled()
+  })
+
+  it('shows a clear dependency message when ML research is unavailable', async () => {
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          status: 'success',
+          data: url.endsWith('/risk')
+            ? risk()
+            : {
+                ...overview(),
+                capabilities: {
+                  ml: {
+                    available: false,
+                    reason: 'Install the research dependencies on the server.',
+                  },
+                },
+              },
+        },
+      })
+    )
+    renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
+    await userEvent.selectOptions(await screen.findByLabelText('Test type'), 'ml')
+    expect(screen.getByText('Install the research dependencies on the server.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Train and evaluate ML' })).toBeDisabled()
+  })
+
   it('loads the Kotak API preset as a draft without enabling risk or placing trades', async () => {
     renderResearch()
     await userEvent.click(await screen.findByRole('button', { name: 'Use Kotak Neo rates' }))
@@ -332,6 +485,7 @@ describe('Research workspace', () => {
         },
         costs,
         seed: 42,
+        capital: 25000,
       })
     )
     expect(rest.put).not.toHaveBeenCalled()

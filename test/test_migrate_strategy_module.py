@@ -123,15 +123,22 @@ def test_apply_upgrades_every_populated_old_stage_idempotently(tmp_path, stage):
         order_columns = _column_details(engine, "sm_strategy_order")
         strategy_columns = _column_details(engine, "sm_strategy")
         assert strategy_columns.keys() >= {
-            "automation_state", "automation_state_reason", "automation_state_updated_at"
+            "automation_state", "automation_state_reason", "automation_state_updated_at",
+            "scalp_profile", "ml_final_run_id", "ml_model_hash",
         }
+        assert strategy_columns["scalp_profile"]["nullable"] is True
+        assert strategy_columns["ml_final_run_id"]["nullable"] is True
+        assert strategy_columns["ml_model_hash"]["nullable"] is True
         with engine.connect() as connection:
             state = connection.exec_driver_sql(
                 "SELECT automation_state FROM sm_strategy WHERE id = 1"
             ).scalar_one()
         assert state == "disabled"
         assert order_columns.keys() >= {"product", "position_ref"}
-        assert run_columns.keys() >= {"stop_requested_at", "stop_requested_reason"}
+        assert run_columns.keys() >= {
+            "stop_requested_at", "stop_requested_reason", "scalp_context",
+        }
+        assert run_columns["scalp_context"]["nullable"] is True
         assert order_columns["product"]["nullable"] is True
         assert order_columns["position_ref"]["nullable"] is True
         assert run_columns["stop_requested_at"]["nullable"] is True
@@ -205,6 +212,98 @@ def test_migration_preserves_existing_automation_state_on_repeated_runs(tmp_path
         engine.dispose()
 
 
+def test_existing_ml_strategy_identity_survives_explicit_upgrade(tmp_path):
+    engine = _legacy_strategy_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE sm_strategy ADD COLUMN ml_final_run_id INTEGER")
+            connection.exec_driver_sql("ALTER TABLE sm_strategy ADD COLUMN ml_model_hash VARCHAR(64)")
+            connection.exec_driver_sql("UPDATE sm_strategy SET ml_final_run_id = 42, "
+                                       "ml_model_hash = 'frozen-model-hash' WHERE id = 1")
+        assert migration.apply(engine)
+        assert migration.status(engine)
+        assert migration.apply(engine)
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT marker,ml_final_run_id,ml_model_hash FROM sm_strategy WHERE id=1"
+            ).one() == ("keep-strategy", 42, "frozen-model-hash")
+    finally:
+        engine.dispose()
+
+
+def test_existing_scalping_facts_survive_explicit_upgrade_and_rerun(tmp_path):
+    engine = _legacy_strategy_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE sm_strategy ADD COLUMN scalp_profile VARCHAR(20)"
+            )
+            connection.exec_driver_sql(
+                "ALTER TABLE sm_strategy_run ADD COLUMN scalp_context JSON"
+            )
+            connection.exec_driver_sql(
+                "UPDATE sm_strategy SET scalp_profile = 'conservative' WHERE id = 1"
+            )
+            connection.exec_driver_sql(
+                "UPDATE sm_strategy_run SET scalp_context = '{\"entry\":\"observed\"}' "
+                "WHERE id = 1"
+            )
+
+        assert migration.apply(engine)
+        first_schema = _schema_snapshot(engine)
+        assert migration.status(engine)
+        assert migration.apply(engine)
+        assert _schema_snapshot(engine) == first_schema
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT scalp_profile FROM sm_strategy WHERE id = 1"
+            ).scalar_one() == "conservative"
+            assert connection.exec_driver_sql(
+                "SELECT scalp_context FROM sm_strategy_run WHERE id = 1"
+            ).scalar_one() == '{"entry":"observed"}'
+    finally:
+        engine.dispose()
+
+
+def test_status_and_apply_repair_only_missing_scalping_columns(tmp_path, capsys):
+    engine = _legacy_strategy_engine(tmp_path)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE sm_strategy ADD COLUMN scalp_profile VARCHAR(20)")
+            connection.exec_driver_sql("ALTER TABLE sm_strategy_run ADD COLUMN scalp_context JSON")
+        assert migration.apply(engine)
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE sm_strategy DROP COLUMN scalp_profile")
+            connection.exec_driver_sql("ALTER TABLE sm_strategy_run DROP COLUMN scalp_context")
+            connection.exec_driver_sql(
+                "UPDATE sm_strategy SET ml_final_run_id = 42, "
+                "ml_model_hash = 'frozen-model-hash' WHERE id = 1"
+            )
+
+        before_schema = _schema_snapshot(engine)
+        assert migration.status(engine) is False
+        output = capsys.readouterr().out
+        assert "sm_strategy.scalp_profile" in output
+        assert "sm_strategy_run.scalp_context" in output
+        assert _schema_snapshot(engine) == before_schema
+
+        assert migration.apply(engine)
+        first_schema = _schema_snapshot(engine)
+        assert migration.status(engine)
+        assert migration.apply(engine)
+        assert _schema_snapshot(engine) == first_schema
+        with engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT marker, ml_final_run_id, ml_model_hash, scalp_profile "
+                "FROM sm_strategy WHERE id = 1"
+            ).one() == ("keep-strategy", 42, "frozen-model-hash", None)
+            assert connection.exec_driver_sql(
+                "SELECT strategy_id, scalp_context FROM sm_strategy_run WHERE id = 1"
+            ).one() == (1, None)
+    finally:
+        engine.dispose()
+
+
 def test_status_reports_changes_without_modifying_the_database(tmp_path, capsys):
     """Status is a read-only preview even on a populated prior release."""
     engine = _legacy_strategy_engine(tmp_path, "product_release")
@@ -216,6 +315,10 @@ def test_status_reports_changes_without_modifying_the_database(tmp_path, capsys)
 
         output = capsys.readouterr().out
         assert "sm_strategy_order.position_ref" in output
+        assert "sm_strategy.ml_final_run_id" in output
+        assert "sm_strategy.ml_model_hash" in output
+        assert "sm_strategy.scalp_profile" in output
+        assert "sm_strategy_run.scalp_context" in output
         assert "sm_strategy_run.stop_requested_at" in output
         assert "sm_strategy_run.stop_requested_reason" in output
         assert "ix_sm_order_run_leg_position" in output

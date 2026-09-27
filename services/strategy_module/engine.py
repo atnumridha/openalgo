@@ -326,7 +326,16 @@ def start_run(
         return StartResult(ok=False, error="No API key is configured for this user")
 
     scalp_context = None
-    if strategy.get("scalp_profile"):
+    if strategy.get("ml_final_run_id"):
+        from services.strategy_module import ml_forest, scalping
+
+        try:
+            scalp_context = ml_forest.prepare(strategy, user_id, api_key, mode)
+        except scalping.WaitingForSignal as exc:
+            return StartResult(ok=False, error=str(exc), waiting=True)
+        except ValueError as exc:
+            return StartResult(ok=False, error=str(exc))
+    elif strategy.get("scalp_profile"):
         from services.strategy_module import scalping
 
         try:
@@ -371,7 +380,15 @@ def start_run(
     if scalp_context:
         resolution_strategy = dict(strategy, legs=[dict(strategy["legs"][0],
             option_type=scalp_context["direction"])])
-    resolved, failures = _resolve_all_legs(resolution_strategy, api_key)
+    if strategy.get("ml_final_run_id"):
+        from services.strategy_module.ml_forest import resolved_leg
+
+        try:
+            resolved, failures = [resolved_leg(strategy, scalp_context)], []
+        except (ValueError, KeyError, TypeError) as exc:
+            return StartResult(ok=False, error=str(exc))
+    else:
+        resolved, failures = _resolve_all_legs(resolution_strategy, api_key)
     if failures:
         _emit(
             strategy_id,
@@ -385,7 +402,7 @@ def start_run(
         return StartResult(ok=False, error=failures[0]["error"], legs=failures)
     for leg in resolved:
         leg["position_ref"] = state.new_position_ref()
-    if scalp_context:
+    if scalp_context and not strategy.get("ml_final_run_id"):
         from services.flow_openalgo_client import FlowOpenAlgoClient
 
         client = FlowOpenAlgoClient(api_key)
@@ -469,8 +486,8 @@ def start_run(
             return StartResult(ok=False, error=loss_refusal)
 
         if scalp_context:
-            from services.strategy_module.scalping import IST
             from services.strategy_module.automation_control import require_automation_entry
+            from services.strategy_module.scalping import IST
 
             allowed, reason = require_automation_entry(strategy_id, user_id)
             if allowed:

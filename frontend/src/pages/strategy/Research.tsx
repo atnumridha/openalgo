@@ -6,14 +6,20 @@ import {
   getResearch,
   getResearchRun,
   getTradingRisk,
+  installFrozenMLRun,
   importResearchDataset,
   researchKeys,
   researchRunAction,
   resumeTradingRisk,
+  reviewRiskAllocation,
   saveRiskCosts,
 } from '@/api/trading-research'
-import QualificationPanel from '@/components/strategy/QualificationPanel'
 import DailyOptionsHistory from '@/components/strategy/DailyOptionsHistory'
+import QualificationPanel from '@/components/strategy/QualificationPanel'
+import {
+  ResearchMLResults,
+  ResearchSearchResults,
+} from '@/components/strategy/ResearchExperimentResults'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -39,9 +45,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import type {
   CostSchedule,
+  MLSettings,
   ResearchCandidateId,
   ResearchMetrics,
   ResearchRun,
+  ResearchRunKind,
   RiskAccount,
 } from '@/types/trading-research'
 
@@ -95,6 +103,13 @@ const kotakNseDraft = {
   stamp_buy_rate: '0.003',
   stt_sell_rate: '0.15',
   slippage_bps: '10',
+}
+
+const kindLabels: Record<ResearchRunKind, string> = {
+  development: 'Development',
+  optimization: 'Parameter search',
+  ml: 'RandomForest research',
+  final: 'Final holdout',
 }
 
 const parameterLabels: Record<string, string> = {
@@ -163,12 +178,20 @@ function Budget({
   const queryClient = useQueryClient()
   const [reason, setReason] = useState('')
   const [reconciled, setReconciled] = useState(false)
+  const [allocationReason, setAllocationReason] = useState('')
   const mode = name === 'Sandbox' ? 'sandbox' : 'live'
   const resumed = useMutation({
     mutationFn: resumeTradingRisk,
     onSuccess: () => {
       setReason('')
       setReconciled(false)
+      void queryClient.invalidateQueries({ queryKey: researchKeys.risk })
+    },
+  })
+  const allocation = useMutation({
+    mutationFn: reviewRiskAllocation,
+    onSuccess: () => {
+      setAllocationReason('')
       void queryClient.invalidateQueries({ queryKey: researchKeys.risk })
     },
   })
@@ -187,6 +210,7 @@ function Budget({
         </Badge>
       </div>
       <dl className="grid grid-cols-2 gap-4">
+        <Metric label="Reviewed capital allocation" value={money(account?.capital)} />
         <Metric label="First filled trade remaining" value={money(account?.first_remaining)} />
         <Metric label="All later trades remaining" value={money(account?.later_remaining)} />
         <Metric label="Daily remaining" value={money(account?.daily_remaining)} />
@@ -200,6 +224,20 @@ function Budget({
           ? `Session ${account.session_day} · Peak equity ${money(account.peak_equity)}`
           : 'No risk ledger evidence is available for this mode yet.'}
       </p>
+      {enabled && account && account.capital !== 25000 && (
+        <div className="space-y-3 border-t pt-4">
+          <p className="text-sm">Frozen ML research uses a ₹25,000 allocation. Review any additional funding before enabling its Flow.</p>
+          <Label htmlFor={`allocation-reason-${mode}`}>Allocation review reason</Label>
+          <Textarea id={`allocation-reason-${mode}`} value={allocationReason}
+            onChange={(event) => setAllocationReason(event.target.value)} />
+          <Button variant="outline" size="sm"
+            disabled={allocationReason.trim().length < 3 || allocation.isPending}
+            onClick={() => allocation.mutate({ mode, capital: 25000, reason: allocationReason.trim() })}>
+            {allocation.isPending ? 'Recording allocation…' : 'Review ₹25,000 allocation'}
+          </Button>
+          {allocation.error && <p role="alert" className="text-sm text-destructive">{allocation.error.message}</p>}
+        </div>
+      )}
       {enabled && account?.paused && (
         <div className="space-y-3 border-t pt-4">
           <h4 className="text-sm font-medium">Reconcile before resuming</h4>
@@ -265,6 +303,7 @@ function Metrics({ metrics }: { metrics: ResearchMetrics }) {
         </p>
       )}
       <dl className="grid grid-cols-2 gap-5 md:grid-cols-4">
+        <Metric label="Research capital" value={money(metrics.initial_capital ?? 10000)} />
         <Metric label="Net P&L" value={money(metrics.net_pnl)} />
         <Metric label="Net expectancy / trade" value={money(metrics.expectancy)} />
         <Metric
@@ -297,9 +336,19 @@ export default function Research() {
   const [csvProvider, setCsvProvider] = useState('')
   const [datasetId, setDatasetId] = useState('')
   const [candidateId, setCandidateId] = useState<ResearchCandidateId>('trend_breakout')
+  const [runKind, setRunKind] = useState<'development' | 'optimization' | 'ml'>('development')
+  const [gridValues, setGridValues] = useState<Record<string, string>>({})
+  const [mlSettings, setMlSettings] = useState<MLSettings>({
+    folds: 3,
+    min_train_sessions: 10,
+    estimators: 200,
+    threshold: 0.5,
+    max_hold_minutes: 15,
+  })
   const [parameters, setParameters] = useState<Record<string, string>>({})
   const [costEdits, setCostEdits] = useState<Record<string, string>>({})
   const [seed, setSeed] = useState('42')
+  const [capital, setCapital] = useState('25000')
   const [selectedRun, setSelectedRun] = useState<number | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [finalOpen, setFinalOpen] = useState(false)
@@ -324,7 +373,12 @@ export default function Research() {
   const candidate = overview.data?.candidates.find((item) => item.id === candidateId)
   const selectedDataset = overview.data?.datasets.find((item) => item.id === Number(datasetId))
   const currentRun = detail.data
-  const report = currentRun?.report
+  const rawReport = currentRun?.report
+  const searchReport = rawReport && 'best_report' in rawReport ? rawReport : undefined
+  const report = rawReport && 'best_report' in rawReport ? rawReport.best_report : rawReport
+  const gridCount = Object.values(gridValues)
+    .filter((value) => value.trim())
+    .reduce((count, value) => count * value.split(',').length, 1)
   const csv = file?.name.toLowerCase().endsWith('.csv')
   const workerOnline = overview.data?.worker.online === true
   const refresh = () => {
@@ -430,13 +484,24 @@ export default function Research() {
     },
   })
   const action = useMutation({
-    mutationFn: ({ id, verb }: { id: number; verb: 'freeze' | 'cancel' | 'final-test' }) =>
-      researchRunAction(id, verb),
+    mutationFn: ({
+      id,
+      verb,
+    }: {
+      id: number
+      verb: 'freeze' | 'cancel' | 'final-test' | 'promote'
+    }) => researchRunAction(id, verb),
     onSuccess: (run) => {
       setSelectedRun(run.id)
       setFinalOpen(false)
       setFinalConfirmed(false)
       void queryClient.invalidateQueries({ queryKey: researchKeys.run(run.id) })
+      refresh()
+    },
+  })
+  const installML = useMutation({
+    mutationFn: installFrozenMLRun,
+    onSuccess: () => {
       refresh()
     },
   })
@@ -456,12 +521,40 @@ export default function Research() {
       }
       if (!seed.trim() || !Number.isSafeInteger(Number(seed)) || Number(seed) < 0)
         throw new Error('The reproducibility seed must be a non-negative whole number.')
+      if (
+        !capital.trim() ||
+        !Number.isSafeInteger(Number(capital)) ||
+        Number(capital) < 1 ||
+        Number(capital) > 1000000000
+      )
+        throw new Error(
+          'Enter research capital as a whole rupee amount between 1 and 1,000,000,000.'
+        )
+      const parameterGrid: Record<string, number[]> = {}
+      if (runKind === 'optimization') {
+        for (const [key, text] of Object.entries(gridValues)) {
+          if (!text.trim()) continue
+          const values = text.split(',').map((value) => {
+            if (!value.trim() || !Number.isFinite(Number(value)))
+              throw new Error('Enter comma-separated numbers for comparison.')
+            return percentParameters.has(key) ? Number(value) / 100 : Number(value)
+          })
+          if (new Set(values).size !== values.length)
+            throw new Error('Comparison values must be unique.')
+          parameterGrid[key] = values
+        }
+        if (!Object.keys(parameterGrid).length || gridCount > 256)
+          throw new Error('Choose between 1 and 256 parameter combinations.')
+      }
       created.mutate({
+        ...(runKind === 'optimization' ? { run_kind: runKind, parameter_grid: parameterGrid } : {}),
+        ...(runKind === 'ml' ? { run_kind: runKind, ml_settings: mlSettings } : {}),
         dataset_id: Number(datasetId),
         candidate: candidateId,
         parameters: parsedParameters,
         costs: readCosts(),
         seed: Number(seed),
+        capital: Number(capital),
       })
     } catch (error) {
       setFormError((error as Error).message)
@@ -546,8 +639,9 @@ export default function Research() {
           </p>
         )}
         {risk.data && (
-          <dl className="grid grid-cols-2 gap-4 border-t pt-4 lg:grid-cols-4">
-            <Metric label="Allocated capital" value={money(risk.data.policy.capital)} />
+          <dl className="grid grid-cols-2 gap-4 border-t pt-4 lg:grid-cols-5">
+            <Metric label="Sandbox allocation" value={money(risk.data.accounts.sandbox?.capital)} />
+            <Metric label="Live allocation" value={money(risk.data.accounts.live?.capital)} />
             <Metric
               label="First trade: planned loss limit"
               value={money(risk.data.policy.first_trade_limit)}
@@ -715,7 +809,7 @@ export default function Research() {
                 <p id="capital-profile-effect" className="text-sm text-muted-foreground">
                   {risk.data?.enabled
                     ? 'Updating costs keeps this capital profile enabled.'
-                    : `Saving costs enables the shared ${money(risk.data?.policy.capital)} long-options capital profile.`}{' '}
+                    : `Saving costs enables the shared long-options capital profile. Each mode starts at ${money(risk.data?.policy.capital)} until its allocation is reviewed.`}{' '}
                   It applies to your managed Strategy Module entries, restricts them to supported
                   long-option trades, and requires release qualification for new managed live
                   entries. Running a research test alone does not enable the profile.
@@ -950,13 +1044,109 @@ export default function Research() {
               </CardHeader>
               <CardContent className="space-y-5">
                 <div className="space-y-2">
+                  <Label htmlFor="research-capital">Research capital (₹)</Label>
+                  <Input
+                    id="research-capital"
+                    type="number"
+                    min="1"
+                    max="1000000000"
+                    step="1"
+                    value={capital}
+                    onChange={(event) => setCapital(event.target.value)}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    New experiments start at ₹25,000. This amount sets whole-lot affordability and
+                    the 20% portfolio drawdown limit; the first and later trade risk limits remain
+                    ₹1,000 each, with a ₹2,000 daily limit and 20% cash buffer. Planned risk is not
+                    a guarantee of realized loss.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="research-kind">Test type</Label>
+                  <select
+                    id="research-kind"
+                    className={selectClass}
+                    value={runKind}
+                    onChange={(event) => {
+                      const kind = event.target.value as typeof runKind
+                      setRunKind(kind)
+                      setGridValues({})
+                      if (kind === 'ml') {
+                        setCandidateId('trend_breakout_filtered')
+                        setParameters({})
+                      }
+                    }}
+                  >
+                    <option value="development">Test one rule set</option>
+                    <option value="optimization">Compare parameter values</option>
+                    <option value="ml">Train a RandomForest model</option>
+                  </select>
+                  {runKind === 'optimization' && (
+                    <p className="text-sm text-muted-foreground">
+                      Enter values to compare below; leave a comparison blank to keep its fixed
+                      value. Ranking uses development net profit after costs, then drawdown. The
+                      final 60 sessions stay sealed.
+                    </p>
+                  )}
+                  {runKind === 'ml' && (
+                    <div className="space-y-3 rounded-lg border p-3">
+                      <p className="text-sm">
+                        Research only: predicts whether an eligible option trade will be profitable
+                        after costs. Uses chronological training folds, then a later evaluation
+                        period. This does not enable ML trading.
+                      </p>
+                      {!overview.data?.capabilities?.ml.available && (
+                        <p role="alert" className="text-sm">
+                          {overview.data?.capabilities?.ml.reason ??
+                            'ML availability is not confirmed. Refresh after installing the research dependencies on the server.'}
+                        </p>
+                      )}
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {(
+                          [
+                            ['folds', 'Chronological folds', 2, 10, 1],
+                            ['min_train_sessions', 'Minimum training sessions', 10, 10000, 1],
+                            ['estimators', 'Trees', 50, 500, 1],
+                            ['threshold', 'Minimum predicted probability', 0, 1, 0.05],
+                            ['max_hold_minutes', 'Maximum holding time (minutes)', 5, 15, 5],
+                          ] as const
+                        ).map(([key, label, min, max, step]) => (
+                          <div key={key}>
+                            <Label htmlFor={`ml-${key}`}>{label}</Label>
+                            <Input
+                              id={`ml-${key}`}
+                              type="number"
+                              min={min}
+                              max={max}
+                              step={step}
+                              value={mlSettings[key]}
+                              onChange={(event) =>
+                                setMlSettings((previous) => ({
+                                  ...previous,
+                                  [key]: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Requires one-minute option history with tick sizes. Uses the filtered
+                        execution rules, a volatility-aware 10% stop and a 2R target. Labels and
+                        replay exits share the selected 5, 10 or 15-minute limit. Training balances
+                        sessions and reduces the weight of overlapping trades.
+                      </p>
+                    </div>
+                  )}
                   <Label htmlFor="research-candidate">Candidate rules</Label>
                   <select
                     id="research-candidate"
+                    disabled={runKind === 'ml'}
                     value={candidateId}
                     onChange={(event) => {
                       setCandidateId(event.target.value as ResearchCandidateId)
                       setParameters({})
+                      setGridValues({})
                     }}
                     className={selectClass}
                   >
@@ -966,8 +1156,10 @@ export default function Research() {
                       </option>
                     ))}
                   </select>
-                  <p className="text-sm text-muted-foreground">{candidate?.description}</p>
-                  {candidateId === 'trend_breakout_filtered' && (
+                  {runKind !== 'ml' && (
+                    <p className="text-sm text-muted-foreground">{candidate?.description}</p>
+                  )}
+                  {runKind !== 'ml' && candidateId === 'trend_breakout_filtered' && (
                     <p className="text-sm text-muted-foreground">
                       Uses 8/21-bar prior trend, 1–7 days to expiry, observed liquidity and
                       whole-lot affordability. Maximum 3 entries per day, with 15 minutes between an
@@ -980,6 +1172,7 @@ export default function Research() {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {Object.entries(candidate?.defaults ?? {})
+                    .filter(() => runKind !== 'ml')
                     .filter(
                       ([key]) =>
                         candidateId === 'vwap_pullback' ||
@@ -990,6 +1183,7 @@ export default function Research() {
                         <Label htmlFor={`parameter-${key}`}>{parameterLabels[key] ?? key}</Label>
                         <Input
                           id={`parameter-${key}`}
+                          disabled={runKind === 'ml'}
                           type="number"
                           step="any"
                           value={
@@ -1003,6 +1197,24 @@ export default function Research() {
                             }))
                           }
                         />
+                        {runKind === 'optimization' && (
+                          <>
+                            <Label htmlFor={`grid-${key}`}>
+                              {parameterLabels[key] ?? key} — values to compare
+                            </Label>
+                            <Input
+                              id={`grid-${key}`}
+                              placeholder="e.g. 10, 15, 20"
+                              value={gridValues[key] ?? ''}
+                              onChange={(event) =>
+                                setGridValues((previous) => ({
+                                  ...previous,
+                                  [key]: event.target.value,
+                                }))
+                              }
+                            />
+                          </>
+                        )}
                       </div>
                     ))}
                   <details className="space-y-2">
@@ -1018,6 +1230,9 @@ export default function Research() {
                     />
                   </details>
                 </div>
+                {runKind === 'optimization' && (
+                  <p className="text-sm">{gridCount} combinations · maximum 256</p>
+                )}
                 <p className="text-sm text-muted-foreground">
                   This test uses the costs from step 1.{' '}
                   <button
@@ -1030,9 +1245,10 @@ export default function Research() {
                 </p>
                 <div className="border-t pt-4 space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Development tests cannot view the final 60 sessions. Freeze a completed version
-                    before consuming that holdout once. Historical returns do not establish future
-                    profitability.
+                    {runKind === 'ml'
+                      ? 'The final 60 sessions stay sealed. Freeze the fitted JSON model, then score the final sessions once without refitting. Installation and forward trading require separate reviews.'
+                      : 'Development tests cannot view the final 60 sessions. Freeze a completed version before consuming that holdout once.'}{' '}
+                    Historical returns do not establish future profitability.
                   </p>
                   {!workerOnline && !overview.isPending && (
                     <p className="text-sm text-muted-foreground">
@@ -1041,10 +1257,23 @@ export default function Research() {
                     </p>
                   )}
                   <Button
-                    disabled={!workerOnline || !datasetId || !candidate || created.isPending}
+                    disabled={
+                      !workerOnline ||
+                      !datasetId ||
+                      !candidate ||
+                      created.isPending ||
+                      (runKind === 'optimization' && gridCount > 256) ||
+                      (runKind === 'ml' && !overview.data?.capabilities?.ml.available)
+                    }
                     onClick={submitRun}
                   >
-                    {created.isPending ? 'Queuing…' : 'Run development test'}
+                    {created.isPending
+                      ? 'Queuing…'
+                      : runKind === 'optimization'
+                        ? 'Compare parameters'
+                        : runKind === 'ml'
+                          ? 'Train and evaluate ML'
+                          : 'Run development test'}
                   </Button>
                   {(formError || created.error) && (
                     <p role="alert" className="text-sm text-destructive">
@@ -1086,9 +1315,7 @@ export default function Research() {
                             {overview.data.candidates.find((item) => item.id === run.candidate)
                               ?.name ?? run.candidate}
                           </TableCell>
-                          <TableCell>
-                            {run.kind === 'final' ? 'Final holdout' : 'Development'}
-                          </TableCell>
+                          <TableCell>{kindLabels[run.kind]}</TableCell>
                           <TableCell>
                             <Badge variant={run.status === 'failed' ? 'destructive' : 'outline'}>
                               {run.status}
@@ -1132,8 +1359,7 @@ export default function Research() {
                   <div className="flex flex-wrap justify-between gap-3">
                     <div>
                       <h3 className="font-semibold">
-                        Run #{currentRun.id} ·{' '}
-                        {currentRun.kind === 'final' ? 'Final holdout' : 'Development'}
+                        Run #{currentRun.id} · {kindLabels[currentRun.kind]}
                       </h3>
                       <p className="mt-1 text-xs font-mono break-all text-muted-foreground">
                         {currentRun.configuration_hash}
@@ -1150,7 +1376,16 @@ export default function Research() {
                           Cancel run
                         </Button>
                       )}
-                      {currentRun.kind === 'development' &&
+                      {currentRun.kind === 'optimization' && currentRun.status === 'completed' && (
+                        <Button
+                          size="sm"
+                          disabled={!workerOnline || action.isPending}
+                          onClick={() => action.mutate({ id: currentRun.id, verb: 'promote' })}
+                        >
+                          Test selected parameters
+                        </Button>
+                      )}
+                      {(currentRun.kind === 'development' || currentRun.kind === 'ml') &&
                         currentRun.status === 'completed' &&
                         !currentRun.frozen_at && (
                           <Button
@@ -1162,7 +1397,7 @@ export default function Research() {
                             Freeze this version
                           </Button>
                         )}
-                      {currentRun.kind === 'development' && currentRun.frozen_at && (
+                      {(currentRun.kind === 'development' || currentRun.kind === 'ml') && currentRun.frozen_at && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1181,6 +1416,12 @@ export default function Research() {
                           Run final holdout once
                         </Button>
                       )}
+                      {currentRun.kind === 'final' && currentRun.status === 'completed' && report?.ml && (
+                        <Button size="sm" variant="outline" disabled={installML.isPending}
+                          onClick={() => installML.mutate(currentRun.id)}>
+                          {installML.isPending ? 'Installing…' : 'Install stopped ML strategy and Flow'}
+                        </Button>
+                      )}
                     </div>
                   </div>
                   {currentRun.error && (
@@ -1193,14 +1434,60 @@ export default function Research() {
                       {action.error.message}
                     </p>
                   )}
+                  {installML.error && <p role="alert" className="text-sm text-destructive">{installML.error.message}</p>}
+                  {installML.data && <p role="status" className="text-sm">Strategy #{installML.data.strategy_id} and Flow #{installML.data.workflow_id} are linked. Review their current state before Sandbox enrollment.</p>}
+                  {searchReport && <ResearchSearchResults report={searchReport} />}
+                  {report?.ml && <ResearchMLResults report={report.ml} />}
                   {report ? (
                     <>
                       <h4 className="font-medium">
                         {currentRun.kind === 'final'
                           ? 'Final holdout evidence'
-                          : 'Development training evidence'}
+                          : currentRun.kind === 'ml'
+                            ? 'ML evaluation after training'
+                            : searchReport
+                              ? 'Selected candidate training evidence'
+                              : 'Development training evidence'}
                       </h4>
                       <Metrics metrics={report.metrics} />
+                      {report.session_analytics && (
+                        <details className="space-y-2">
+                          <summary className="cursor-pointer text-sm">
+                            Session risk and return metrics
+                          </summary>
+                          <p className="text-xs text-muted-foreground">
+                            {report.session_analytics.convention}
+                          </p>
+                          <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <Metric
+                              label="Annualized return"
+                              value={number(
+                                report.session_analytics.metrics.cagr == null
+                                  ? null
+                                  : report.session_analytics.metrics.cagr * 100,
+                                '%'
+                              )}
+                            />
+                            <Metric
+                              label="Annualized volatility"
+                              value={number(
+                                report.session_analytics.metrics.volatility == null
+                                  ? null
+                                  : report.session_analytics.metrics.volatility * 100,
+                                '%'
+                              )}
+                            />
+                            <Metric
+                              label="Sharpe"
+                              value={number(report.session_analytics.metrics.sharpe)}
+                            />
+                            <Metric
+                              label="Sortino"
+                              value={number(report.session_analytics.metrics.sortino)}
+                            />
+                          </dl>
+                        </details>
+                      )}
                       <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
                         <h4 className="font-medium">Qualification: research only</h4>
                         <ul className="list-disc pl-5 text-sm text-muted-foreground">
@@ -1209,7 +1496,7 @@ export default function Research() {
                           ))}
                         </ul>
                       </div>
-                      {report.oos && (
+                      {report.oos && currentRun.kind !== 'ml' && (
                         <div className="space-y-3 border-t pt-4">
                           <h4 className="font-medium">Development out-of-sample evidence</h4>
                           <Metrics metrics={report.oos.metrics} />
@@ -1251,7 +1538,7 @@ export default function Research() {
                         <div className="space-y-3">
                           <h4 className="font-medium">Evaluation split</h4>
                           <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                            {currentRun.kind === 'development' ? (
+                            {currentRun.kind !== 'final' ? (
                               <>
                                 <Metric
                                   label="Training sessions"
@@ -1313,6 +1600,36 @@ export default function Research() {
                             </p>
                             <dl className="grid grid-cols-2 gap-4">
                               <Metric label="Seed" value={String(currentRun.configuration.seed)} />
+                              <Metric
+                                label="Research capital"
+                                value={money(currentRun.configuration.capital ?? 10000)}
+                              />
+                              {currentRun.configuration.ml_settings && (
+                                <>
+                                  <Metric
+                                    label="ML maximum holding time"
+                                    value={`${currentRun.configuration.ml_settings.max_hold_minutes ?? 'Legacy session close'} minutes`}
+                                  />
+                                  <Metric
+                                    label="ML trees"
+                                    value={String(currentRun.configuration.ml_settings.estimators)}
+                                  />
+                                  <Metric
+                                    label="ML probability threshold"
+                                    value={String(currentRun.configuration.ml_settings.threshold)}
+                                  />
+                                  <Metric
+                                    label="ML chronological folds"
+                                    value={String(currentRun.configuration.ml_settings.folds)}
+                                  />
+                                  <Metric
+                                    label="ML minimum training sessions"
+                                    value={String(
+                                      currentRun.configuration.ml_settings.min_train_sessions
+                                    )}
+                                  />
+                                </>
+                              )}
                               {Object.entries(currentRun.configuration.parameters).map(
                                 ([key, value]) => (
                                   <Metric

@@ -102,6 +102,49 @@ def test_binding_excludes_graph_secrets_from_returned_context(monkeypatch):
         context.current_binding("alice", 1)
 
 
+def test_non_ml_campaign_binding_stales_after_allocation_round_trip(tmp_path, monkeypatch):
+    from database import trading_risk_db as ledger
+    from database.engine_factory import create_db_engine
+    from services.research import qualification
+    from services.research import qualification_context as context
+
+    engine = create_db_engine(f"sqlite:///{tmp_path / 'risk-binding.db'}")
+    monkeypatch.setattr(ledger, "engine", engine)
+    ledger.init_db()
+    monkeypatch.setattr(context, "_source_hash", lambda: "source-v1")
+    monkeypatch.setattr(context, "_read_strategy", lambda *_: {
+        "id": 1, "broker_connection_id": "account", "legs": [{"sl_pts": 10}],
+        "strategy_kind": "batch"})
+    monkeypatch.setattr(context, "_read_workflows", lambda *_: [workflow()])
+    monkeypatch.setattr(context, "_broker_identity", lambda *_: {
+        "broker": "kotak", "broker_connection_id": "account", "broker_epoch": "epoch"})
+    monkeypatch.setattr(context, "_risk_context", lambda *_: {
+        "costs": {"schedule_id": "v1"}, "paused": False,
+        "sandbox_capital": ledger.status("alice", "sandbox", "2026-01-02")["capital"],
+        "live_capital": ledger.status("alice", "live", "2026-01-02")["capital"],
+        "sandbox_allocation_revision": ledger.status("alice", "sandbox", "2026-01-02")["allocation_revision"],
+        "live_allocation_revision": ledger.status("alice", "live", "2026-01-02")["allocation_revision"],
+    })
+    first = context.current_binding("alice", 1)
+    assert first["sandbox_capital"] == 10000 and first["sandbox_allocation_revision"] == 0
+    ledger.review_allocation("alice", "sandbox", 25000, "Reviewed new funding", "2026-01-02")
+    raised = context.current_binding("alice", 1)
+    assert raised["binding_hash"] != first["binding_hash"]
+    ledger.review_allocation("alice", "sandbox", 10000, "Reviewed returned funding", "2026-01-02")
+    restored = context.current_binding("alice", 1)
+    assert restored["sandbox_capital"] == first["sandbox_capital"]
+    assert restored["sandbox_allocation_revision"] == 2
+    assert restored["binding_hash"] != first["binding_hash"]
+    monkeypatch.setattr(qualification, "evaluate_campaign", lambda *_a, **kw: {
+        "binding_current": kw["binding_current"]})
+    campaign = {"strategy_id": 1, "binding_hash": first["binding_hash"],
+                "status": "active", "final_run": {}, "final_run_id": 8,
+                "trades": [], "max_drawdown_pct": 0, "marks_complete": True,
+                "risk_breach": False, "source_current": True}
+    assert qualification._present("alice", campaign, binding=restored)["qualification"]["binding_current"] is False
+    engine.dispose()
+
+
 def test_entry_release_check_cannot_be_skipped_but_exit_is_unblocked(monkeypatch):
     from services.research import qualification_execution as execution
 

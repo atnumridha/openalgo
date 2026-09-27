@@ -24,13 +24,20 @@ def metadata():
 
 
 def status(engine):
+    metas = metadata()
     existing = set(inspect(engine).get_table_names())
-    return all(name in existing for meta in metadata() for name in meta.tables)
+    from database.trading_risk_db import allocation_revision_missing
+
+    return (all(name in existing for meta in metas for name in meta.tables)
+            and not allocation_revision_missing(engine))
 
 
 def apply(engine):
     for meta in metadata():
         meta.create_all(engine, checkfirst=True)
+    from database.trading_risk_db import ensure_allocation_revision
+
+    ensure_allocation_revision(engine)
     return status(engine)
 
 

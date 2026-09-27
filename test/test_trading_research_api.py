@@ -64,6 +64,53 @@ def test_api_queue_returns_offline_state_then_owner_scoped_run(api):
     assert client.post(f"/strategy/api/research/runs/{run_id}/cancel").status_code == 404
 
 
+def test_api_optimization_creation_result_and_owner_scoped_promotion(api):
+    from services.research import jobs
+
+    client, store = api
+    login(client)
+    dataset_id = client.post("/strategy/api/research/datasets", json=payload(80)).json["data"]["id"]
+    response = client.post(
+        "/strategy/api/research/runs",
+        json={
+            "dataset_id": dataset_id,
+            "candidate": "trend_breakout",
+            "costs": fees(),
+            "run_kind": "optimization",
+            "parameter_grid": {"lookback": [2, 3]},
+        },
+    )
+    assert response.status_code == 202
+    run = response.json["data"]
+    assert run["kind"] == "optimization"
+    store.acquire_worker("worker")
+    jobs.process_job(store, "worker", store.claim_job("worker"))
+    result = client.get(f"/strategy/api/research/runs/{run['id']}").json["data"]
+    assert result["report"]["candidate_count"] == 2
+    assert client.post(f"/strategy/api/research/runs/{run['id']}/freeze").status_code == 400
+    login(client, "bob")
+    assert client.post(f"/strategy/api/research/runs/{run['id']}/promote").status_code == 404
+    login(client)
+    promoted = client.post(f"/strategy/api/research/runs/{run['id']}/promote")
+    assert promoted.status_code == 202
+    assert promoted.json["data"]["parent_run_id"] == run["id"]
+    assert promoted.json["data"]["kind"] == "development"
+
+
+def test_api_ml_capabilities_and_unavailable_dependency(api, monkeypatch):
+    client, store = api
+    login(client)
+    monkeypatch.setattr(
+        trading_research.jobs,
+        "ml_dependencies",
+        lambda: {"available": False, "reason": "Install research dependencies"},
+    )
+    result = client.get("/strategy/api/research").json["data"]
+    assert result["capabilities"]["ml"]["available"] is False
+    assert result["capabilities"]["ml_live"] is True  # JSON inference does not require training dependencies.
+    assert result["capabilities"]["optimization_max_candidates"] == 256
+
+
 def test_bad_json_and_excess_request_body_fail_before_work(api, monkeypatch):
     client, store = api
     login(client)

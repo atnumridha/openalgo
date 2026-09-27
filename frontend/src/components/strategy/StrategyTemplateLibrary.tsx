@@ -26,7 +26,7 @@ export function StrategyTemplateLibrary() {
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold">
         <span>Available templates</span>
         <span className="flex items-center gap-2 text-sm font-normal text-muted-foreground">
-          Earlier strategies · optional
+          Research and earlier strategies · optional
           <ChevronDown aria-hidden="true" className="size-4 transition-transform group-open:rotate-180" />
         </span>
       </summary>

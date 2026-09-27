@@ -174,10 +174,12 @@ def _risk_context(owner):
         raise ValueError("Enable the capital profile with a verified cost schedule first")
     costs = validate_cost_schedule(ledger.get_costs(owner))
     validate_cost_dates(costs, [trading_day()])
-    paused = any(
-        ledger.status(owner, mode, trading_day())["paused"] for mode in ("sandbox", "live")
-    )
-    return {"costs": costs, "paused": paused}
+    sandbox = ledger.status(owner, "sandbox", trading_day())
+    live = ledger.status(owner, "live", trading_day())
+    return {"costs": costs, "paused": sandbox["paused"] or live["paused"],
+            "sandbox_capital": float(sandbox["capital"]), "live_capital": float(live["capital"]),
+            "sandbox_allocation_revision": int(sandbox["allocation_revision"]),
+            "live_allocation_revision": int(live["allocation_revision"])}
 
 
 def _source_hash():
@@ -242,9 +244,32 @@ def current_binding(owner, strategy_id, strategy_config=None, costs=None):
         "workflow_hash": workflow_digest(workflows),
         "source_hash": _source_hash(),
         "cost_hash": digest(risk["costs"]),
+        "sandbox_capital": float(risk["sandbox_capital"]) if risk.get("sandbox_capital") is not None else None,
+        "live_capital": float(risk["live_capital"]) if risk.get("live_capital") is not None else None,
+        "sandbox_allocation_revision": risk.get("sandbox_allocation_revision"),
+        "live_allocation_revision": risk.get("live_allocation_revision"),
         "risk_policy_version": BudgetPolicy().version,
         **{key: value for key, value in broker.items() if key != "broker_epoch"},
     }
+    if strategy.get("ml_final_run_id"):
+        from database.trading_research_db import get_store as research_store
+        from services.research.costs import execution_economics
+        from services.research.jobs import historical_ml_reason
+
+        final = research_store().get_run(owner, strategy["ml_final_run_id"])
+        parent = research_store().get_run(owner, final["parent_run_id"]) if final and final.get("parent_run_id") else None
+        reason = historical_ml_reason(final or {}, parent or {})
+        if reason:
+            raise ValueError(reason)
+        model_hash = final["report"]["ml"]["model_hash"]
+        if model_hash != strategy.get("ml_model_hash"):
+            raise ValueError("Saved strategy ML model differs from the frozen final evidence")
+        if execution_economics(final["configuration"]["costs"]) != execution_economics(risk["costs"]):
+            raise ValueError("Current execution rates differ from frozen ML research")
+        if final["configuration"].get("capital") != 25000 or risk["sandbox_capital"] != 25000 or risk["live_capital"] != 25000:
+            raise ValueError("Review ₹25,000 Sandbox and live allocations before ML qualification")
+        binding.update(ml_final_run_id=final["id"], ml_model_hash=model_hash,
+                       ml_configuration_hash=final["configuration_hash"])
     from services.research.qualification_execution import current_flow_origin
 
     origin = current_flow_origin()

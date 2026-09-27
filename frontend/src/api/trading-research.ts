@@ -36,9 +36,19 @@ export async function getResearchRun(id: number): Promise<ResearchRun> {
 
 export async function researchRunAction(
   id: number,
-  action: 'cancel' | 'freeze' | 'final-test'
+  action: 'cancel' | 'freeze' | 'final-test' | 'promote'
 ): Promise<ResearchRun> {
   return (await webClient.post<{ data: ResearchRun }>(`${BASE}/runs/${id}/${action}`, {})).data.data
+}
+
+export async function installFrozenMLRun(id: number): Promise<{
+  strategy_id: number
+  workflow_id: number
+  model_hash: string
+}> {
+  return (await webClient.post<{ data: { strategy_id: number; workflow_id: number; model_hash: string } }>(
+    `${BASE}/runs/${id}/install-ml`, {}
+  )).data.data
 }
 
 export async function getTradingRisk(): Promise<TradingRisk> {
@@ -47,6 +57,14 @@ export async function getTradingRisk(): Promise<TradingRisk> {
 
 export async function saveRiskCosts(costs: CostSchedule): Promise<unknown> {
   return (await webClient.put('/strategy/api/risk/costs', costs)).data.data
+}
+
+export async function reviewRiskAllocation(payload: {
+  mode: 'sandbox' | 'live'
+  capital: 25000
+  reason: string
+}): Promise<unknown> {
+  return (await webClient.post('/strategy/api/risk/allocation', payload)).data.data
 }
 
 export async function resumeTradingRisk(payload: {

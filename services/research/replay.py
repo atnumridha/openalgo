@@ -5,6 +5,7 @@ from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
+from services.research.analytics import session_analytics
 from services.research.costs import (
     decimal_value,
     order_cost,
@@ -13,6 +14,7 @@ from services.research.costs import (
 )
 from services.research.dataset import digest
 from services.risk import BreachReason, PositionRisk, evaluate_position
+from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
 from services.risk.budget import BudgetPolicy, BudgetTrade, budget_snapshot, evaluate_budget
 
 DEFAULTS = {
@@ -65,7 +67,16 @@ class Cancelled(Exception):
     pass
 
 
-def validate_configuration(data, candidate, parameters, costs, seed=42):
+def research_capital(config):
+    """Legacy stored configurations predate the explicit capital input."""
+    value = config.get("capital", 10000)
+    amount = decimal_value(value, "capital", minimum=1, maximum=1000000000)
+    if amount != amount.to_integral_value():
+        raise ValueError("capital must be a whole rupee amount")
+    return amount
+
+
+def validate_configuration(data, candidate, parameters, costs, seed=42, *, capital=10000):
     if candidate not in {c["id"] for c in CANDIDATES}:
         raise ValueError("Select a supported deterministic candidate")
     if not isinstance(parameters, dict) or set(parameters) - set(DEFAULTS):
@@ -85,6 +96,7 @@ def validate_configuration(data, candidate, parameters, costs, seed=42):
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
         raise ValueError("seed must be a whole number between 0 and 4294967295")
     schedule = validate_cost_schedule(costs)
+    validated_capital = research_capital({"capital": capital})
     if candidate == "trend_breakout_filtered":
         if data["metadata"].get("execution_bar_minutes", data["metadata"]["bar_minutes"]) != 1:
             raise ValueError("Filtered breakout requires one-minute option execution bars")
@@ -128,6 +140,7 @@ def validate_configuration(data, candidate, parameters, costs, seed=42):
         "seed": seed,
         "engine_version": ENGINE_VERSION,
         "dataset_hash": data["content_hash"],
+        "capital": int(validated_capital),
         **({"filters": dict(FILTER_RULES)} if candidate == "trend_breakout_filtered" else {}),
     }
 
@@ -324,6 +337,14 @@ def run_replay(
     data, config, sessions=None, check_cancel=None, stress=False, *, research_signals=None
 ):
     """One serial portfolio; long options only. Never synthesizes option bars."""
+    max_hold_minutes = config.get("max_hold_minutes")
+    if max_hold_minutes is not None and (
+        type(max_hold_minutes) is not int or max_hold_minutes not in (5, 10, 15)
+    ):
+        raise ValueError("Research holding time must be 5, 10 or 15 minutes")
+    risk_recipe = config.get("risk_recipe")
+    if risk_recipe is not None and (risk_recipe != ML_RISK_RECIPE or config["candidate"] != "trend_breakout_filtered"):
+        raise ValueError("Unsupported ML admission risk recipe")
     if research_signals is None and "research_signal_hash" in config:
         raise ValueError("The recorded research signal schedule is required")
     if research_signals is not None:
@@ -372,8 +393,9 @@ def run_replay(
     option_history = defaultdict(lambda: deque(maxlen=FILTER_RULES["atr_bars"] + 1))
     last_exit = None
     daily_entries = 0
-    policy, ledger = BudgetPolicy(), []
-    equity = peak = Decimal("10000")
+    initial_capital = research_capital(config)
+    policy, ledger = BudgetPolicy(capital=initial_capital), []
+    equity = peak = initial_capital
     history, trades, rejections = [], [], Counter()
     underlying_session_complete = True
     active = pending = None
@@ -449,12 +471,16 @@ def run_replay(
                     lots = (low_lots + high_lots) // 2
                     units = lot_units * lots
                     entry_fees = order_cost(Decimal(str(entry * units)), "BUY", costs)
-                    planned_exit = _slipped(stop, slip, contract)
-                    planned = (
-                        Decimal(str((entry - planned_exit) * units))
-                        + entry_fees
-                        + order_cost(Decimal(str(planned_exit * units)), "SELL", costs)
-                    )
+                    if risk_recipe == ML_RISK_RECIPE:
+                        planned = planned_entry_risk(exact_distance * Decimal(str(units)),
+                                                     Decimal(str(entry * units)), costs)
+                    else:
+                        planned_exit = _slipped(stop, slip, contract)
+                        planned = (
+                            Decimal(str((entry - planned_exit) * units))
+                            + entry_fees
+                            + order_cost(Decimal(str(planned_exit * units)), "SELL", costs)
+                        )
                     if Decimal(str(entry * units)) + entry_fees > min(equity, policy.capital) * (
                         1 - policy.cash_buffer_pct
                     ):
@@ -549,6 +575,12 @@ def run_replay(
                         )
                         if evaluate_position(risk, bar["high"]).reason == BreachReason.TARGET:
                             exit_price, reason = risk.target_price, "target"
+                        elif max_hold_minutes is not None and datetime.fromisoformat(
+                            at
+                        ) >= datetime.fromisoformat(active["signal_at"]) + timedelta(
+                            minutes=max_hold_minutes
+                        ):
+                            exit_price, reason = bar["close"], "time_limit"
                         elif at[11:16] >= meta["session_close"]:
                             exit_price, reason = bar["close"], "session_close"
                 if reason:
@@ -713,7 +745,8 @@ def run_replay(
         )
     if check_cancel:
         check_cancel()
-    metrics = _metrics(trades)
+    metrics = _metrics(trades, initial=float(initial_capital))
+    metrics["initial_capital"] = int(initial_capital)
     metrics["closed_trade_max_drawdown_pct"] = metrics["max_drawdown_pct"]
     metrics["max_drawdown_pct"] = round(max_open_drawdown, 4)
     metrics["max_observed_open_drawdown_pct"] = round(max_open_drawdown, 4)
@@ -746,6 +779,11 @@ def run_replay(
         )
     return {
         "metrics": metrics,
+        "session_analytics": session_analytics(
+            {"trades": trades, "incomplete_outcomes": incomplete},
+            allowed,
+            initial=float(initial_capital),
+        ),
         "trades": trades,
         "rejections": dict(rejections),
         "incomplete_outcomes": incomplete,

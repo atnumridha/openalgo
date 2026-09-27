@@ -79,6 +79,28 @@ def costs():
     return jsonify(status="success", data=payload)
 
 
+@trading_risk_bp.post("/allocation")
+@_limit
+def allocation():
+    payload = request.get_json()
+    if not isinstance(payload, dict) or set(payload) != {"mode", "capital", "reason"}:
+        raise ValueError("Supply mode, capital and review reason")
+    user, mode = session["user"], payload["mode"]
+    if mode not in {"sandbox", "live"}:
+        raise ValueError("Choose sandbox or live")
+    from database import strategy_module_db as store
+    from services.strategy_module.automation_control import _control_lease
+
+    with _control_lease(user):
+        trading_budget.reconcile_account(user, mode)
+        if any(row.get("current_run_id") for row in store.list_strategies(user)):
+            raise ValueError("Stop and reconcile Strategy Module runs before changing allocation")
+        result = ledger.review_allocation(
+            user, mode, payload["capital"], payload["reason"], trading_budget.trading_day()
+        )
+    return jsonify(status="success", data=_json(result))
+
+
 @trading_risk_bp.post("/resume")
 @_limit
 def resume():

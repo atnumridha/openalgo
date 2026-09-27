@@ -6,6 +6,28 @@ The shared risk policy limits the first filled trade to a planned ₹1,000 loss,
 
 Replay uses `services/risk/budget.py` and the existing position risk evaluator. Replay deliberately permits only one long-option position at a time, a conservative subset of the shared two-position maximum. It does not yet research concurrent index and commodity portfolios, short options, spread margin, pyramiding, position averaging or overnight positions.
 
+## Parameter comparison and ML research
+
+In **Historical test**, import matching underlying and option history, choose a dataset, then select a **Test type**:
+
+1. **Test one rule set** runs the existing deterministic development replay.
+2. **Compare parameter values** accepts comma-separated values for the active rule's parameters. Unlisted parameters keep the values in the form. The screen shows the Cartesian product size and refuses empty, duplicate or more than 256 combinations. The worker uses the same execution, costs and risk model for every combination. Selection is deterministic, preferring complete outcomes and higher exploratory OOS net P&L, then lower drawdown, more trades and the configuration hash.
+3. **Train a RandomForest model** evaluates predicted profitable option opportunities using causal underlying/option features. This is an optional research dependency. Install the pinned dependency group from the project directory with `uv sync --frozen --group research`, then restart the web app and research worker normally. Without it, the page explains the missing dependency and disables training.
+
+For a comparison result, **Test selected parameters** creates a separate ordinary development run with the selected configuration and a link to its parent search. The server rechecks dataset, source, risk, report and configuration hashes and rejects incomplete selected results. Only that new development run can proceed through freeze, final evaluation and the existing qualification process. Searching many configurations makes the comparison OOS results exploratory; the winning row is not proof of profitability.
+
+ML requires one-minute option execution bars with tick sizes and uses the filtered execution assumptions with a volatility-aware 10% stop and 2R target. The final 60 sessions are excluded before feature and outcome preparation. Earlier development sessions split chronologically: expanding validation folds use only the first 70%, then a model fitted on those training sessions predicts the later 30%. Training labels overlapping a fold's validation boundary are purged. Prediction opportunities with unknown outcomes remain in the prediction set, but are excluded from labelled accuracy calculations.
+
+The ML result separates **prediction accuracy** from **executed-trade win rate** and shows the majority-class baseline, precision, recall, labelled/unlabelled counts, fold details and replay outcomes after costs. A high classification score can coexist with no trades or negative trading P&L. Saved evidence includes dependency versions, seed, training provenance, actual fitted tree state, model hashes and hashes of all prediction probabilities. Cancellation is checked while preparing features and between tree batches.
+
+An ML development run can be **frozen** with its validated JSON forest and then evaluated once on the sealed final 60 sessions without refitting. A model that passes the development and final base/stress screens can be **explicitly installed** as a stopped, disabled Sandbox Flow strategy. The operator must review both Sandbox and Live allocations to ₹25,000, verify a current dated fee schedule with the same execution rates, and collect a separate prospective forward campaign before any reviewed live release. Model, source, strategy, Flow, broker, cost or allocation changes invalidate the relevant evidence. Installation, activation and live approval are separate actions; none occurs automatically. The adapter requires fresh completed index and option bars plus a fresh broker quote and waits when those observations are unavailable. Its broker-history loop and real fills have not been verified in operation. Optimization of deterministic rules retains its existing qualification path.
+
+Complete replay reports also expose session-return CAGR, volatility, Sharpe and Sortino through the existing portfolio analytics module. They include zero-trade sessions, use 252-session annualization and a zero risk-free rate, and suppress undefined ratios. Short-window annualized values are unstable. No benchmark or alpha is invented.
+
+The design takes conceptual inspiration from [Algorithmic Trading with Python](https://github.com/chrisconlan/algorithmic-trading-with-python), while reusing this application's existing indicators, execution and analytics. No upstream source was copied; the upstream [license](https://github.com/chrisconlan/algorithmic-trading-with-python/blob/master/license.txt) restricts commercial reuse.
+
+See the [UI verification record](research-workflow-ui-verification-2026-09-27.md) for exercised flows and test-environment limitations.
+
 ## Import contract
 
 Open `/strategy/research`, or use the authenticated `/strategy/api/research` endpoints. POST `/datasets` with `name`, `provider`, `metadata`, and exactly one of `rows` or `csv`. Dataset contents are immutable after normalization. Identical content returns the existing owner-scoped dataset. No dataset update/delete endpoint is provided.
@@ -180,3 +202,10 @@ Responses use `{ "status": "success", "data": ... }`; invalid inputs return `{ "
 Qualification requests are session authenticated, CSRF protected, limited to 64 KB and rate limited. There is no public quote or trade evidence upload endpoint. Storage is bounded to 20 campaigns per owner, 2,000 trades and 2,000 review audit records per campaign; reaching a bound blocks enrollment or further collection instead of silently dropping history. Qualification uses the existing execution lifecycle and requires no additional background worker.
 
 Latest evidence: [240-session robustness tests, 26 September 2026](strategy-robustness-2026-09-26.md). The unchanged control lost in all four new periods and failed the criteria recorded before testing. Earlier implementation and candidate comparison: [corrected replay results](filtered-strategy-retest-2026-09-26.md).
+# Conlan algorithm research additions (2026-09-27)
+
+Two independent signal adapters are available as optional templates: SMA(5)-SMA(34) zero-cross and Bollinger(20, 2 sample standard deviations) reversal. They remain uninstalled until selected in Strategies → Available templates. Installation creates a stopped sandbox strategy and inactive Flow. Existing strategies are retained.
+
+New RandomForest research jobs support a 5, 10 or 15-minute maximum holding time (default 15). The same horizon governs labels and replay exits. Training uses session-balanced average uniqueness weights. Reports include training feature importance, evaluation probability reliability, and Brier comparison against a training-only baseline. These are research diagnostics, not live qualification.
+
+The independent offline component library is `services/research/conlan.py`. The reproducible study runner is `scripts/research_conlan_algorithms.py`; it requires explicit `--current-kotak-assumption`, reads the local store read-only, and does not update saved fees. It excludes protected final sessions, records input/source hashes and full evidence, and reports unavailable alternative revenue data explicitly. See [the results and limitations](conlan-algorithm-results-2026-09-27.md).

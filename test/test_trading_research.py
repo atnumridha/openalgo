@@ -155,6 +155,51 @@ def test_closed_bar_signal_next_option_bar_stop_first_and_costs():
     assert report["metrics"]["max_drawdown_pct"] > 0
 
 
+def test_research_capital_is_validated_hashed_and_changes_whole_lot_affordability():
+    data = dataset.validate_dataset(payload())
+    for invalid in (0, -1, True, float("nan"), "infinite"):
+        with pytest.raises(ValueError, match="capital"):
+            replay.validate_configuration(
+                data, "trend_breakout", {"lookback": 2}, fees(), capital=invalid
+            )
+    legacy = replay.validate_configuration(data, "trend_breakout", {"lookback": 2}, fees())
+    larger = replay.validate_configuration(
+        data, "trend_breakout", {"lookback": 2}, fees(), capital=25000
+    )
+    assert legacy["capital"] == 10000
+    assert larger["capital"] == 25000
+    assert dataset.digest(legacy) != dataset.digest(larger)
+    body = payload()
+    body["metadata"]["contracts"][0]["lot_size"] = 80
+    data = dataset.validate_dataset(body)
+    small = replay.run_replay(
+        data,
+        replay.validate_configuration(
+            data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0)
+        ),
+    )
+    large = replay.run_replay(
+        data,
+        replay.validate_configuration(
+            data, "trend_breakout", {"lookback": 2}, fees(slippage_bps=0), capital=25000
+        ),
+    )
+    assert small["trades"] == []
+    assert large["metrics"]["initial_capital"] == 25000
+    assert large["metrics"]["trade_count"] >= 1
+    assert large["trades"][0]["planned_risk"] <= 1000
+
+
+def test_research_drawdown_boundary_scales_with_capital():
+    from decimal import Decimal
+
+    from services.risk.budget import BudgetPolicy
+
+    policy = BudgetPolicy(capital=Decimal("25000"))
+    assert not replay._drawdown_breached(policy, "2026-01-01", Decimal("20001"), Decimal("25000"))
+    assert replay._drawdown_breached(policy, "2026-01-01", Decimal("20000"), Decimal("25000"))
+
+
 def test_missing_next_contract_bar_rejects_without_fabricating_fill():
     body = payload()
     body["rows"] = [r for r in body["rows"] if r["symbol"] == "NIFTY" or "09:20:" in r["timestamp"]]
