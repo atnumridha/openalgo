@@ -132,6 +132,7 @@ def clean_slate(monkeypatch):
             if row["current_run_id"]:
                 state.clear_run_state(row["current_run_id"])
             store.set_strategy_status(row["id"], "stopped", None)
+            store.set_automation_state(row["id"], USER, "disabled")
             store.delete_strategy(row["id"], USER)
         store.clear_strategy_module_cache()
 
@@ -2392,3 +2393,47 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
         assert result.ok is (not unknown and not unrecordable)
     finally:
         db_engine.dispose()
+
+
+def test_scalp_run_persists_dynamic_stop_and_direction_before_dispatch(api_key, monkeypatch):
+    from services.strategy_module import scalping, automation_control
+    from datetime import timedelta
+    config = _config(scalp_profile='ema915', broker_connection_id='test-connection')
+    config['legs'][0]['position'] = 'B'
+    sid = _make(config)
+    store.set_automation_state(sid, USER, 'armed')
+    now = datetime.now(scalping.IST)
+    context = {'signal_at': now.isoformat(), 'deadline': (now + timedelta(minutes=15)).isoformat(),
+               'direction': 'PE', 'entry': 24010, 'stop': 24020, 'target': 23990,
+               'profile': 'ema915', 'premium_stop_points': 5}
+    monkeypatch.setattr(scalping, 'prepare', lambda *a: dict(context))
+    monkeypatch.setattr(scalping, 'require_origin', lambda *a: None)
+    monkeypatch.setattr(scalping, 'protect_leg', lambda leg, *_: leg.update(sl_pts=5, target_pts=None, scalp_context=dict(context)))
+    observed = []
+    def dispatched(**kwargs):
+        run = store.get_run(store.get_strategy(sid, USER).current_run_id)
+        observed.append(run.scalp_context)
+        return DispatchResult(ok=True, broker_order_id='SCALP-1', response={})
+    result = _start(sid, resolved=[_resolved(symbol='NIFTY28MAY2624000PE')], dispatch=dispatched)
+    assert result.ok, result.error
+    assert observed == [context]
+    leg = next(iter(state.get_run_state(result.run_id)['legs'].values()))
+    assert leg['symbol'].endswith('PE') and leg['sl_pts'] == 5
+    assert leg['target_pts'] is None
+
+
+def test_scalp_disabled_during_history_fetch_never_dispatches(api_key, monkeypatch):
+    from services.strategy_module import scalping
+    sid = _make(_config(scalp_profile='ema915', broker_connection_id='test-connection'))
+    store.set_automation_state(sid, USER, 'armed')
+    now = datetime.now(scalping.IST)
+    def prepare(*args):
+        store.set_automation_state(sid, USER, 'disabled')
+        return {'signal_at': now.isoformat(), 'direction': 'CE'}
+    monkeypatch.setattr(scalping, 'prepare', prepare)
+    monkeypatch.setattr(scalping, 'protect_leg', lambda *a: None)
+    calls = []
+    result = _start(sid, dispatch=lambda **k: calls.append(k))
+    assert not result.ok and 'disabled' in result.error
+    assert calls == []
+    assert store.get_strategy(sid, USER).current_run_id is None

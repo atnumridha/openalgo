@@ -11,6 +11,7 @@ export function FlowReadinessNotice({ readiness, className }: {
   const blocked = readiness.reasons.some((reason) => reason.blocking)
   const Icon = blocked ? AlertTriangle : Clock
   return (
+    // biome-ignore lint/a11y/useSemanticElements: This live region contains block content and navigation links, not an output value.
     <div role="status" className={cn(
       'min-w-0 rounded-md border p-3 text-sm',
       blocked ? 'border-amber-500/30 bg-amber-500/5' : 'border-border bg-muted/30', className,

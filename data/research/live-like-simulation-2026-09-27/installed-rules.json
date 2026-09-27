@@ -1,0 +1,47 @@
+[
+  {
+    "id": 13,
+    "name": "NIFTY EMA 9/15 + Bank Nifty",
+    "scalp_profile": "ema915",
+    "entry_time": "09:35:00.000000",
+    "exit_time": "15:20:00.000000",
+    "live_enabled": 0,
+    "automation_state": "armed"
+  },
+  {
+    "id": 14,
+    "name": "NIFTY MACD + EMA 200",
+    "scalp_profile": "macd200",
+    "entry_time": "09:35:00.000000",
+    "exit_time": "15:20:00.000000",
+    "live_enabled": 0,
+    "automation_state": "armed"
+  },
+  {
+    "id": 15,
+    "name": "NIFTY 5 EMA Reversal",
+    "scalp_profile": "ema5",
+    "entry_time": "09:35:00.000000",
+    "exit_time": "15:20:00.000000",
+    "live_enabled": 0,
+    "automation_state": "armed"
+  },
+  {
+    "id": 16,
+    "name": "NIFTY EMA 50/200 + Daily Regime",
+    "scalp_profile": "regime50200",
+    "entry_time": "09:35:00.000000",
+    "exit_time": "15:20:00.000000",
+    "live_enabled": 0,
+    "automation_state": "armed"
+  },
+  {
+    "id": 17,
+    "name": "NIFTY Opening Box Breakout",
+    "scalp_profile": "box15",
+    "entry_time": "09:30:00.000000",
+    "exit_time": "15:20:00.000000",
+    "live_enabled": 0,
+    "automation_state": "armed"
+  }
+]

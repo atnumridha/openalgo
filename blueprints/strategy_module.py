@@ -941,6 +941,21 @@ def _validate_strategy_config(payload: Any) -> dict:
     _reject_segments_outside_tab(config)
     _reject_cash_on_a_derivative_venue(config)
     _reject_uncoverable_short_cash(config)
+    profile = raw.get("scalp_profile")
+    if profile is not None:
+        from services.strategy_module.scalping import ITM_PROFILES, PROFILES
+
+        if not isinstance(profile, str) or profile not in PROFILES:
+            raise ValidationError("Unknown scalping profile")
+        if (kind != "batch" or config["underlying"] != "NIFTY"
+                or config["underlying_exchange"] != "NSE_INDEX"
+                or config["strategy_type"] != "intraday" or len(legs) != 1
+                or legs[0].get("segment") != "options" or legs[0].get("position") != "B"
+                or legs[0].get("lots") != 1
+                or legs[0].get("atm_offset") != ("ITM1" if profile in ITM_PROFILES else "ATM")
+                or legs[0].get("strike_mode") != "atm" or legs[0].get("expiry") != "weekly"):
+            raise ValidationError("Scalping requires one long weekly NIFTY option lot at the profile's ATM/ITM1 strike")
+    config["scalp_profile"] = profile
     return config
 
 
@@ -1481,6 +1496,22 @@ def delete_strategy(sid):
 # ---------------------------------------------------------------------------
 
 
+@strategy_module_bp.route("/api/automation/scalping-pack", methods=["POST"])
+@check_session_validity
+@_api_limit
+def install_scalping_pack():
+    from services.strategy_module.scalping_pack import install
+
+    username = _current_user()
+    if not username:
+        return _error("Not authenticated", 401)
+    try:
+        result = install(username)
+        return _ok(result, 201 if result["created"] else 200)
+    except ValueError as exc:
+        return _error(str(exc), 409)
+
+
 @strategy_module_bp.route("/api/automation/starter-pack", methods=["POST"])
 @check_session_validity
 @_api_limit
@@ -1608,6 +1639,8 @@ def set_live(sid):
         return _error("enabled must be true or false", 400)
     if row.status == "running":
         return _error("Stop the strategy before changing its mode", 409)
+    if getattr(row, "scalp_profile", None) and row.automation_state != "disabled":
+        return _error("Disable scalping automation before changing mode", 409)
 
     enabled = payload["enabled"]
     changed, message = store.set_live_enabled(sid, username, enabled)
@@ -1727,6 +1760,13 @@ def start_strategy(sid):
 
     from services.strategy_module import engine
 
+    if getattr(_row, "scalp_profile", None):
+        from services.strategy_module import automation_control
+
+        result = automation_control.enable_sandbox(sid, username, _api_key_for(username), mode=mode)
+        if not result.ok:
+            return _error(result.error or "Could not enable scalping automation", 409)
+        return _ok({"run_id": result.run_id, "mode": mode, "legs": [], "automation_state": "armed"})
     result = engine.start_run(sid, username, mode, trigger_source="manual")
     if not result.ok:
         # A refusal here is a conflict or a bad configuration, not a server
@@ -1774,7 +1814,7 @@ def start_all_sandbox_strategies():
     processed = 0
     for row in rows:
         try:
-            if row.strategy_kind == "signal":
+            if row.strategy_kind == "signal" or getattr(row, "scalp_profile", None):
                 previous_state = row.automation_state
                 result = automation_control.enable_sandbox(row.id, username, api_key)
                 _audit_automation_result(row, username, result, enabling=True,
@@ -1887,6 +1927,11 @@ def start_all_live_strategies():
                     "close_pending": False,
                     "reason": "Strategy is not live-enabled",
                 }
+            elif getattr(row, "scalp_profile", None):
+                from services.strategy_module import automation_control
+
+                result = automation_control.enable_sandbox(row.id, username, _api_key_for(username), mode="live")
+                item = _automation_item(row, result, api_key=_api_key_for(username))
             elif row.strategy_kind == "signal":
                 item = {
                     "strategy_id": row.id,
@@ -1967,6 +2012,15 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
     username, row, error = _resolve(sid)
     if error:
         return error
+
+    if getattr(row, "scalp_profile", None):
+        from services.strategy_module.automation_control import disable_and_close
+
+        result = disable_and_close(sid, username)
+        if not result.ok:
+            return _error(result.error or "Could not stop scalping automation", 409)
+        return _ok({"run_id": result.run_id, "stop_pending": result.close_pending,
+                    "exits": [], "automation_state": result.state})
 
     run_id = row.current_run_id
     if not run_id:
@@ -2563,3 +2617,36 @@ def _strategy_unsubscribe(data):
 
     leave_room(broadcast.room_for(sid))
     return {"status": "success", "strategy_id": sid}
+
+
+@strategy_module_bp.route('/api/templates', methods=['GET'])
+@check_session_validity
+@_api_limit
+def list_strategy_templates():
+    from services.strategy_module.template_library import catalog
+
+    username = _current_user()
+    if not username:
+        return _error('Not authenticated', 401)
+    return _ok({'data': catalog(username)})
+
+
+@strategy_module_bp.route('/api/templates/<template_id>/install', methods=['POST'])
+@check_session_validity
+@_api_limit
+def install_strategy_template(template_id):
+    from services.strategy_module.template_library import TEMPLATES, install
+
+    username = _current_user()
+    if not username:
+        return _error('Not authenticated', 401)
+    if template_id not in TEMPLATES:
+        return _error('Unknown strategy template', 404)
+    try:
+        result = install(username, template_id)
+        return _ok(result, 201 if result['created'] else 200)
+    except ValueError as exc:
+        return _error(str(exc), 409)
+    except RuntimeError:
+        logger.exception('Could not install strategy template for %s', username)
+        return _error('Could not finish installation. Retry to complete the saved template.', 500)

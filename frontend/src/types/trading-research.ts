@@ -1,6 +1,8 @@
-export type ResearchCandidateId = 'trend_breakout' | 'vwap_pullback'
+export type ResearchCandidateId = 'trend_breakout' | 'trend_breakout_filtered' | 'vwap_pullback'
 
 export interface CostSchedule {
+  exchange?: 'NFO' | 'BFO' | 'MCX'
+  broker?: 'kotak'
   schedule_id: string
   source: string
   effective_from: string
@@ -46,6 +48,9 @@ export interface ResearchMetrics {
   ending_equity: number | null
   exposure_bars?: number
   max_observed_open_drawdown_pct?: number
+  signal_bar_minutes?: number
+  execution_bar_minutes?: number
+  ambiguous_exit_count?: number
 }
 
 export interface ResearchReport {

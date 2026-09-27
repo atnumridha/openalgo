@@ -40,6 +40,9 @@ INTERVAL_ALIGN_OFFSET_SECONDS = env_int("FLOW_INTERVAL_ALIGN_OFFSET", 2, minimum
 
 def uses_completed_candles(nodes) -> bool:
     return any(node.get("type") in {"barOffset", "indicator", "openingRange"}
+               or (node.get("type") == "strategyModuleRun"
+                   and isinstance(node.get("data", {}).get("barEvidence"), dict)
+                   and "scalpProfile" in node["data"]["barEvidence"])
                for node in (nodes or []))
 
 

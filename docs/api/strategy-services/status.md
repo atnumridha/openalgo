@@ -174,6 +174,7 @@ Each leg carries `risk_unit`, `points` (the default) or `percent`, which governs
 | trigger_source | string | `manual`, `webhook` or `scheduler` |
 | webhook_event_id | integer or null | The `sm_webhook_event` row that caused this run, when a webhook started it |
 | resolved_expiries | object or null | Leg id to the expiry resolved at start, as strings |
+| scalp_context | object or null | Persisted scalping profile, index stop/target, signal deadline and premium stop; null for ordinary runs |
 
 ## Notes
 

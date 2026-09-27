@@ -78,6 +78,7 @@ class EntryFacts:
     open_risk: Decimal | None = None
     estimated_debit: Decimal | None = None
     minimum_reward_risk: Decimal | None = None
+    reward_risk_basis: str = "premium"
     session_pnl: Decimal | None = None
     consecutive_stopped_runs: int | None = None
     last_stopped_at: datetime | None = None
@@ -828,6 +829,7 @@ def evaluate_entry(
     cash_remaining = facts.available_cash - facts.estimated_debit
     metrics = {
         "available_cash": facts.available_cash,
+        "reward_risk_basis": facts.reward_risk_basis,
         "session_capital": facts.session_capital,
         "entry_cash_risk": facts.entry_cash_risk,
         "entry_option_lot_risk": facts.entry_option_lot_risk,
@@ -1606,6 +1608,7 @@ def build_entry_facts(
     entry_risk = Decimal("0")
     estimated_debit = Decimal("0")
     reward_risks: list[Decimal] = []
+    reward_risk_basis = "premium"
     has_option_entry = False
     high_volatility_option_entry = False
     reservation_components: list[ReservationComponent] = []
@@ -1647,11 +1650,26 @@ def build_entry_facts(
 
         stop_distance = _risk_distance(leg, price, "sl_pts")
         target_distance = _risk_distance(leg, price, "target_pts")
-        if stop_distance is None or target_distance is None:
+        reward_ratio = target_distance / stop_distance if target_distance is not None and stop_distance else None
+        profile = _strategy_value(strategy, "scalp_profile", None)
+        index = leg.get("scalp_context")
+        if profile in {"ema915", "macd200", "ema5", "regime50200"} and isinstance(index, dict) and index.get("profile") == profile:
+            values = [_decimal(index.get(key)) for key in ("entry", "stop", "target")]
+            direction = index.get("direction")
+            if (all(value is not None and value > 0 for value in values)
+                    and direction in {"CE", "PE"} and is_nifty_option and position == "B"
+                    and len(resolved_legs) == 1):
+                entry, stop, target = values
+                sign = 1 if direction == "CE" else -1
+                distance = sign * (entry - stop)
+                reward = sign * (target - entry)
+                reward_ratio = reward / distance if distance > 0 and reward > 0 else None
+                reward_risk_basis = "underlying_index"
+        if stop_distance is None or reward_ratio is None:
             entry_risk = None
             reward_risks = []
             break
-        reward_risks.append(target_distance / stop_distance)
+        reward_risks.append(reward_ratio)
         leg_risk = stop_distance * quantity
         entry_risk += leg_risk
         if is_cash:
@@ -1724,6 +1742,7 @@ def build_entry_facts(
         open_risk=open_risk,
         estimated_debit=estimated_debit,
         minimum_reward_risk=minimum_reward,
+        reward_risk_basis=reward_risk_basis,
         session_pnl=session_pnl,
         consecutive_stopped_runs=consecutive,
         last_stopped_at=last_stopped_at,

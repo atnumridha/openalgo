@@ -13,7 +13,7 @@ import {
   ShieldOff,
   Trash2,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import {
   deleteStrategy,
@@ -31,6 +31,7 @@ import {
   useStrategyListPnl,
 } from '@/api/strategy_module'
 import { Badge } from '@/components/ui/badge'
+import { ScalpingStrategies } from '@/components/strategy/ScalpingStrategies'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -51,6 +52,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
+import { orderByResearchWinRate, strategyResearch } from '@/lib/strategyResearch'
 import {
   type AutomationControlResult,
   type AutomationState,
@@ -65,6 +67,7 @@ import {
   universeTabLabel,
 } from '@/types/strategy_module'
 import { showToast } from '@/utils/toast'
+import { StrategyTemplateLibrary } from '@/components/strategy/StrategyTemplateLibrary'
 import AutomationSafetyCard from './AutomationSafetyCard'
 import CriticalAlertsCard from './CriticalAlertsCard'
 
@@ -127,7 +130,7 @@ export default function StrategyList() {
     refetchInterval: 30_000,
   })
 
-  const rows = data ?? []
+  const rows = useMemo(() => orderByResearchWinRate(data ?? []), [data])
   const liveAuthorizationQuery = useQuery({
     queryKey: strategyQueryKeys.liveAuthorization(),
     queryFn: getLiveAuthorization,
@@ -176,7 +179,9 @@ export default function StrategyList() {
     mutationFn: ({ id, mode }: { id: number; mode: RunMode }) => startRun(id, mode),
     onSuccess: (result) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
-      if (result.acknowledged === false) {
+      if (result.automation_state === 'armed') {
+        showToast.success('Automation enabled — waiting for a qualifying signal')
+      } else if (result.acknowledged === false) {
         showToast.warning(
           'Run started, but broker acknowledgement is pending. Check Orders and Events.'
         )
@@ -335,7 +340,9 @@ export default function StrategyList() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild><Link to="/strategy/research">Research</Link></Button>
+          <Button variant="outline" asChild>
+            <Link to="/strategy/research">Research</Link>
+          </Button>
           <Button
             variant="secondary"
             disabled={
@@ -384,7 +391,22 @@ export default function StrategyList() {
         </div>
       </div>
 
-      <AutomationSafetyCard />
+      <ScalpingStrategies
+        rows={rows}
+        busy={isLoading || startMutation.isPending || controlMutation.isPending || liveModeMutation.isPending}
+        onStart={(row) => {
+          setStartTarget(row)
+          setStartMode(row.live_enabled ? 'live' : 'sandbox')
+          setStartConfirmation('')
+          startMutation.reset()
+        }}
+        onStop={setDisableTarget}
+        onMode={(row) => row.live_enabled
+          ? liveModeMutation.mutate({ id: row.id, enabled: false })
+          : setLiveEnableTarget(row)}
+      />
+      <StrategyTemplateLibrary />
+      <AutomationSafetyCard showStarterPack={false} />
       <CriticalAlertsCard savedStrategyIds={new Set((data ?? []).map((strategy) => strategy.id))} />
 
       {(bulkMutation.isPending ||
@@ -544,6 +566,7 @@ export default function StrategyList() {
           <DialogHeader>
             <DialogTitle>Start {startTarget?.name}?</DialogTitle>
             <DialogDescription>
+              {startTarget?.scalp_profile ? 'This enables automatic signal checks. It enters only when the setup and risk checks pass. ' : ''}
               Sandbox mode is paper-only. Live mode can place real broker orders using real funds.
             </DialogDescription>
           </DialogHeader>
@@ -564,6 +587,12 @@ export default function StrategyList() {
               </Button>
             ))}
           </div>
+          {startMutation.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {startMutation.error.message ||
+                'Could not start strategy. Check Orders and Events before retrying.'}
+            </p>
+          )}
           {startMode === 'live' && (
             <div className="space-y-2">
               {liveAuthorizationQuery.isFetching ? (
@@ -789,6 +818,10 @@ export default function StrategyList() {
       <Card>
         <CardHeader>
           <CardTitle>Saved strategies</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Highest historical win % first · 15-minute research variants · wins after modeled base costs.
+            Different samples and current risk rules limit comparisons; these are not live win rates.
+          </p>
           <CardDescription>
             P&amp;L columns are live for running strategies and reflect the last-run snapshot for
             stopped strategies. Status shows whether a run is currently active. Automation shows
@@ -838,6 +871,7 @@ export default function StrategyList() {
               <TableBody>
                 {rows.map((row, index) => {
                   const pnl = pnlById.get(row.id)
+                  const research = strategyResearch(row.scalp_profile)
                   const state = row.automation_state ?? 'disabled'
                   const pending =
                     controlMutation.isPending && controlMutation.variables?.id === row.id
@@ -864,6 +898,12 @@ export default function StrategyList() {
                         >
                           {row.name}
                         </Link>
+                        {research && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Historical wins: <span className="font-medium tabular-nums">{research.winPercent.toFixed(2)}%</span>
+                            {' '}· {research.wins}/{research.trades} trades
+                          </p>
+                        )}
                         {row.strategy_kind === 'batch' && row.status === 'stopped' && (
                           <Button
                             size="sm"
@@ -876,6 +916,7 @@ export default function StrategyList() {
                               liveBulkMutation.isPending
                             }
                             onClick={() => {
+                              startMutation.reset()
                               setStartTarget(row)
                               setStartMode('sandbox')
                               setStartConfirmation('')

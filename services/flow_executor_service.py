@@ -2191,7 +2191,16 @@ class NodeExecutor:
                 return {"status": "error", "message": "Active run broker connection or mode does not match"}
 
         evidence = node_data.get("barEvidence")
-        if evidence is None:
+        scalp_profile = getattr(strategy, "scalp_profile", None)
+        if scalp_profile:
+            if evidence != {"scalpProfile": scalp_profile}:
+                return {"status": "error", "message": "Scalping workflow rules do not match the saved strategy"}
+            if not self.broker_connection_ready(username, workflow_connection):
+                return {"status": "risk_blocked", "message": "Pinned broker connection is unavailable"}
+            # The engine fetches and verifies its own candles and claims the
+            # actual signal minute. No user-supplied signal/price is accepted.
+            evidence = None
+        if evidence is None and not scalp_profile:
             return {"status": "error", "message": "Current candle evidence is required for entry"}
         if evidence is not None:
             from database.flow_db import claim_execution_bar
@@ -2241,6 +2250,12 @@ class NodeExecutor:
                 strategy_id, username, mode, trigger_source=f"flow:{self.context.workflow_id}",
             )
         if not started.ok:
+            if getattr(started, "waiting", False):
+                result = {"status": "success", "reason_code": "waiting_for_signal",
+                          "message": started.error, "strategy_id": strategy_id, "mode": mode}
+                self.store_output(node_data, result)
+                self.log(started.error)
+                return result
             if started.error == "This strategy is already running":
                 existing = self.existing_batch_run(get_strategy(strategy_id, username), mode, node_data)
                 if existing is not None:

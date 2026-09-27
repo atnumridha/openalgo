@@ -106,6 +106,7 @@ def _run_serializer_fields() -> set[str]:
         trigger_source="manual",
         webhook_event_id=None,
         resolved_expiries=None,
+        scalp_context=None,
     )
     return set(store.run_to_dict(row))
 

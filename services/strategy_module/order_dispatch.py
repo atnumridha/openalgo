@@ -238,12 +238,19 @@ def dispatch_order(
         return DispatchResult(ok=False, error="Broker-held protection is available only for live runs")
     order = dict(order)
     qualification_metadata = order.pop("_strategy_qualification", None)
+    scalp_metadata = order.pop("_strategy_scalp", None)
     if qualification_metadata:
         from services.research.qualification_execution import before_dispatch
         refusal = before_dispatch(qualification_metadata, mode, intent, api_key, order)
         if refusal:
             return DispatchResult(ok=False, error=refusal)
     if mode == "sandbox":
+        if intent == "entry" and scalp_metadata:
+            from services.strategy_module.scalping import dispatch_reason
+
+            refusal = dispatch_reason(scalp_metadata, mode)
+            if refusal:
+                return DispatchResult(ok=False, error=refusal)
         return _dispatch_sandbox(api_key, order)
     if mode == "live":
         expected_broker = str(order.get("_strategy_broker") or "").lower()
@@ -264,6 +271,7 @@ def dispatch_order(
             expected_broker=expected_broker,
             expected_connection_id=expected_connection_id,
             qualification_metadata=qualification_metadata,
+            **({"scalp_metadata": scalp_metadata} if scalp_metadata else {}),
         )
     return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
@@ -654,6 +662,7 @@ def _dispatch_live(
     expected_broker: str,
     expected_connection_id: str,
     qualification_metadata: dict | None = None,
+    scalp_metadata: dict | None = None,
 ) -> DispatchResult:
     auth_token, broker, error = resolve_live_auth(api_key)
     if error:
@@ -713,6 +722,12 @@ def _dispatch_live(
         refusal = before_dispatch(qualification_metadata, "live", intent, api_key, order)
         if not refusal:
             refusal = live_session_reason(qualification_metadata, auth_token, broker, pinned_id)
+        if refusal:
+            return DispatchResult(ok=False, error=refusal)
+    if intent == "entry" and scalp_metadata:
+        from services.strategy_module.scalping import dispatch_reason
+
+        refusal = dispatch_reason(scalp_metadata, "live")
         if refusal:
             return DispatchResult(ok=False, error=refusal)
     original = dict(order)

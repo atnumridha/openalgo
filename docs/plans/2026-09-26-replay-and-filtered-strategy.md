@@ -1,0 +1,12 @@
+# Replay repair and bounded strategy experiment
+
+User authorization: fix the diagnosed issues and test again. Profitability is an outcome to measure, not an acceptance criterion that permits repeated holdout tuning.
+
+1. Preserve old reports and the original breakout as a comparison. Version the engine.
+2. Support explicitly declared five-minute underlying signals with one-minute option execution. Preserve missing-data failures and flag unresolved within-minute stop/target ambiguity. Bind execution resolution and contract tick size to dataset hashes.
+3. Add a separately named filtered breakout: prior-bar 8/21 mean alignment and 5-bar slow-mean slope; 15-minute cooldown after exits; maximum three entries per day; 1–7 calendar days to expiry; observed positive liquidity (10 lots in latest minute); premium 20–120; strike distance at most 500 points; whole-lot affordability. Use 10 prior minute ranges for ATR, stop distance max(configured premium stop, 1.5 ATR), reject over 25% premium, reward multiple target_pct/stop_pct. Require one-minute options and explicit tick size. No change to shared risk limits.
+4. Regression tests cover chronological fills, missing exposure data, same-minute ambiguity, causal trend/ATR, expiry, liquidity, affordability, cooldown and tick rounding. Display resolution and ambiguity in Results.
+5. Prepare one fixed, causal 120-session universe: first closed 09:20 quote, nearest eligible expiry (1–7 days), closest strike within 500 points among affordable premium 20–120, CE and PE each. Use prior-session official NSE contract definitions, retain minute bars and audit against daily ranges. No prices fabricated. Last 60 sessions stay sealed.
+6. Preregister exactly four filtered configurations: lookback 10 or 20, reward multiple 1.5 or 2; premium stop floor 10%, all other filters fixed. Also run original breakout once on the same new universe. Report all five results. No expansion of the grid after seeing outcomes.
+7. Freeze for final testing only if training and exploratory OOS and stressed OOS are positive, at least 20 training and 10 OOS trades, no incomplete outcomes, and no unresolved ambiguous exits. The previously examined development dates are exploratory. If none pass, preserve final holdout and report that no profitable strategy was established. Forward paper qualification remains necessary.
+8. Run relevant backend/frontend tests, build, restart only managed idle services, and verify import and replay through UI. Do not place orders, activate live trading, change saved costs, or increase risk.

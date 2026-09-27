@@ -33,6 +33,7 @@ need → drill into the specific file. Don't load everything at once.
 | Topic | Entry point |
 |---|---|
 | One-click local startup (macOS) | [local-startup.md](local-startup.md) |
+| Groww algorithmic tests and cumulative strategy ranking | [strategy-ranking-2026-09-27.md](strategy-ranking-2026-09-27.md) |
 | Ubuntu server install | [installation-guidelines/getting-started/ubuntu-server-installation.md](installation-guidelines/getting-started/ubuntu-server-installation.md) |
 | Docker | [docker/README.md](docker/README.md) |
 | Upgrade / SMTP / TOTP / forgot-password | https://docs.openalgo.in/installation-guidelines/getting-started/ |
@@ -45,6 +46,18 @@ need → drill into the specific file. Don't load everything at once.
 |---|---|
 | Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
 | Strategy Research and shared capital limits | [trading-research.md](trading-research.md) |
+| Offline technical ML training and results | [technical-ml-training-2026-09-26.md](technical-ml-training-2026-09-26.md) |
+| Twelve-configuration ML search and chronological retraining | [ml-walkforward-search-2026-09-26.md](ml-walkforward-search-2026-09-26.md) |
+| Prediction-quality improvements and benchmark results | [ml-prediction-improvement-2026-09-26.md](ml-prediction-improvement-2026-09-26.md) |
+| EMA9/15, MACD and 5EMA scalping comparison at INR25,000 | [ema-scalping-evaluation-2026-09-26.md](ema-scalping-evaluation-2026-09-26.md) |
+| Automated scalping presets: sandbox/live controls and limits | [scalping-strategies.md](scalping-strategies.md) |
+| Four-hour range reversal: Nifty accuracy and after-cost results | [fourhour-range-evaluation-2026-09-26.md](fourhour-range-evaluation-2026-09-26.md) |
+| Fabio order-flow strategy: data availability and testability audit | [fabio-orderflow-evaluation-2026-09-26.md](fabio-orderflow-evaluation-2026-09-26.md) |
+| IG stochastic, MA, SAR and RSI scalping comparison | [ig-scalping-evaluation-2026-09-27.md](ig-scalping-evaluation-2026-09-27.md) |
+| Tradetron guide: EMA, RSI divergence, Bollinger and price-action tests | [tradetron-scalping-evaluation-2026-09-27.md](tradetron-scalping-evaluation-2026-09-27.md) |
+| StockGro guidance: matched EMA chart intervals and entry sessions | [stockgro-timeframes-2026-09-27.md](stockgro-timeframes-2026-09-27.md) |
+| Tradejini: EMA9/21 and opening range with option-premium exits | [tradejini-scalping-evaluation-2026-09-27.md](tradejini-scalping-evaluation-2026-09-27.md) |
+| Groww video: Supertrend pullback and close-confirmed option tests | [groww-supertrend-evaluation-2026-09-27.md](groww-supertrend-evaluation-2026-09-27.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |

@@ -43,6 +43,11 @@ def validate_cost_schedule(payload):
     for key in NUMERIC_FIELDS:
         maximum = 1 if key in RATE_FIELDS else (1000 if key == "slippage_bps" else 100000)
         result[key] = float(decimal_value(payload.get(key), key, maximum=maximum))
+    for key, allowed in {"exchange": {"NFO", "BFO", "MCX"}, "broker": {"kotak"}}.items():
+        if key in payload:
+            if not isinstance(payload[key], str) or payload[key] not in allowed:
+                raise ValueError(f"Cost schedule {key} is not supported")
+            result[key] = payload[key]
     if set(payload) - set(result):
         raise ValueError("Unrecognized cost schedule fields")
     return result

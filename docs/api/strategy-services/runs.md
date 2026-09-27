@@ -116,6 +116,7 @@ Each object in `data`:
 | trigger_source | string | `manual`, `webhook` or `scheduler` |
 | webhook_event_id | integer or null | The inbound webhook that caused this run, when one did |
 | resolved_expiries | object or null | Leg id to the expiry resolved at start, keyed by string |
+| scalp_context | object or null | Persisted scalping profile, index stop/target, signal deadline and premium stop; null for ordinary runs |
 
 ### Stop reasons
 

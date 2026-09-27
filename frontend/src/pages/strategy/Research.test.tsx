@@ -127,17 +127,18 @@ function renderResearch() {
 }
 
 async function enterCosts() {
+  await userEvent.click(screen.getByText('Edit fee details'))
   for (const [label, value] of [
     ['Schedule name', 'test-only'],
     ['Fee source or reference', 'Test fixture'],
     ['Effective from', '2026-01-01'],
     ['Effective until', '2026-12-31'],
     ['Brokerage per order (INR)', '20'],
-    ['Exchange fee rate', '0.0001'],
-    ['SEBI fee rate', '0.000001'],
-    ['GST rate', '0.18'],
-    ['Stamp duty buy rate', '0.00003'],
-    ['STT sell rate', '0.001'],
+    ['Exchange fee (%)', '0.01'],
+    ['SEBI fee (%)', '0.0001'],
+    ['GST (%)', '18'],
+    ['Stamp duty on buy (%)', '0.003'],
+    ['STT on sell (%)', '0.1'],
     ['Slippage (basis points)', '10'],
   ])
     await userEvent.type(screen.getByLabelText(label), value)
@@ -163,8 +164,83 @@ beforeEach(() => {
 })
 
 describe('Research workspace', () => {
+  it('loads the Kotak API preset as a draft without enabling risk or placing trades', async () => {
+    renderResearch()
+    await userEvent.click(await screen.findByRole('button', { name: 'Use Kotak Neo rates' }))
+    expect(screen.getByText('Kotak Neo API · NSE options')).toBeVisible()
+    await userEvent.click(screen.getByText('Edit fee details'))
+    expect(screen.getByLabelText('Brokerage per order (INR)')).toHaveValue(0)
+    expect(screen.getByLabelText('GST (%)')).toHaveValue(18)
+    expect(screen.getByLabelText('STT on sell (%)')).toHaveValue(0.15)
+    expect(screen.getByLabelText('Exchange fee (%)')).toHaveValue(0.03553)
+    expect(screen.getByText(/Slippage is a planning estimate/)).toBeVisible()
+    expect(rest.put).not.toHaveBeenCalled()
+    expect(rest.post).not.toHaveBeenCalled()
+    rest.put.mockResolvedValue({ data: { status: 'success', data: costs } })
+    await userEvent.click(screen.getByRole('button', { name: 'Update enabled profile costs' }))
+    await waitFor(() =>
+      expect(rest.put).toHaveBeenCalledWith(
+        '/strategy/api/risk/costs',
+        expect.objectContaining({
+          broker: 'kotak',
+          exchange: 'NFO',
+          brokerage_per_order: 0,
+          exchange_rate: 0.0003553,
+          gst_rate: 0.18,
+          stt_sell_rate: 0.0015,
+          effective_from: '2026-09-26',
+        })
+      )
+    )
+  })
+  it('guides setup one step at a time without displaying advanced trading controls upfront', async () => {
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          status: 'success',
+          data:
+            url === '/strategy/api/risk'
+              ? { ...risk(), enabled: false, costs: null }
+              : { ...overview(), datasets: [], runs: [] },
+        },
+      })
+    )
+    renderResearch()
+    expect(await screen.findByRole('heading', { name: 'Set up your trading costs' })).toBeVisible()
+    expect(screen.getByRole('tab', { name: '1. Costs & limits' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.queryByRole('button', { name: 'Run development test' })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Forward Sandbox qualification and live release' })
+    ).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
+    expect(screen.getByRole('button', { name: 'Run development test' })).toBeDisabled()
+    expect(screen.getByText(/Add market history to run your first test/)).toBeVisible()
+    expect(rest.put).not.toHaveBeenCalled()
+    expect(rest.post).not.toHaveBeenCalled()
+  })
+
+  it('shows percentage fees in human units and converts them once when saving', async () => {
+    rest.put.mockResolvedValue({ data: { status: 'success', data: costs } })
+    renderResearch()
+    await userEvent.click(await screen.findByText('Edit fee details'))
+    expect(screen.getByLabelText('GST (%)')).toHaveValue(18)
+    await userEvent.clear(screen.getByLabelText('STT on sell (%)'))
+    await userEvent.type(screen.getByLabelText('STT on sell (%)'), '0.15')
+    await userEvent.click(screen.getByRole('button', { name: 'Update enabled profile costs' }))
+    await waitFor(() =>
+      expect(rest.put).toHaveBeenCalledWith('/strategy/api/risk/costs', {
+        ...costs,
+        stt_sell_rate: 0.0015,
+      })
+    )
+  })
+
   it('separates first and later loss budgets and marks missing account evidence unavailable', async () => {
     renderResearch()
+    await userEvent.click(await screen.findByText('View budget details and pause rules'))
     const sandbox = await screen.findByRole('region', { name: 'Sandbox risk budget' })
     expect(sandbox).toHaveTextContent('First filled trade remaining')
     expect(sandbox).toHaveTextContent('₹600.00')
@@ -173,7 +249,10 @@ describe('Research workspace', () => {
     expect(screen.getByRole('region', { name: 'Live risk budget' })).toHaveTextContent(
       'Unavailable'
     )
-    expect(screen.getByRole('heading', { name: 'Forward Sandbox qualification and live release' })).toBeVisible()
+    await userEvent.click(screen.getByRole('tab', { name: '4. Sandbox & live' }))
+    expect(
+      screen.getByRole('heading', { name: 'Forward Sandbox qualification and live release' })
+    ).toBeVisible()
   })
 
   it('imports a JSON file with provenance and selects its immutable dataset', async () => {
@@ -187,6 +266,7 @@ describe('Research workspace', () => {
       data: { status: 'success', data: { ...dataset, name: bundle.name } },
     })
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
     await userEvent.upload(
       await screen.findByLabelText('Dataset file'),
       new File([JSON.stringify(bundle)], 'dataset.json', { type: 'application/json' })
@@ -202,6 +282,7 @@ describe('Research workspace', () => {
 
   it('requires metadata for a CSV and keeps malformed files out of the API', async () => {
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
     await userEvent.upload(
       await screen.findByLabelText('Dataset file'),
       new File(['symbol,timestamp,open,high,low,close\n'], 'bars.csv', { type: 'text/csv' })
@@ -232,8 +313,10 @@ describe('Research workspace', () => {
       data: { status: 'success', data: { ...run, status: 'queued', report: null } },
     })
     renderResearch()
-    await screen.findByRole('option', { name: 'Imported provider data (90 sessions)' })
+    await screen.findByText(enabled ? 'Shared limits enabled' : 'Shared limits off')
     if (!enabled) await enterCosts()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
+    await screen.findByRole('option', { name: 'Imported provider data (90 sessions)' })
     await userEvent.selectOptions(screen.getByLabelText('Research dataset'), '7')
     await userEvent.click(screen.getByRole('button', { name: 'Run development test' }))
     await waitFor(() =>
@@ -267,12 +350,14 @@ describe('Research workspace', () => {
       })
     )
     renderResearch()
-    expect(await screen.findByText('Worker offline')).toBeVisible()
+    expect(await screen.findByText('Test service offline')).toBeVisible()
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
     expect(screen.getByRole('button', { name: 'Run development test' })).toBeDisabled()
   })
 
   it('keeps an undefined profit factor distinct from a zero net result', async () => {
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     const report = await screen.findByRole('region', { name: 'Run report' })
     expect(within(report).getByText('Net P&L', { selector: 'dt' }).parentElement).toHaveTextContent(
@@ -285,9 +370,11 @@ describe('Research workspace', () => {
 
   it('does not turn an empty fee into a free trade', async () => {
     renderResearch()
+    await userEvent.click(await screen.findByText('Edit fee details'))
+    await userEvent.clear(screen.getByLabelText('STT on sell (%)'))
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
     await screen.findByRole('option', { name: 'Imported provider data (90 sessions)' })
     await userEvent.selectOptions(screen.getByLabelText('Research dataset'), '7')
-    await userEvent.clear(screen.getByLabelText('STT sell rate'))
     await userEvent.click(screen.getByRole('button', { name: 'Run development test' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Missing costs cannot be treated as zero'
@@ -298,7 +385,7 @@ describe('Research workspace', () => {
   it('saves the edited fee schedule for entry risk without launching a run', async () => {
     rest.put.mockResolvedValue({ data: { status: 'success', data: costs } })
     renderResearch()
-    await screen.findByRole('region', { name: 'Sandbox risk budget' })
+    await userEvent.click(await screen.findByText('Edit fee details'))
     await userEvent.clear(screen.getByLabelText('Brokerage per order (INR)'))
     await userEvent.type(screen.getByLabelText('Brokerage per order (INR)'), '15')
     await userEvent.click(screen.getByRole('button', { name: 'Update enabled profile costs' }))
@@ -325,6 +412,7 @@ describe('Research workspace', () => {
     )
     rest.post.mockResolvedValue({ data: { status: 'success', data: frozen } })
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Run final holdout once' }))
     const dialog = screen.getByRole('dialog')
@@ -351,6 +439,7 @@ describe('Research workspace', () => {
     )
     rest.post.mockRejectedValue(new Error('These holdout contents have already been consumed'))
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Run final holdout once' }))
     const dialog = screen.getByRole('dialog')
@@ -376,6 +465,7 @@ describe('Research workspace', () => {
       data: { status: 'success', data: { ...pending, status: 'cancelled' } },
     })
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel run' }))
     await waitFor(() =>
@@ -430,11 +520,12 @@ describe('Research workspace', () => {
       })
     )
     renderResearch()
-    expect(await screen.findByText('Capital profile inactive')).toBeVisible()
-    expect(screen.getByText(/Existing flows retain their current risk rules/)).toBeVisible()
+    expect(await screen.findByText('Shared limits off')).toBeVisible()
+    expect(screen.getByText(/Your existing flows keep their current rules/)).toBeVisible()
     expect(screen.queryByText('Budget monitored')).not.toBeInTheDocument()
     expect(screen.queryByText(/Entry risk is blocked until/)).not.toBeInTheDocument()
-    expect(screen.getByLabelText('STT sell rate')).toHaveValue(null)
+    await userEvent.click(screen.getByText('Edit fee details'))
+    expect(screen.getByLabelText('STT on sell (%)')).toHaveValue(null)
   })
 
   it('explicitly enables the capital profile when saving verified costs and refreshes its state', async () => {
@@ -455,7 +546,7 @@ describe('Research workspace', () => {
       return Promise.resolve({ data: { status: 'success', data: costs } })
     })
     renderResearch()
-    await screen.findByText('Capital profile inactive')
+    await screen.findByText('Shared limits off')
     await enterCosts()
     const activate = screen.getByRole('button', { name: 'Save costs and enable capital profile' })
     expect(activate).toHaveAccessibleDescription(/managed Strategy Module entries/)
@@ -463,7 +554,7 @@ describe('Research workspace', () => {
     expect(rest.put).not.toHaveBeenCalled()
     await userEvent.click(activate)
     await waitFor(() => expect(rest.put).toHaveBeenCalledWith('/strategy/api/risk/costs', costs))
-    expect(await screen.findByText('Capital profile enabled')).toBeVisible()
+    expect(await screen.findByText('Shared limits enabled')).toBeVisible()
     expect(rest.post).not.toHaveBeenCalled()
   })
 
@@ -471,6 +562,7 @@ describe('Research workspace', () => {
     renderResearch()
     const large = new File(['{}'], 'large.json', { type: 'application/json' })
     Object.defineProperty(large, 'size', { value: 21 * 1024 * 1024 })
+    await userEvent.click(screen.getByRole('tab', { name: '2. Historical test' }))
     await userEvent.upload(screen.getByLabelText('Dataset file'), large)
     await userEvent.click(screen.getByRole('button', { name: 'Import dataset' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('20 MB')
@@ -489,7 +581,14 @@ describe('Research workspace', () => {
             reasons: ['Incomplete position outcomes make this replay unqualified.'],
           },
         },
-        metrics: { ...run.report.metrics, exposure_bars: 32, max_observed_open_drawdown_pct: 5.1 },
+        metrics: {
+          ...run.report.metrics,
+          exposure_bars: 32,
+          max_observed_open_drawdown_pct: 5.1,
+          signal_bar_minutes: 5,
+          execution_bar_minutes: 1,
+          ambiguous_exit_count: 2,
+        },
       },
     }
     rest.get.mockImplementation((url: string) =>
@@ -502,6 +601,7 @@ describe('Research workspace', () => {
       })
     )
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     expect(
       await screen.findByRole('heading', { name: 'Development training evidence' })
@@ -510,6 +610,8 @@ describe('Research workspace', () => {
       screen.getByText('Incomplete position outcomes make this replay unqualified.')
     ).toBeVisible()
     expect(screen.getAllByText('Bars with exposure')[0].parentElement).toHaveTextContent('32')
+    expect(screen.getByText('5-minute signals · 1-minute execution')).toBeVisible()
+    expect(screen.getByText(/2 exits have unknown within-candle order/)).toBeVisible()
   })
 
   it('shows the recorded cost schedule rather than the current editable assumptions in run evidence', async () => {
@@ -535,11 +637,14 @@ describe('Research workspace', () => {
       })
     )
     renderResearch()
+    await userEvent.click(screen.getByRole('tab', { name: '3. Results' }))
     await userEvent.click(await screen.findByRole('button', { name: 'View run 9' }))
     await userEvent.click(await screen.findByText('Recorded experiment inputs'))
     const inputs = screen.getByRole('region', { name: 'Recorded experiment inputs' })
     expect(inputs).toHaveTextContent('Historical fee version')
-    expect(inputs).toHaveTextContent('0.002')
-    expect(screen.getByLabelText('STT sell rate')).toHaveValue(0.001)
+    expect(inputs).toHaveTextContent('0.2')
+    await userEvent.click(screen.getByRole('tab', { name: '1. Costs & limits' }))
+    await userEvent.click(screen.getByText('Edit fee details'))
+    expect(screen.getByLabelText('STT on sell (%)')).toHaveValue(0.1)
   })
 })

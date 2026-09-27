@@ -78,18 +78,25 @@ class ControlResult:
 
 
 @contextmanager
-def _control_lease(user_id: str):
+def _control_lease(user_id: str, *, include_live=False):
     """Serialize controls with sandbox entries, including across workers."""
     from services.strategy_module import portfolio_governor
 
-    scope = portfolio_governor._scope_key(user_id, "sandbox", None)
-    lock = portfolio_governor._admission_lock(scope)
-    if not portfolio_governor._acquire_admission_lock(scope, lock):
-        raise RuntimeError("A sandbox entry or control is already being processed")
+    scopes = [portfolio_governor._scope_key(user_id, "sandbox", None)]
+    # Managed live entries currently support verified Kotak protection only.
+    if include_live:
+        scopes.append(portfolio_governor._scope_key(user_id, "live", "kotak"))
+    acquired = []
     try:
+        for scope in scopes:
+            lock = portfolio_governor._admission_lock(scope)
+            if not portfolio_governor._acquire_admission_lock(scope, lock):
+                raise RuntimeError("An entry or control is already being processed")
+            acquired.append((scope, lock))
         yield
     finally:
-        portfolio_governor._release_admission_lock(scope, lock)
+        for scope, lock in reversed(acquired):
+            portfolio_governor._release_admission_lock(scope, lock)
 
 
 def _read_strategy(strategy_id: int, user_id: str):
@@ -184,10 +191,10 @@ def _shared_workflow_error(workflow, strategy_id: int) -> str | None:
     return None
 
 
-def _exclusive_link_under_lease(strategy, workflow_id: int):
+def _exclusive_link_under_lease(strategy, workflow_id: int, *, require_sandbox=True):
     """Re-read linkage while the caller holds this workflow's mutation lease."""
     flow_db.db_session.expire_all()
-    link, error = resolve_workflow_link(strategy)
+    link, error = resolve_workflow_link(strategy, require_sandbox=require_sandbox)
     if error or link is None:
         return None, error or "Flow workflow is unavailable"
     if link.workflow_id != workflow_id:
@@ -198,18 +205,27 @@ def _exclusive_link_under_lease(strategy, workflow_id: int):
     return link, _shared_workflow_error(workflow, strategy.id)
 
 
-def enable_sandbox(strategy_id: int, user_id: str, api_key: str) -> ControlResult:
+def enable_sandbox(strategy_id: int, user_id: str, api_key: str, *, mode="sandbox") -> ControlResult:
     """Arm a saved sandbox strategy; activation cannot start a run or an order."""
     from services import flow_lifecycle_service as flow
 
     try:
-        with _control_lease(user_id):
+        with (_control_lease(user_id, include_live=True) if mode == "live" else _control_lease(user_id)):
             strategy = _read_strategy(strategy_id, user_id)
             if strategy is None:
                 return ControlResult(False, "disabled", error="Strategy not found")
+            scalp = bool(getattr(strategy, "scalp_profile", None))
+            if mode not in {"sandbox", "live"} or (mode == "live" and not scalp):
+                return _enable_refusal(strategy, "Unsupported automation mode")
+            if mode == "live":
+                from services.strategy_module.live_authorization import require_live_entry
+
+                allowed, reason = require_live_entry(user_id)
+                if not allowed or not strategy.live_enabled:
+                    return _enable_refusal(strategy, reason or "Enable LIVE for this strategy first")
             if strategy.automation_state not in {"disabled", "armed"}:
                 return _enable_refusal(strategy, "Close/reconciliation must finish before enabling")
-            if strategy.live_enabled:
+            if strategy.live_enabled and mode == "sandbox":
                 return _enable_refusal(
                     strategy, "Live-enabled strategies cannot use sandbox automation"
                 )
@@ -226,7 +242,7 @@ def enable_sandbox(strategy_id: int, user_id: str, api_key: str) -> ControlResul
                 return _enable_refusal(
                     strategy, "Every signal leg requires a configured positive stop loss"
                 )
-            if store.has_unresolved_order_outcomes(user_id, "sandbox"):
+            if store.has_unresolved_order_outcomes(user_id, mode):
                 return _enable_refusal(
                     strategy, "An order outcome is unresolved; reconcile before enabling"
                 )
@@ -235,7 +251,7 @@ def enable_sandbox(strategy_id: int, user_id: str, api_key: str) -> ControlResul
                     select(store.SmStrategyRun.id).where(
                         store.SmStrategyRun.strategy_id == strategy_id,
                         store.SmStrategyRun.stopped_at.is_(None),
-                        (store.SmStrategyRun.mode != "sandbox")
+                        (store.SmStrategyRun.mode != mode)
                         | store.SmStrategyRun.stop_requested_reason.is_not(None),
                     )
                 )
@@ -256,15 +272,36 @@ def enable_sandbox(strategy_id: int, user_id: str, api_key: str) -> ControlResul
                         strategy, error or "Existing exposure requires reconciliation"
                     )
             flow_db.db_session.expire_all()
-            link, error = resolve_workflow_link(strategy)
+            link, error = (
+                resolve_workflow_link(strategy, require_sandbox=False)
+                if scalp else resolve_workflow_link(strategy)
+            )
             if error or link is None:
                 return _enable_refusal(strategy, error or "Flow workflow is unavailable")
             workflow_id = link.workflow_id
             with flow_db.workflow_mutation_lease(workflow_id):
-                link, error = _exclusive_link_under_lease(strategy, workflow_id)
+                link, error = (
+                    _exclusive_link_under_lease(strategy, workflow_id, require_sandbox=False)
+                    if scalp else _exclusive_link_under_lease(strategy, workflow_id)
+                )
                 if error:
                     return _enable_refusal(strategy, error, workflow_id)
                 workflow = flow_db.get_workflow(workflow_id)
+                if scalp and link.mode != mode:
+                    if strategy.automation_state != "disabled" or link.active or open_run is not None:
+                        return _enable_refusal(strategy, "Disable automation and close positions before switching mode")
+                    from copy import deepcopy
+
+                    nodes = deepcopy(workflow.nodes)
+                    for node in nodes:
+                        if node.get("type") in STRATEGY_EXECUTION_NODE_TYPES:
+                            node["data"]["mode"] = mode
+                    if not flow_db.update_workflow(workflow_id, nodes=nodes):
+                        return _enable_refusal(strategy, "Could not save the selected Flow mode")
+                    link, error = _exclusive_link_under_lease(strategy, workflow_id, require_sandbox=False)
+                    if error or link.mode != mode:
+                        return _enable_refusal(strategy, error or "Flow mode could not be verified")
+                    workflow = flow_db.get_workflow(workflow_id)
                 blocked = flow.execution_blocked(workflow)
                 if blocked:
                     return _enable_refusal(
@@ -283,7 +320,10 @@ def enable_sandbox(strategy_id: int, user_id: str, api_key: str) -> ControlResul
                         _critical(strategy_id, user_id, error)
                     return _enable_refusal(strategy, error, workflow_id)
                 try:
-                    verified, error = _exclusive_link_under_lease(strategy, workflow_id)
+                    verified, error = (
+                        _exclusive_link_under_lease(strategy, workflow_id, require_sandbox=False)
+                        if scalp else _exclusive_link_under_lease(strategy, workflow_id)
+                    )
                     if error or verified is None or not verified.active:
                         raise RuntimeError(error or "Flow activation could not be verified")
                     _transition(strategy_id, user_id, "armed")
@@ -342,7 +382,9 @@ def disable_and_close(
         return ControlResult(False, "close_failed", workflow_id, run_id, True, error)
 
     try:
-        with _control_lease(user_id):
+        initial = _read_strategy(strategy_id, user_id)
+        scalp = bool(getattr(initial, "scalp_profile", None))
+        with (_control_lease(user_id, include_live=True) if scalp else _control_lease(user_id)):
             before = _read_strategy(strategy_id, user_id)
             if before is None:
                 return ControlResult(False, "disabled", error="Strategy not found")
@@ -363,10 +405,10 @@ def disable_and_close(
             _transition(
                 strategy_id, user_id, "closing", notify=before.automation_state != "close_failed"
             )
-            if before.live_enabled:
+            if before.live_enabled and not scalp:
                 return failed("Live-enabled strategies cannot use sandbox automation controls")
             flow_db.db_session.expire_all()
-            link, link_error = resolve_workflow_link(before)
+            link, link_error = resolve_workflow_link(before, require_sandbox=not scalp)
             if link is not None:
                 workflow_id = link.workflow_id
                 link_error = _shared_workflow_error(flow_db.get_workflow(workflow_id), strategy_id)
@@ -381,7 +423,7 @@ def disable_and_close(
                     )
                     .order_by(store.SmStrategyRun.id)
                 ).all()
-            if any(mode != "sandbox" for _, mode in open_runs):
+            if not scalp and any(mode != "sandbox" for _, mode in open_runs):
                 return failed("A non-sandbox run requires separate reconciliation")
             pending = False
             errors = []
@@ -420,7 +462,7 @@ def disable_and_close(
             # check/trigger teardown/state-write unit, not just the DB write.
             with flow_db.workflow_mutation_lease(workflow_id):
                 link, link_error = _exclusive_link_under_lease(
-                    _read_strategy(strategy_id, user_id), workflow_id
+                    _read_strategy(strategy_id, user_id), workflow_id, require_sandbox=not scalp
                 )
                 if link_error:
                     return failed("; ".join([*errors, link_error]))
@@ -444,7 +486,7 @@ def disable_and_close(
                 if status != 200:
                     return failed(payload.get("error") or "Flow deactivation failed")
                 verified, error = _exclusive_link_under_lease(
-                    _read_strategy(strategy_id, user_id), workflow_id
+                    _read_strategy(strategy_id, user_id), workflow_id, require_sandbox=not scalp
                 )
                 if error or verified is None or verified.active:
                     return failed(error or "Flow deactivation could not be verified")

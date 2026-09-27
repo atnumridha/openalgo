@@ -132,7 +132,7 @@ function DialogError({ message }: { message: string }) {
   )
 }
 
-export default function AutomationSafetyCard() {
+export default function AutomationSafetyCard({ showStarterPack = true }: { showStarterPack?: boolean }) {
   const queryClient = useQueryClient()
   const [confirming, setConfirming] = useState<'grant' | 'revoke' | 'install' | null>(null)
   const [result, setResult] = useState<StarterPackInstallResult | null>(null)
@@ -343,7 +343,7 @@ export default function AutomationSafetyCard() {
           </ul>
         </details>
 
-        <section aria-labelledby="starter-pack-heading" className="rounded-lg border border-dashed p-4">
+        {showStarterPack && <section aria-labelledby="starter-pack-heading" className="rounded-lg border border-dashed p-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
               <h3 id="starter-pack-heading" className="font-medium">
@@ -365,7 +365,7 @@ export default function AutomationSafetyCard() {
               Install recommended starter pack
             </Button>
           </div>
-        </section>
+        </section>}
 
         <section aria-labelledby="next-steps-heading" className="space-y-2">
           <h3 id="next-steps-heading" className="font-medium">

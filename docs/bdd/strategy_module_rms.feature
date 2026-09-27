@@ -3,7 +3,7 @@ Feature: Strategy module and risk management
   durable order ownership, confirmed-flat stopping and restart-safe risk
   management. Scenarios are grouped by the money or operator truth they protect.
 
-  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:347
+  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:348
   Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
     When an alert is admitted past route preflight on that token
@@ -33,7 +33,7 @@ Feature: Strategy module and risk management
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:530
+  # Source: test/test_strategy_module_engine.py:531
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:902, test/test_strategy_module_engine.py:927, test/test_strategy_module_scheduler.py:750
+  # Source: services/strategy_module/engine.py:948, test/test_strategy_module_engine.py:928, test/test_strategy_module_scheduler.py:750
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -79,7 +79,7 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:1431
+  # Source: test/test_strategy_module_engine.py:1432
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns

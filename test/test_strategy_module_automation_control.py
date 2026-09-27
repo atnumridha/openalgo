@@ -355,7 +355,7 @@ def test_flow_storage_helper_only_returns_exact_integer_strategy_links(monkeypat
 @pytest.fixture
 def control_env(monkeypatch):
     """Real control/Flow rows; replace only trigger and order side effects."""
-    from database import strategy_module_db as store
+    from database import auth_db, strategy_module_db as store
     from services import (
         flow_executor_service,
         flow_order_update_monitor_service,
@@ -367,6 +367,13 @@ def control_env(monkeypatch):
     store.init_db()
     flow_db.init_db()
     owner = f"automation_control_test_{uuid4().hex}"
+    connection_id = f"control-{uuid4().hex}"
+    from services import flow_readiness_service
+
+    monkeypatch.setattr(auth_db, "get_username_by_apikey", lambda key: owner if key == "test-key" else None)
+    monkeypatch.setattr(flow_readiness_service, "connection_summary", lambda cid: {
+        "id": connection_id, "user_id": owner, "status": "connected", "is_revoked": False,
+    } if cid == connection_id else None)
     for item in store.list_strategies(owner):
         store.set_strategy_status(item["id"], "stopped", None)
         store.delete_strategy(item["id"], owner)
@@ -374,7 +381,8 @@ def control_env(monkeypatch):
         owner,
         {
             "name": "Control test",
-            "strategy_kind": "signal",
+            "strategy_kind": "batch",
+            "broker_connection_id": connection_id,
             "underlying": "SENSEX",
             "underlying_exchange": "BSE_INDEX",
             "product": "MIS",
@@ -407,6 +415,7 @@ def control_env(monkeypatch):
         definition["name"],
         nodes=definition["nodes"],
         edges=definition["edges"],
+        broker_connection_id=connection_id,
     )
     workflow_id = workflow.id
     calls = []
@@ -485,6 +494,9 @@ def test_enable_arms_future_signals_without_starting_or_dispatching(control_env)
 
 def test_enable_accepts_cash_workflow_with_entry_and_two_protective_exits(control_env):
     env = control_env
+    row = _control_strategy(env)
+    row.strategy_kind = "signal"
+    env.store.db_session.commit()
     workflow = _control_workflow(env)
     nodes = deepcopy(workflow.nodes)
     entry = next(node for node in nodes if node["id"] == "run")
@@ -1319,3 +1331,60 @@ def test_flow_mutation_lease_serializes_another_worker_process(control_env):
             process.join(timeout=5)
         parent.close()
         child.close()
+
+@pytest.mark.parametrize('mode', ['sandbox', 'live'])
+def test_scalping_mode_can_arm_and_disable_without_placing_orders(control_env, monkeypatch, mode):
+    from services.strategy_module import live_authorization
+    env = control_env
+    row = _control_strategy(env)
+    row.scalp_profile = 'ema915'
+    row.live_enabled = mode == 'live'
+    env.store.db_session.commit()
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
+    result = automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key', mode=mode)
+    assert result.ok, result.error
+    flow = _control_workflow(env)
+    assert next(n for n in flow.nodes if n['id'] == 'run')['data']['mode'] == mode
+    assert env.calls == ['flow:register']
+    stopped = automation_control.disable_and_close(env.strategy_id, env.owner)
+    assert stopped.ok, stopped.error
+    assert stopped.state == 'disabled'
+    assert not _control_workflow(env).is_active
+    assert _control_strategy(env).current_run_id is None
+
+
+def test_scalping_live_start_requires_live_session(control_env, monkeypatch):
+    from services.strategy_module import live_authorization
+    env = control_env
+    row = _control_strategy(env)
+    row.scalp_profile = 'ema915'
+    row.live_enabled = True
+    env.store.db_session.commit()
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (False, 'session authorization required'))
+    result = automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key', mode='live')
+    assert not result.ok and 'authorization' in result.error
+    assert env.calls == []
+
+
+def test_scalping_pack_installs_once_and_keeps_all_three_inactive(control_env, monkeypatch):
+    from services.strategy_module import scalping_pack
+    env = control_env
+    connection_id = str(uuid4())
+    monkeypatch.setattr(scalping_pack, '_connection_for_owner', lambda *_: connection_id)
+    first = scalping_pack.install(env.owner)
+    second = scalping_pack.install(env.owner)
+    assert len(first['created']) == 3
+    assert second['created'] == []
+    assert set(second['existing']) == set(first['created'])
+    assert second['workflows'] == first['workflows']
+    for sid in first['created']:
+        row = env.store.get_strategy(sid, env.owner)
+        assert row.scalp_profile and row.status == 'stopped'
+        assert row.automation_state == 'disabled' and not row.live_enabled
+        assert row.current_run_id is None
+        linked = flow_db.get_workflows_for_strategy(sid)
+        assert len(linked) == 1 and not linked[0].is_active
+        for flow in linked:
+            flow_db.delete_workflow(flow.id)
+        env.store.delete_strategy(sid, env.owner)
+    assert env.calls == []

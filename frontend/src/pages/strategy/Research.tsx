@@ -13,6 +13,7 @@ import {
   saveRiskCosts,
 } from '@/api/trading-research'
 import QualificationPanel from '@/components/strategy/QualificationPanel'
+import DailyOptionsHistory from '@/components/strategy/DailyOptionsHistory'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -34,6 +35,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import type {
   CostSchedule,
@@ -61,20 +63,46 @@ const costFields = [
   ['effective_from', 'Effective from', 'date'],
   ['effective_to', 'Effective until', 'date'],
   ['brokerage_per_order', 'Brokerage per order (INR)', 'number'],
-  ['exchange_rate', 'Exchange fee rate', 'number'],
-  ['sebi_rate', 'SEBI fee rate', 'number'],
-  ['gst_rate', 'GST rate', 'number'],
-  ['stamp_buy_rate', 'Stamp duty buy rate', 'number'],
-  ['stt_sell_rate', 'STT sell rate', 'number'],
+  ['exchange_rate', 'Exchange fee (%)', 'number'],
+  ['sebi_rate', 'SEBI fee (%)', 'number'],
+  ['gst_rate', 'GST (%)', 'number'],
+  ['stamp_buy_rate', 'Stamp duty on buy (%)', 'number'],
+  ['stt_sell_rate', 'STT on sell (%)', 'number'],
   ['slippage_bps', 'Slippage (basis points)', 'number'],
 ] as const
 
+const percentCosts = new Set([
+  'exchange_rate',
+  'sebi_rate',
+  'gst_rate',
+  'stamp_buy_rate',
+  'stt_sell_rate',
+])
+const percentParameters = new Set(['stop_pct', 'target_pct', 'pullback_tolerance'])
+const commonCostFields = new Set(['effective_from', 'effective_to', 'slippage_bps'])
+// Published rates checked on this date; not a historical rate table.
+const kotakVerifiedOn = '2026-09-26'
+const kotakNseDraft = {
+  schedule_id: 'Kotak Neo API - NSE options',
+  source:
+    'Verified 2026-09-26: https://www.kotakneo.com/support/what-is-the-brokerage-for-using-neo-trade-api/ ; https://www.kotakneo.com/calculator/brokerage-calculator/ . Trade Free API plan, NSE options; exchange includes IPFT. Slippage is an estimate.',
+  broker: 'kotak',
+  exchange: 'NFO',
+  brokerage_per_order: '0',
+  exchange_rate: '0.03553',
+  sebi_rate: '0.0001',
+  gst_rate: '18',
+  stamp_buy_rate: '0.003',
+  stt_sell_rate: '0.15',
+  slippage_bps: '10',
+}
+
 const parameterLabels: Record<string, string> = {
   lookback: 'Lookback bars',
-  stop_pct: 'Premium stop fraction',
-  target_pct: 'Premium target fraction',
+  stop_pct: 'Stop-loss distance (%)',
+  target_pct: 'Target distance (%)',
   volume_ratio: 'Volume ratio',
-  pullback_tolerance: 'VWAP pullback tolerance',
+  pullback_tolerance: 'VWAP pullback tolerance (%)',
 }
 
 const datasetTemplate = {
@@ -223,29 +251,46 @@ function Budget({
 
 function Metrics({ metrics }: { metrics: ResearchMetrics }) {
   return (
-    <dl className="grid grid-cols-2 gap-5 md:grid-cols-4">
-      <Metric label="Net P&L" value={money(metrics.net_pnl)} />
-      <Metric label="Net expectancy / trade" value={money(metrics.expectancy)} />
-      <Metric
-        label="Profit factor"
-        value={metrics.profit_factor_unbounded ? 'No losing trades' : number(metrics.profit_factor)}
-      />
-      <Metric label="Maximum drawdown" value={number(metrics.max_drawdown_pct, '%')} />
-      <Metric label="Trades" value={number(metrics.trade_count)} />
-      <Metric label="Win rate" value={number(metrics.win_rate, '%')} />
-      <Metric label="Longest losing streak" value={number(metrics.max_losing_streak)} />
-      <Metric label="Ending equity" value={money(metrics.ending_equity)} />
-      <Metric label="Bars with exposure" value={number(metrics.exposure_bars)} />
-      <Metric
-        label="Observed open drawdown"
-        value={number(metrics.max_observed_open_drawdown_pct, '%')}
-      />
-    </dl>
+    <div className="space-y-3">
+      {metrics.execution_bar_minutes !== undefined && (
+        <p className="text-sm text-muted-foreground">
+          {metrics.signal_bar_minutes}-minute signals · {metrics.execution_bar_minutes}-minute
+          execution
+        </p>
+      )}
+      {!!metrics.ambiguous_exit_count && (
+        <p className="text-sm text-amber-600 dark:text-amber-400">
+          {metrics.ambiguous_exit_count} exits have unknown within-candle order. Protective exits
+          are assumed first; these results do not establish the actual sequence.
+        </p>
+      )}
+      <dl className="grid grid-cols-2 gap-5 md:grid-cols-4">
+        <Metric label="Net P&L" value={money(metrics.net_pnl)} />
+        <Metric label="Net expectancy / trade" value={money(metrics.expectancy)} />
+        <Metric
+          label="Profit factor"
+          value={
+            metrics.profit_factor_unbounded ? 'No losing trades' : number(metrics.profit_factor)
+          }
+        />
+        <Metric label="Maximum drawdown" value={number(metrics.max_drawdown_pct, '%')} />
+        <Metric label="Trades" value={number(metrics.trade_count)} />
+        <Metric label="Win rate" value={number(metrics.win_rate, '%')} />
+        <Metric label="Longest losing streak" value={number(metrics.max_losing_streak)} />
+        <Metric label="Ending equity" value={money(metrics.ending_equity)} />
+        <Metric label="Bars with exposure" value={number(metrics.exposure_bars)} />
+        <Metric
+          label="Observed open drawdown"
+          value={number(metrics.max_observed_open_drawdown_pct, '%')}
+        />
+      </dl>
+    </div>
   )
 }
 
 export default function Research() {
   const queryClient = useQueryClient()
+  const [step, setStep] = useState('costs')
   const [file, setFile] = useState<File | null>(null)
   const [csvMetadata, setCsvMetadata] = useState('')
   const [csvName, setCsvName] = useState('')
@@ -323,30 +368,58 @@ export default function Research() {
     },
   })
 
-  const costValue = (key: keyof CostSchedule) =>
-    costEdits[key] ?? String(risk.data?.costs?.[key] ?? '')
+  const costValue = (key: keyof CostSchedule) => {
+    if (costEdits[key] !== undefined) return costEdits[key]
+    const value = risk.data?.costs?.[key]
+    if (value === undefined || value === null) return ''
+    return String(percentCosts.has(key) ? Number((Number(value) * 100).toPrecision(12)) : value)
+  }
   const readCosts = (): CostSchedule => {
     const result: Record<string, string | number> = {}
     for (const [key, label, type] of costFields) {
       const value = costValue(key).trim()
       if (!value)
-        throw new Error(`Enter ${label.toLowerCase()}. Missing costs cannot be treated as zero.`)
+        throw new Error(
+          `Enter ${label.toLowerCase()}.${type === 'number' ? ' Missing costs cannot be treated as zero.' : ''}`
+        )
       if (type === 'number') {
         const parsed = Number(value)
         if (!Number.isFinite(parsed) || parsed < 0)
           throw new Error(`${label} must be a non-negative number.`)
-        result[key] = parsed
+        if (percentCosts.has(key) && parsed > 100) throw new Error(`${label} cannot exceed 100%.`)
+        result[key] = percentCosts.has(key) ? parsed / 100 : parsed
       } else {
         result[key] = value
       }
     }
+    for (const key of ['exchange', 'broker'] as const) {
+      const scope = costValue(key)
+      if (scope) result[key] = scope
+    }
     return result as unknown as CostSchedule
   }
+  const costInput = ([key, label, type]: (typeof costFields)[number]) => (
+    <div className="space-y-2" key={key}>
+      <Label htmlFor={`cost-${key}`}>{label}</Label>
+      <Input
+        id={`cost-${key}`}
+        type={type}
+        min={type === 'number' ? '0' : undefined}
+        step={type === 'number' ? 'any' : undefined}
+        value={costValue(key)}
+        onChange={(event) => {
+          setCostEdits((previous) => ({ ...previous, [key]: event.target.value }))
+          savedCosts.reset()
+        }}
+      />
+    </div>
+  )
 
   const created = useMutation({
     mutationFn: createResearchRun,
     onSuccess: (run) => {
       setSelectedRun(run.id)
+      setStep('results')
       refresh()
     },
   })
@@ -375,10 +448,11 @@ export default function Research() {
         throw new Error('Select an imported dataset and candidate first.')
       const parsedParameters: Record<string, number> = {}
       for (const [key, fallback] of Object.entries(candidate.defaults)) {
-        const value = parameters[key] ?? String(fallback)
+        const value =
+          parameters[key] ?? String(percentParameters.has(key) ? fallback * 100 : fallback)
         if (!value.trim() || !Number.isFinite(Number(value)))
           throw new Error(`Enter a valid ${parameterLabels[key] ?? key}.`)
-        parsedParameters[key] = Number(value)
+        parsedParameters[key] = percentParameters.has(key) ? Number(value) / 100 : Number(value)
       }
       if (!seed.trim() || !Number.isSafeInteger(Number(seed)) || Number(seed) < 0)
         throw new Error('The reproducibility seed must be a non-negative whole number.')
@@ -401,20 +475,18 @@ export default function Research() {
           <Link to="/strategy" className="text-sm text-muted-foreground hover:underline">
             Strategies
           </Link>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight">Research</h1>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight">Prepare your strategy</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">
-            Test explicit trading rules against imported market history, after costs. Build evidence
-            before risking capital.
+            Set your costs, test the rules, then review the results before using real money.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Badge variant="outline">Reviewed release required</Badge>
           <Badge variant={workerOnline ? 'secondary' : 'outline'}>
             {overview.isPending
-              ? 'Checking worker'
+              ? 'Checking test service'
               : workerOnline
-                ? 'Worker online'
-                : 'Worker offline'}
+                ? 'Test service ready'
+                : 'Test service offline'}
           </Badge>
           <Button
             variant="outline"
@@ -435,676 +507,921 @@ export default function Research() {
           Research could not be loaded. {overview.error.message}
         </p>
       )}
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle>Shared long-options capital profile</CardTitle>
-            {risk.data && (
-              <Badge variant={risk.data.enabled ? 'secondary' : 'outline'}>
-                {risk.data.enabled ? 'Capital profile enabled' : 'Capital profile inactive'}
-              </Badge>
-            )}
-          </div>
-          <CardDescription>
-            {risk.data
-              ? `${money(risk.data.policy.capital)} allocation · ${money(risk.data.policy.daily_limit)} daily loss limit · ${number(risk.data.policy.drawdown_pct * 100, '%')} peak-equity drawdown pause · ${number(risk.data.policy.cash_buffer_pct * 100, '%')} cash buffer`
-              : 'Loading the configured risk policy…'}
-            <span className="block mt-1">
-              Profits do not replenish loss allowances. First-trade and later-trade budgets cannot
-              transfer to each other.
-            </span>
-            {risk.data && !risk.data.enabled && (
-              <span className="block mt-2">
-                Existing flows retain their current risk rules. This profile does not protect their
-                entries while inactive. Save verified costs below to explicitly enable it for your
-                managed Strategy Module entries.
-              </span>
-            )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {risk.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              Risk evidence is unavailable. {risk.error.message}
+      <section className="rounded-xl border bg-card p-5 sm:p-6 space-y-4" aria-label="Setup status">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Your next step
             </p>
-          ) : risk.data ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Budget
-                name="Sandbox"
-                account={risk.data.accounts.sandbox}
-                enabled={risk.data.enabled}
-              />
-              <Budget name="Live" account={risk.data.accounts.live} enabled={risk.data.enabled} />
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Loading risk evidence…</p>
-          )}
-        </CardContent>
-      </Card>
+            <h2 className="mt-1 text-xl font-semibold">
+              {risk.error
+                ? 'Check your connection'
+                : risk.isPending
+                  ? 'Loading your setup…'
+                  : !risk.data?.enabled
+                    ? 'Set up your trading costs'
+                    : !overview.data?.datasets.length
+                      ? 'Add history for your first test'
+                      : 'Test and review your strategy'}
+            </h2>
+          </div>
+          <Badge variant="outline">
+            {risk.error
+              ? 'Status unavailable'
+              : risk.isPending
+                ? 'Loading'
+                : risk.data?.enabled
+                  ? 'Shared limits enabled'
+                  : 'Shared limits off'}
+          </Badge>
+        </div>
+        <p className="max-w-3xl text-sm text-muted-foreground">
+          {risk.data?.enabled
+            ? 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
+            : 'Your existing flows keep their current rules. Complete step 1 to apply these shared limits to managed Strategy Module entries. Saving this setup does not start trading.'}
+        </p>
+        {risk.error && (
+          <p role="alert" className="text-sm text-destructive">
+            Risk evidence is unavailable. {risk.error.message}
+          </p>
+        )}
+        {risk.data && (
+          <dl className="grid grid-cols-2 gap-4 border-t pt-4 lg:grid-cols-4">
+            <Metric label="Allocated capital" value={money(risk.data.policy.capital)} />
+            <Metric
+              label="First trade: planned loss limit"
+              value={money(risk.data.policy.first_trade_limit)}
+            />
+            <Metric
+              label="All later trades share"
+              value={money(risk.data.policy.later_trades_limit)}
+            />
+            <Metric label="Daily planned loss limit" value={money(risk.data.policy.daily_limit)} />
+          </dl>
+        )}
+        <p className="text-xs text-muted-foreground">
+          These are strategy limits, not your broker balance. Profits do not refill the loss
+          allowance. Market gaps can exceed a planned stop.
+        </p>
+        {risk.data && (risk.data.accounts.sandbox?.paused || risk.data.accounts.live?.paused) && (
+          <p role="alert" className="text-sm text-destructive">
+            A trading budget is paused. Open Costs &amp; limits to review it before resuming.
+          </p>
+        )}
+      </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-        <Card>
-          <CardHeader>
-            <CardTitle>1. Import market history</CardTitle>
-            <CardDescription>
-              Use licensed or permitted historical data. Imports are immutable and retain their
-              source and content fingerprint.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="dataset-file">Dataset file</Label>
-              <Input
-                id="dataset-file"
-                type="file"
-                accept=".json,.csv,application/json,text/csv"
-                onChange={(event) => {
-                  setFile(event.target.files?.[0] ?? null)
-                  imported.reset()
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                JSON bundle or CSV, up to 20 MB including metadata. At least 80 sessions are needed:
-                60 remain sealed for final evaluation.
-              </p>
-            </div>
-            {csv && (
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label htmlFor="csv-name">Dataset name</Label>
-                  <Input
-                    id="csv-name"
-                    value={csvName}
-                    onChange={(event) => setCsvName(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="csv-provider">Data provider</Label>
-                  <Input
-                    id="csv-provider"
-                    value={csvProvider}
-                    onChange={(event) => setCsvProvider(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="csv-metadata">CSV metadata (JSON)</Label>
-                  <Textarea
-                    id="csv-metadata"
-                    rows={7}
-                    className="font-mono text-xs"
-                    value={csvMetadata}
-                    onChange={(event) => setCsvMetadata(event.target.value)}
-                    placeholder="Paste the metadata object from the format guide"
-                  />
-                </div>
-              </div>
-            )}
-            <Button disabled={!file || imported.isPending} onClick={() => imported.mutate()}>
-              {imported.isPending ? 'Importing…' : 'Import dataset'}
-            </Button>
-            {imported.error && (
-              <p role="alert" className="text-sm text-destructive">
-                {imported.error.message}
-              </p>
-            )}
-            {imported.data && (
-              <output aria-label="Import result" className="block text-sm">
-                Imported {imported.data.name}. {number(imported.data.row_count)} bars validated.
-              </output>
-            )}
-            <details className="rounded-lg border p-3 text-sm">
-              <summary className="cursor-pointer font-medium">Required dataset format</summary>
-              <div className="space-y-3 pt-3 text-muted-foreground">
-                <p>
-                  JSON contains name, provider, metadata and rows. CSV needs the same metadata
-                  separately and these columns: symbol,timestamp,open,high,low,close,volume.
-                </p>
-                <p>
-                  Each row is an underlying or option candle. Use timezone-aware timestamps such as
-                  2026-01-05T09:20:00+05:30, with bar-close time. Do not include future bars.
-                </p>
-                <p>
-                  VWAP requires observed underlying volume and an explicit session_open in HH:MM,
-                  verified against your source. No opening time is assumed. Every session must start
-                  with the underlying close at session_open plus bar_minutes. For a verified 09:15
-                  opening and five-minute bars, that first close is 09:20. Missing opening bars make
-                  the history unsuitable for session VWAP. Trend tests may omit session_open.
-                </p>
-                <p>
-                  Metadata must provide the underlying, source reference, Asia/Kolkata timezone, bar
-                  interval, session close and point-in-time contracts: symbol, underlying, exchange,
-                  CE/PE, strike, expiry, lot size, multiplier and index/mcx segment. Verify these
-                  values against the source; the template contains placeholders and no prices.
-                </p>
-                <a
-                  className="text-primary underline"
-                  download="research-dataset-template.json"
-                  href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(datasetTemplate, null, 2))}`}
-                >
-                  Download empty JSON template
-                </a>
-                <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
-                  {JSON.stringify(datasetTemplate.metadata, null, 2)}
-                </pre>
-              </div>
-            </details>
-            <div className="space-y-2">
-              <Label htmlFor="research-dataset">Research dataset</Label>
-              <select
-                id="research-dataset"
-                className={selectClass}
-                value={datasetId}
-                onChange={(event) => setDatasetId(event.target.value)}
-              >
-                <option value="">Select imported history</option>
-                {overview.data?.datasets.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.session_count} sessions)
-                  </option>
-                ))}
-              </select>
-            </div>
-            {selectedDataset ? (
-              <div className="rounded-lg bg-muted/40 p-3 text-xs space-y-2">
-                <p>
-                  {selectedDataset.provider} · {number(selectedDataset.row_count)} bars ·{' '}
-                  {selectedDataset.start} to {selectedDataset.end}
-                </p>
-                <p className="break-all font-mono">Fingerprint: {selectedDataset.content_hash}</p>
-                <p>
-                  Candle screening only. Quotes, spreads and actual fills are not established by
-                  candles.
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                No dataset selected. No market prices are supplied with this workspace.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>2. Define a reproducible experiment</CardTitle>
-            <CardDescription>
-              Signals use closed underlying bars. Option executions occur on a subsequent bar, with
-              whole-lot sizing and the configured risk budget.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="research-candidate">Candidate rules</Label>
-              <select
-                id="research-candidate"
-                value={candidateId}
-                onChange={(event) => {
-                  setCandidateId(event.target.value as ResearchCandidateId)
-                  setParameters({})
-                }}
-                className={selectClass}
-              >
-                {overview.data?.candidates.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              <p className="text-sm text-muted-foreground">{candidate?.description}</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {Object.entries(candidate?.defaults ?? {}).map(([key, fallback]) => (
-                <div className="space-y-2" key={key}>
-                  <Label htmlFor={`parameter-${key}`}>{parameterLabels[key] ?? key}</Label>
-                  <Input
-                    id={`parameter-${key}`}
-                    type="number"
-                    step="any"
-                    value={parameters[key] ?? String(fallback)}
-                    onChange={(event) =>
-                      setParameters((previous) => ({ ...previous, [key]: event.target.value }))
-                    }
-                  />
-                </div>
-              ))}
-              <div className="space-y-2">
-                <Label htmlFor="research-seed">Reproducibility seed</Label>
-                <Input
-                  id="research-seed"
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={seed}
-                  onChange={(event) => setSeed(event.target.value)}
-                />
-              </div>
-            </div>
-            <div className="border-t pt-4 space-y-3">
-              <h3 className="font-medium">Costs and execution assumptions</h3>
-              {risk.data?.enabled && !risk.data.costs && (
-                <p className="text-sm text-destructive">
-                  Entry risk is blocked until a complete, dated cost schedule is saved.
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                Enter the applicable fee schedule and dates from your broker or exchange. Rates are
-                decimal fractions (0.18 means 18%); one basis point is 0.01%. No missing fee is
-                assumed to be zero.
-              </p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {costFields.map(([key, label, type]) => (
-                  <div className="space-y-2" key={key}>
-                    <Label htmlFor={`cost-${key}`}>{label}</Label>
-                    <Input
-                      id={`cost-${key}`}
-                      type={type}
-                      min={type === 'number' ? '0' : undefined}
-                      step={type === 'number' ? 'any' : undefined}
-                      value={costValue(key)}
-                      onChange={(event) => {
-                        setCostEdits((previous) => ({ ...previous, [key]: event.target.value }))
+      <Tabs
+        value={step}
+        onValueChange={(value) => {
+          setStep(value)
+          setFormError(null)
+        }}
+        className="gap-5"
+      >
+        <TabsList
+          aria-label="Strategy preparation steps"
+          className="grid h-auto w-full grid-cols-2 gap-1 p-1 sm:grid-cols-4"
+        >
+          <TabsTrigger value="costs" className="py-3">
+            1. Costs &amp; limits
+          </TabsTrigger>
+          <TabsTrigger value="history" className="py-3">
+            2. Historical test
+          </TabsTrigger>
+          <TabsTrigger value="results" className="py-3">
+            3. Results
+          </TabsTrigger>
+          <TabsTrigger value="qualification" className="py-3">
+            4. Sandbox &amp; live
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="costs" className="space-y-5">
+          <Card>
+            <CardContent className="pt-6">
+              {' '}
+              <div className="space-y-4">
+                <h3 className="font-semibold text-lg">Broker fees and execution costs</h3>
+                {risk.data?.enabled && !risk.data.costs && (
+                  <p className="text-sm text-destructive">
+                    Entry risk is blocked until a complete, dated cost schedule is saved.
+                  </p>
+                )}
+                <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">Kotak Neo API · NSE options</p>
+                      <p className="text-sm text-muted-foreground">
+                        ₹0 API brokerage on Trade Free plans. Taxes and exchange fees still apply.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setCostEdits({
+                          ...kotakNseDraft,
+                          effective_from: kotakVerifiedOn,
+                          effective_to:
+                            costValue('effective_to') >= kotakVerifiedOn
+                              ? costValue('effective_to')
+                              : '',
+                        })
+                        setFormError(null)
                         savedCosts.reset()
                       }}
-                    />
+                    >
+                      Use Kotak Neo rates
+                    </Button>
                   </div>
-                ))}
-              </div>
-              <p id="capital-profile-effect" className="text-sm text-muted-foreground">
-                {risk.data?.enabled
-                  ? 'Updating costs keeps this capital profile enabled.'
-                  : `Saving costs enables the shared ${money(risk.data?.policy.capital)} long-options capital profile.`}{' '}
-                It applies to your managed Strategy Module entries, restricts them to supported
-                long-option trades, and requires release qualification for new managed live entries.
-                Running a research test alone does not enable the profile.
-              </p>
-              <Button
-                variant="outline"
-                disabled={savedCosts.isPending || !risk.data || Boolean(risk.error)}
-                aria-describedby="capital-profile-effect"
-                onClick={() => {
-                  setFormError(null)
-                  try {
-                    savedCosts.mutate(readCosts())
-                  } catch (error) {
-                    setFormError((error as Error).message)
-                  }
-                }}
-              >
-                {savedCosts.isPending
-                  ? 'Saving profile…'
-                  : risk.data?.enabled
-                    ? 'Update enabled profile costs'
-                    : 'Save costs and enable capital profile'}
-              </Button>
-              {savedCosts.isSuccess && (
-                <output className="block text-sm">
-                  The cost schedule was saved and the capital profile is enabled.
-                </output>
-              )}
-              {savedCosts.error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {savedCosts.error.message}
-                </p>
-              )}
-            </div>
-            <div className="border-t pt-4 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Development tests cannot view the final 60 sessions. Freeze a completed version
-                before consuming that holdout once. Historical returns do not establish future
-                profitability.
-              </p>
-              {!workerOnline && !overview.isPending && (
-                <p className="text-sm text-muted-foreground">
-                  The research worker is offline. Start it on the server before running experiments.
-                </p>
-              )}
-              <Button
-                disabled={!workerOnline || !datasetId || !candidate || created.isPending}
-                onClick={submitRun}
-              >
-                {created.isPending ? 'Queuing…' : 'Run development test'}
-              </Button>
-              {(formError || created.error) && (
-                <p role="alert" className="text-sm text-destructive">
-                  {formError ?? created.error?.message}
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>3. Review evidence</CardTitle>
-          <CardDescription>
-            Results bind the dataset, candidate parameters, fees and seed to one version.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          {overview.data?.runs.length ? (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Run</TableHead>
-                    <TableHead>Candidate</TableHead>
-                    <TableHead>Evaluation</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Version</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {overview.data.runs.map((run) => (
-                    <TableRow key={run.id}>
-                      <TableCell>#{run.id}</TableCell>
-                      <TableCell>
-                        {overview.data.candidates.find((item) => item.id === run.candidate)?.name ??
-                          run.candidate}
-                      </TableCell>
-                      <TableCell>
-                        {run.kind === 'final' ? 'Final holdout' : 'Development'}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={run.status === 'failed' ? 'destructive' : 'outline'}>
-                          {run.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {run.configuration_hash.slice(0, 12)}
-                        {run.frozen_at && ' · Frozen'}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          aria-label={`View run ${run.id}`}
-                          onClick={() => setSelectedRun(run.id)}
-                        >
-                          View
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No experiments yet. Import market history and run a development test to build the
-              first report.
-            </p>
-          )}
-          {detail.isFetching && !currentRun && (
-            <p className="text-sm text-muted-foreground">Loading run…</p>
-          )}
-          {detail.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {detail.error.message}
-            </p>
-          )}
-          {currentRun && (
-            <section aria-label="Run report" className="space-y-5 rounded-lg border p-4 md:p-6">
-              <div className="flex flex-wrap justify-between gap-3">
-                <div>
-                  <h3 className="font-semibold">
-                    Run #{currentRun.id} ·{' '}
-                    {currentRun.kind === 'final' ? 'Final holdout' : 'Development'}
-                  </h3>
-                  <p className="mt-1 text-xs font-mono break-all text-muted-foreground">
-                    {currentRun.configuration_hash}
+                  <p className="text-xs text-muted-foreground">
+                    Checked {kotakVerifiedOn} against Kotak’s{' '}
+                    <a
+                      className="underline"
+                      href="https://www.kotakneo.com/support/what-is-the-brokerage-for-using-neo-trade-api/"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      API pricing
+                    </a>{' '}
+                    and{' '}
+                    <a
+                      className="underline"
+                      href="https://www.kotakneo.com/calculator/brokerage-calculator/"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      charge calculator
+                    </a>
+                    . This loads an editable draft for NSE options only. BSE and MCX need separate
+                    verified rates.
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {activeRun(currentRun) && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={action.isPending}
-                      onClick={() => action.mutate({ id: currentRun.id, verb: 'cancel' })}
+                <p className="text-sm">
+                  {costValue('schedule_id')
+                    ? `Selected: ${costValue('schedule_id')}`
+                    : 'Choose Kotak rates above, or enter a custom schedule below.'}
+                  {costValue('exchange') &&
+                    ` · ${costValue('exchange')} · ${costValue('broker') || 'Custom broker'}`}
+                </p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {costFields.filter(([key]) => commonCostFields.has(key)).map(costInput)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Dates must cover every trading or historical-test session. The preset does not
+                  verify older rates or future changes. Slippage is a planning estimate: 10 basis
+                  points means a 0.10% worse fill on each side.
+                </p>
+                <details className="rounded-lg border p-4">
+                  <summary className="cursor-pointer font-medium">Edit fee details</summary>
+                  <div className="grid gap-3 pt-4 sm:grid-cols-2">
+                    <p className="text-xs text-muted-foreground sm:col-span-2">
+                      Enter percentages as you read them: 18 means 18%. Custom rates must match the
+                      selected market and broker.
+                    </p>
+                    {(['exchange', 'broker'] as const).map((key) => (
+                      <div className="space-y-2" key={key}>
+                        <Label htmlFor={`cost-${key}`}>
+                          {key === 'exchange' ? 'Market scope' : 'Broker scope'}
+                        </Label>
+                        <select
+                          id={`cost-${key}`}
+                          className={selectClass}
+                          value={costValue(key)}
+                          onChange={(event) => {
+                            setCostEdits((previous) => ({ ...previous, [key]: event.target.value }))
+                            savedCosts.reset()
+                          }}
+                        >
+                          <option value="">Custom / unscoped</option>
+                          {key === 'exchange' ? (
+                            <>
+                              <option value="NFO">NSE options</option>
+                              <option value="BFO">BSE options</option>
+                              <option value="MCX">MCX options</option>
+                            </>
+                          ) : (
+                            <option value="kotak">Kotak Neo API</option>
+                          )}
+                        </select>
+                      </div>
+                    ))}
+                    {costFields.filter(([key]) => !commonCostFields.has(key)).map(costInput)}
+                  </div>
+                </details>
+                {formError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {formError}
+                  </p>
+                )}
+                <p id="capital-profile-effect" className="text-sm text-muted-foreground">
+                  {risk.data?.enabled
+                    ? 'Updating costs keeps this capital profile enabled.'
+                    : `Saving costs enables the shared ${money(risk.data?.policy.capital)} long-options capital profile.`}{' '}
+                  It applies to your managed Strategy Module entries, restricts them to supported
+                  long-option trades, and requires release qualification for new managed live
+                  entries. Running a research test alone does not enable the profile.
+                </p>
+                <Button
+                  variant="outline"
+                  disabled={savedCosts.isPending || !risk.data || Boolean(risk.error)}
+                  aria-describedby="capital-profile-effect"
+                  onClick={() => {
+                    setFormError(null)
+                    try {
+                      savedCosts.mutate(readCosts())
+                    } catch (error) {
+                      setFormError((error as Error).message)
+                    }
+                  }}
+                >
+                  {savedCosts.isPending
+                    ? 'Saving profile…'
+                    : risk.data?.enabled
+                      ? 'Update enabled profile costs'
+                      : 'Save costs and enable capital profile'}
+                </Button>
+                {savedCosts.isSuccess && (
+                  <output className="block text-sm">
+                    The cost schedule was saved and the capital profile is enabled.
+                  </output>
+                )}
+                {savedCosts.error && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {savedCosts.error.message}
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          {risk.data && (
+            <details
+              className="rounded-xl border p-5"
+              open={
+                risk.data.accounts.sandbox?.paused || risk.data.accounts.live?.paused || undefined
+              }
+            >
+              <summary className="cursor-pointer font-medium">
+                View budget details and pause rules
+              </summary>
+              <p className="py-4 text-sm text-muted-foreground">
+                A {number(risk.data.policy.drawdown_pct * 100, '%')} fall from peak allocated equity
+                pauses new entries across days. A{' '}
+                {number(risk.data.policy.cash_buffer_pct * 100, '%')} cash buffer stays uncommitted.
+                First-trade allowance cannot transfer to later trades. These limits cover managed
+                Strategy Module entries only.
+              </p>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Budget
+                  name="Sandbox"
+                  account={risk.data.accounts.sandbox}
+                  enabled={risk.data.enabled}
+                />
+                <Budget name="Live" account={risk.data.accounts.live} enabled={risk.data.enabled} />
+              </div>
+            </details>
+          )}
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => setStep('history')}>
+              Next: historical test
+            </Button>
+          </div>
+        </TabsContent>
+        <TabsContent value="history" className="space-y-5">
+          <DailyOptionsHistory />
+          <p className="text-sm text-muted-foreground">
+            {overview.data?.datasets.length
+              ? 'Choose imported history and a rule set. This test uses historical prices and sends no broker orders.'
+              : 'Add market history to run your first test.'}{' '}
+            Your broker connection does not automatically supply historical option data here.
+          </p>
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+            <Card>
+              <CardHeader>
+                <CardTitle>Add intraday market history</CardTitle>
+                <CardDescription>
+                  Use licensed or permitted historical data. Imports are immutable and retain their
+                  source and content fingerprint.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="dataset-file">Dataset file</Label>
+                  <Input
+                    id="dataset-file"
+                    type="file"
+                    accept=".json,.csv,application/json,text/csv"
+                    onChange={(event) => {
+                      setFile(event.target.files?.[0] ?? null)
+                      imported.reset()
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    JSON bundle or CSV, up to 20 MB including metadata. At least 80 sessions are
+                    needed: 60 remain sealed for final evaluation.
+                  </p>
+                </div>
+                {csv && (
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="csv-name">Dataset name</Label>
+                      <Input
+                        id="csv-name"
+                        value={csvName}
+                        onChange={(event) => setCsvName(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="csv-provider">Data provider</Label>
+                      <Input
+                        id="csv-provider"
+                        value={csvProvider}
+                        onChange={(event) => setCsvProvider(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="csv-metadata">CSV metadata (JSON)</Label>
+                      <Textarea
+                        id="csv-metadata"
+                        rows={7}
+                        className="font-mono text-xs"
+                        value={csvMetadata}
+                        onChange={(event) => setCsvMetadata(event.target.value)}
+                        placeholder="Paste the metadata object from the format guide"
+                      />
+                    </div>
+                  </div>
+                )}
+                <Button disabled={!file || imported.isPending} onClick={() => imported.mutate()}>
+                  {imported.isPending ? 'Importing…' : 'Import dataset'}
+                </Button>
+                {imported.error && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {imported.error.message}
+                  </p>
+                )}
+                {imported.data && (
+                  <output aria-label="Import result" className="block text-sm">
+                    Imported {imported.data.name}. {number(imported.data.row_count)} bars validated.
+                  </output>
+                )}
+                <details className="rounded-lg border p-3 text-sm">
+                  <summary className="cursor-pointer font-medium">Required dataset format</summary>
+                  <div className="space-y-3 pt-3 text-muted-foreground">
+                    <p>
+                      JSON contains name, provider, metadata and rows. CSV needs the same metadata
+                      separately and these columns: symbol,timestamp,open,high,low,close,volume.
+                    </p>
+                    <p>
+                      Each row is an underlying or option candle. Use timezone-aware timestamps such
+                      as 2026-01-05T09:20:00+05:30, with bar-close time. Do not include future bars.
+                    </p>
+                    <p>
+                      VWAP requires observed underlying volume and an explicit session_open in
+                      HH:MM, verified against your source. No opening time is assumed. Every session
+                      must start with the underlying close at session_open plus bar_minutes. For a
+                      verified 09:15 opening and five-minute bars, that first close is 09:20.
+                      Missing opening bars make the history unsuitable for session VWAP. Trend tests
+                      may omit session_open.
+                    </p>
+                    <p>
+                      Metadata must provide the underlying, source reference, Asia/Kolkata timezone,
+                      bar interval, session close and point-in-time contracts: symbol, underlying,
+                      exchange, CE/PE, strike, expiry, lot size, multiplier and index/mcx segment.
+                      Verify these values against the source; the template contains placeholders and
+                      no prices.
+                    </p>
+                    <a
+                      className="text-primary underline"
+                      download="research-dataset-template.json"
+                      href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(datasetTemplate, null, 2))}`}
                     >
-                      Cancel run
-                    </Button>
-                  )}
-                  {currentRun.kind === 'development' &&
-                    currentRun.status === 'completed' &&
-                    !currentRun.frozen_at && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={action.isPending}
-                        onClick={() => action.mutate({ id: currentRun.id, verb: 'freeze' })}
-                      >
-                        Freeze this version
-                      </Button>
-                    )}
-                  {currentRun.kind === 'development' && currentRun.frozen_at && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        !workerOnline ||
-                        action.isPending ||
-                        overview.data?.runs.some(
-                          (run) => run.parent_run_id === currentRun.id && run.kind === 'final'
-                        )
-                      }
-                      onClick={() => {
-                        setFinalConfirmed(false)
-                        setFinalOpen(true)
-                      }}
-                    >
-                      Run final holdout once
-                    </Button>
+                      Download empty JSON template
+                    </a>
+                    <pre className="overflow-x-auto rounded bg-muted p-3 text-xs">
+                      {JSON.stringify(datasetTemplate.metadata, null, 2)}
+                    </pre>
+                  </div>
+                </details>
+                <div className="space-y-2">
+                  <Label htmlFor="research-dataset">Research dataset</Label>
+                  <select
+                    id="research-dataset"
+                    className={selectClass}
+                    value={datasetId}
+                    onChange={(event) => setDatasetId(event.target.value)}
+                  >
+                    <option value="">Select imported history</option>
+                    {overview.data?.datasets.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} ({item.session_count} sessions)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {selectedDataset ? (
+                  <div className="rounded-lg bg-muted/40 p-3 text-xs space-y-2">
+                    <p>
+                      {selectedDataset.provider} · {number(selectedDataset.row_count)} bars ·{' '}
+                      {selectedDataset.start} to {selectedDataset.end}
+                    </p>
+                    <p className="break-all font-mono">
+                      Fingerprint: {selectedDataset.content_hash}
+                    </p>
+                    <p>
+                      Candle screening only. Quotes, spreads and actual fills are not established by
+                      candles.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Choose an intraday dataset to run a strategy test. Daily NSE history above is
+                    for market context.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Choose the trading rules</CardTitle>
+                <CardDescription>
+                  Signals use closed underlying bars. Option executions occur on a subsequent bar,
+                  with whole-lot sizing and the configured risk budget.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="space-y-2">
+                  <Label htmlFor="research-candidate">Candidate rules</Label>
+                  <select
+                    id="research-candidate"
+                    value={candidateId}
+                    onChange={(event) => {
+                      setCandidateId(event.target.value as ResearchCandidateId)
+                      setParameters({})
+                    }}
+                    className={selectClass}
+                  >
+                    {overview.data?.candidates.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-sm text-muted-foreground">{candidate?.description}</p>
+                  {candidateId === 'trend_breakout_filtered' && (
+                    <p className="text-sm text-muted-foreground">
+                      Uses 8/21-bar prior trend, 1–7 days to expiry, observed liquidity and
+                      whole-lot affordability. Maximum 3 entries per day, with 15 minutes between an
+                      exit and the next signal. Requires one-minute option bars and contract tick
+                      sizes. Stop distance is the greater of the value below and 1.5 times recent
+                      minute volatility, capped at 25% of premium. Target / stop sets the reward
+                      multiple.
+                    </p>
                   )}
                 </div>
-              </div>
-              {currentRun.error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {currentRun.error}
-                </p>
-              )}
-              {action.error && (
-                <p role="alert" className="text-sm text-destructive">
-                  {action.error.message}
-                </p>
-              )}
-              {report ? (
-                <>
-                  <h4 className="font-medium">
-                    {currentRun.kind === 'final'
-                      ? 'Final holdout evidence'
-                      : 'Development training evidence'}
-                  </h4>
-                  <Metrics metrics={report.metrics} />
-                  <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
-                    <h4 className="font-medium">Qualification: research only</h4>
-                    <ul className="list-disc pl-5 text-sm text-muted-foreground">
-                      {report.qualification.reasons.map((reason) => (
-                        <li key={reason}>{reason}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  {report.oos && (
-                    <div className="space-y-3 border-t pt-4">
-                      <h4 className="font-medium">Development out-of-sample evidence</h4>
-                      <Metrics metrics={report.oos.metrics} />
-                      <ul className="list-disc pl-5 text-sm text-muted-foreground">
-                        {report.oos.qualification.reasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {report.stress && (
-                    <div className="space-y-3 border-t pt-4">
-                      <h4 className="font-medium">Execution stress</h4>
-                      <Metrics metrics={report.stress.metrics} />
-                      <p className="text-xs text-muted-foreground">
-                        Stress applies doubled slippage plus 10 basis points and 1.5 times
-                        brokerage.
-                      </p>
-                      <ul className="list-disc pl-5 text-sm text-muted-foreground">
-                        {report.stress.qualification.reasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {Object.keys(report.rejections).length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="font-medium">Rejected opportunities</h4>
-                      <ul className="text-sm text-muted-foreground">
-                        {Object.entries(report.rejections).map(([reason, count]) => (
-                          <li key={reason}>
-                            {reason.replaceAll('_', ' ')}: {count}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {report.split && (
-                    <div className="space-y-3">
-                      <h4 className="font-medium">Evaluation split</h4>
-                      <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                        {currentRun.kind === 'development' ? (
-                          <>
-                            <Metric
-                              label="Training sessions"
-                              value={number(report.split.training_sessions)}
-                            />
-                            <Metric
-                              label="Out-of-sample sessions"
-                              value={number(report.split.oos_sessions)}
-                            />
-                          </>
-                        ) : (
-                          <Metric
-                            label="Evaluated sessions"
-                            value={number(report.split.evaluated_sessions)}
-                          />
-                        )}
-                        <Metric
-                          label={
-                            currentRun.kind === 'final'
-                              ? 'Consumed holdout sessions'
-                              : 'Sealed holdout sessions'
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {Object.entries(candidate?.defaults ?? {})
+                    .filter(
+                      ([key]) =>
+                        candidateId === 'vwap_pullback' ||
+                        !['volume_ratio', 'pullback_tolerance'].includes(key)
+                    )
+                    .map(([key, fallback]) => (
+                      <div className="space-y-2" key={key}>
+                        <Label htmlFor={`parameter-${key}`}>{parameterLabels[key] ?? key}</Label>
+                        <Input
+                          id={`parameter-${key}`}
+                          type="number"
+                          step="any"
+                          value={
+                            parameters[key] ??
+                            String(percentParameters.has(key) ? fallback * 100 : fallback)
                           }
-                          value={number(report.split.holdout_sessions)}
+                          onChange={(event) =>
+                            setParameters((previous) => ({
+                              ...previous,
+                              [key]: event.target.value,
+                            }))
+                          }
                         />
-                      </dl>
-                    </div>
-                  )}
-                  {report.bootstrap && (
-                    <div className="rounded-lg bg-muted/30 p-4 space-y-3">
-                      <h4 className="font-medium">Exploratory uncertainty</h4>
-                      <p className="text-xs text-muted-foreground">{report.bootstrap.method}</p>
-                      <dl className="grid grid-cols-2 gap-4">
-                        <Metric
-                          label="Net P&L, 5th percentile"
-                          value={money(report.bootstrap.net_pnl_p05)}
-                        />
-                        <Metric
-                          label="Net P&L, 95th percentile"
-                          value={money(report.bootstrap.net_pnl_p95)}
-                        />
-                      </dl>
-                      <p className="text-xs text-muted-foreground">{report.bootstrap.warning}</p>
-                    </div>
-                  )}
-                  {currentRun.configuration && (
-                    <details className="text-sm">
-                      <summary className="cursor-pointer font-medium">
-                        Recorded experiment inputs
-                      </summary>
-                      <section
-                        aria-label="Recorded experiment inputs"
-                        className="mt-3 rounded-lg border p-4 space-y-4"
-                      >
-                        <p className="text-xs text-muted-foreground">
-                          These are the exact inputs saved for this run. Editing the experiment form
-                          does not change this evidence. Fee rates below are decimal fractions.
-                        </p>
-                        <dl className="grid grid-cols-2 gap-4">
-                          <Metric label="Seed" value={String(currentRun.configuration.seed)} />
-                          {Object.entries(currentRun.configuration.parameters).map(
-                            ([key, value]) => (
-                              <Metric
-                                key={key}
-                                label={parameterLabels[key] ?? key}
-                                value={String(value)}
-                              />
-                            )
-                          )}
-                          {costFields.map(([key, label]) => (
-                            <div className="space-y-1 min-w-0" key={key}>
-                              <dt className="text-xs text-muted-foreground">{label}</dt>
-                              <dd className="break-words">
-                                {String(currentRun.configuration!.costs[key])}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                        <p className="text-xs break-all">
-                          Dataset fingerprint: {currentRun.configuration.dataset_hash}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Engine {currentRun.configuration.engine_version} · Risk policy{' '}
-                          {currentRun.configuration.risk_policy_version}
-                        </p>
-                      </section>
-                    </details>
-                  )}
-                  <details className="text-sm">
-                    <summary className="cursor-pointer font-medium">
-                      Trade evidence ({report.trades.length})
-                    </summary>
-                    <div className="overflow-x-auto pt-3">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Contract</TableHead>
-                            <TableHead>Signal</TableHead>
-                            <TableHead>Entry bar</TableHead>
-                            <TableHead>Quantity</TableHead>
-                            <TableHead>Gross P&L</TableHead>
-                            <TableHead>Costs</TableHead>
-                            <TableHead>Net P&L</TableHead>
-                            <TableHead>Exit</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {report.trades.map((trade, index) => (
-                            <TableRow key={`${trade.symbol}-${trade.signal_at}-${index}`}>
-                              <TableCell>{trade.symbol}</TableCell>
-                              <TableCell>{trade.signal_at}</TableCell>
-                              <TableCell>{trade.entry_bar_at}</TableCell>
-                              <TableCell>{trade.quantity}</TableCell>
-                              <TableCell>{money(trade.gross_pnl)}</TableCell>
-                              <TableCell>{money(trade.costs)}</TableCell>
-                              <TableCell>{money(trade.net_pnl)}</TableCell>
-                              <TableCell>{trade.exit_reason.replaceAll('_', ' ')}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                      </div>
+                    ))}
+                  <details className="space-y-2">
+                    <summary className="cursor-pointer text-sm">Advanced test settings</summary>
+                    <Label htmlFor="research-seed">Reproducibility seed</Label>
+                    <Input
+                      id="research-seed"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={seed}
+                      onChange={(event) => setSeed(event.target.value)}
+                    />
                   </details>
-                </>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  This test uses the costs from step 1.{' '}
+                  <button
+                    type="button"
+                    className="underline underline-offset-4"
+                    onClick={() => setStep('costs')}
+                  >
+                    Review costs
+                  </button>
+                </p>
+                <div className="border-t pt-4 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Development tests cannot view the final 60 sessions. Freeze a completed version
+                    before consuming that holdout once. Historical returns do not establish future
+                    profitability.
+                  </p>
+                  {!workerOnline && !overview.isPending && (
+                    <p className="text-sm text-muted-foreground">
+                      The research worker is offline. Start it on the server before running
+                      experiments.
+                    </p>
+                  )}
+                  <Button
+                    disabled={!workerOnline || !datasetId || !candidate || created.isPending}
+                    onClick={submitRun}
+                  >
+                    {created.isPending ? 'Queuing…' : 'Run development test'}
+                  </Button>
+                  {(formError || created.error) && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {formError ?? created.error?.message}
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+        <TabsContent value="results">
+          <Card>
+            <CardHeader>
+              <CardTitle>Review your test results</CardTitle>
+              <CardDescription>
+                Results bind the dataset, candidate parameters, fees and seed to one version.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {overview.data?.runs.length ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Run</TableHead>
+                        <TableHead>Candidate</TableHead>
+                        <TableHead>Evaluation</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Version</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {overview.data.runs.map((run) => (
+                        <TableRow key={run.id}>
+                          <TableCell>#{run.id}</TableCell>
+                          <TableCell>
+                            {overview.data.candidates.find((item) => item.id === run.candidate)
+                              ?.name ?? run.candidate}
+                          </TableCell>
+                          <TableCell>
+                            {run.kind === 'final' ? 'Final holdout' : 'Development'}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={run.status === 'failed' ? 'destructive' : 'outline'}>
+                              {run.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {run.configuration_hash.slice(0, 12)}
+                            {run.frozen_at && ' · Frozen'}
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              aria-label={`View run ${run.id}`}
+                              onClick={() => setSelectedRun(run.id)}
+                            >
+                              View
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  {activeRun(currentRun)
-                    ? 'The experiment is in progress. Results will appear after it completes.'
-                    : 'No completed report is available for this run.'}
+                  No experiments yet. Import market history and run a development test to build the
+                  first report.
                 </p>
               )}
-            </section>
-          )}
-        </CardContent>
-      </Card>
-
-      <QualificationPanel runs={overview.data?.runs ?? []} />
+              {detail.isFetching && !currentRun && (
+                <p className="text-sm text-muted-foreground">Loading run…</p>
+              )}
+              {detail.error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {detail.error.message}
+                </p>
+              )}
+              {currentRun && (
+                <section aria-label="Run report" className="space-y-5 rounded-lg border p-4 md:p-6">
+                  <div className="flex flex-wrap justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">
+                        Run #{currentRun.id} ·{' '}
+                        {currentRun.kind === 'final' ? 'Final holdout' : 'Development'}
+                      </h3>
+                      <p className="mt-1 text-xs font-mono break-all text-muted-foreground">
+                        {currentRun.configuration_hash}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {activeRun(currentRun) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={action.isPending}
+                          onClick={() => action.mutate({ id: currentRun.id, verb: 'cancel' })}
+                        >
+                          Cancel run
+                        </Button>
+                      )}
+                      {currentRun.kind === 'development' &&
+                        currentRun.status === 'completed' &&
+                        !currentRun.frozen_at && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={action.isPending}
+                            onClick={() => action.mutate({ id: currentRun.id, verb: 'freeze' })}
+                          >
+                            Freeze this version
+                          </Button>
+                        )}
+                      {currentRun.kind === 'development' && currentRun.frozen_at && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            !workerOnline ||
+                            action.isPending ||
+                            overview.data?.runs.some(
+                              (run) => run.parent_run_id === currentRun.id && run.kind === 'final'
+                            )
+                          }
+                          onClick={() => {
+                            setFinalConfirmed(false)
+                            setFinalOpen(true)
+                          }}
+                        >
+                          Run final holdout once
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {currentRun.error && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {currentRun.error}
+                    </p>
+                  )}
+                  {action.error && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {action.error.message}
+                    </p>
+                  )}
+                  {report ? (
+                    <>
+                      <h4 className="font-medium">
+                        {currentRun.kind === 'final'
+                          ? 'Final holdout evidence'
+                          : 'Development training evidence'}
+                      </h4>
+                      <Metrics metrics={report.metrics} />
+                      <div className="rounded-lg border bg-muted/30 p-4 space-y-2">
+                        <h4 className="font-medium">Qualification: research only</h4>
+                        <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                          {report.qualification.reasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      {report.oos && (
+                        <div className="space-y-3 border-t pt-4">
+                          <h4 className="font-medium">Development out-of-sample evidence</h4>
+                          <Metrics metrics={report.oos.metrics} />
+                          <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                            {report.oos.qualification.reasons.map((reason) => (
+                              <li key={reason}>{reason}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {report.stress && (
+                        <div className="space-y-3 border-t pt-4">
+                          <h4 className="font-medium">Execution stress</h4>
+                          <Metrics metrics={report.stress.metrics} />
+                          <p className="text-xs text-muted-foreground">
+                            Stress applies doubled slippage plus 10 basis points and 1.5 times
+                            brokerage.
+                          </p>
+                          <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                            {report.stress.qualification.reasons.map((reason) => (
+                              <li key={reason}>{reason}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {Object.keys(report.rejections).length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="font-medium">Rejected opportunities</h4>
+                          <ul className="text-sm text-muted-foreground">
+                            {Object.entries(report.rejections).map(([reason, count]) => (
+                              <li key={reason}>
+                                {reason.replaceAll('_', ' ')}: {count}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {report.split && (
+                        <div className="space-y-3">
+                          <h4 className="font-medium">Evaluation split</h4>
+                          <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                            {currentRun.kind === 'development' ? (
+                              <>
+                                <Metric
+                                  label="Training sessions"
+                                  value={number(report.split.training_sessions)}
+                                />
+                                <Metric
+                                  label="Out-of-sample sessions"
+                                  value={number(report.split.oos_sessions)}
+                                />
+                              </>
+                            ) : (
+                              <Metric
+                                label="Evaluated sessions"
+                                value={number(report.split.evaluated_sessions)}
+                              />
+                            )}
+                            <Metric
+                              label={
+                                currentRun.kind === 'final'
+                                  ? 'Consumed holdout sessions'
+                                  : 'Sealed holdout sessions'
+                              }
+                              value={number(report.split.holdout_sessions)}
+                            />
+                          </dl>
+                        </div>
+                      )}
+                      {report.bootstrap && (
+                        <div className="rounded-lg bg-muted/30 p-4 space-y-3">
+                          <h4 className="font-medium">Exploratory uncertainty</h4>
+                          <p className="text-xs text-muted-foreground">{report.bootstrap.method}</p>
+                          <dl className="grid grid-cols-2 gap-4">
+                            <Metric
+                              label="Net P&L, 5th percentile"
+                              value={money(report.bootstrap.net_pnl_p05)}
+                            />
+                            <Metric
+                              label="Net P&L, 95th percentile"
+                              value={money(report.bootstrap.net_pnl_p95)}
+                            />
+                          </dl>
+                          <p className="text-xs text-muted-foreground">
+                            {report.bootstrap.warning}
+                          </p>
+                        </div>
+                      )}
+                      {currentRun.configuration && (
+                        <details className="text-sm">
+                          <summary className="cursor-pointer font-medium">
+                            Recorded experiment inputs
+                          </summary>
+                          <section
+                            aria-label="Recorded experiment inputs"
+                            className="mt-3 rounded-lg border p-4 space-y-4"
+                          >
+                            <p className="text-xs text-muted-foreground">
+                              These are the exact inputs saved for this run. Editing the experiment
+                              form does not change this evidence. Fee rates below are percentages.
+                            </p>
+                            <dl className="grid grid-cols-2 gap-4">
+                              <Metric label="Seed" value={String(currentRun.configuration.seed)} />
+                              {Object.entries(currentRun.configuration.parameters).map(
+                                ([key, value]) => (
+                                  <Metric
+                                    key={key}
+                                    label={parameterLabels[key] ?? key}
+                                    value={String(percentParameters.has(key) ? value * 100 : value)}
+                                  />
+                                )
+                              )}
+                              {costFields.map(([key, label]) => (
+                                <div className="space-y-1 min-w-0" key={key}>
+                                  <dt className="text-xs text-muted-foreground">{label}</dt>
+                                  <dd className="break-words">
+                                    {String(
+                                      percentCosts.has(key)
+                                        ? Number(
+                                            (
+                                              Number(currentRun.configuration!.costs[key]) * 100
+                                            ).toPrecision(12)
+                                          )
+                                        : currentRun.configuration!.costs[key]
+                                    )}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                            <p className="text-xs break-all">
+                              Dataset fingerprint: {currentRun.configuration.dataset_hash}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Engine {currentRun.configuration.engine_version} · Risk policy{' '}
+                              {currentRun.configuration.risk_policy_version}
+                            </p>
+                          </section>
+                        </details>
+                      )}
+                      <details className="text-sm">
+                        <summary className="cursor-pointer font-medium">
+                          Trade evidence ({report.trades.length})
+                        </summary>
+                        <div className="overflow-x-auto pt-3">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Contract</TableHead>
+                                <TableHead>Signal</TableHead>
+                                <TableHead>Entry bar</TableHead>
+                                <TableHead>Quantity</TableHead>
+                                <TableHead>Gross P&L</TableHead>
+                                <TableHead>Costs</TableHead>
+                                <TableHead>Net P&L</TableHead>
+                                <TableHead>Exit</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {report.trades.map((trade, index) => (
+                                <TableRow key={`${trade.symbol}-${trade.signal_at}-${index}`}>
+                                  <TableCell>{trade.symbol}</TableCell>
+                                  <TableCell>{trade.signal_at}</TableCell>
+                                  <TableCell>{trade.entry_bar_at}</TableCell>
+                                  <TableCell>{trade.quantity}</TableCell>
+                                  <TableCell>{money(trade.gross_pnl)}</TableCell>
+                                  <TableCell>{money(trade.costs)}</TableCell>
+                                  <TableCell>{money(trade.net_pnl)}</TableCell>
+                                  <TableCell>{trade.exit_reason.replaceAll('_', ' ')}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </details>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {activeRun(currentRun)
+                        ? 'The experiment is in progress. Results will appear after it completes.'
+                        : 'No completed report is available for this run.'}
+                    </p>
+                  )}
+                </section>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="qualification">
+          <div className="mb-5 rounded-lg border p-4 space-y-3">
+            <h3 className="font-medium">Where automated trading runs</h3>
+            <p className="text-sm text-muted-foreground">
+              Manage your saved strategies and their linked Flows from Strategies. An enabled Flow
+              watches its rules and sends an entry only when its signal and risk checks pass. The
+              engine manages stops, targets and scheduled exits.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Each Flow has an explicit Sandbox or Live mode. The top navigation’s Live Mode label
+              does not change a Sandbox Flow into a live one. Live entries also require a connected
+              broker, a qualified release and today’s live authorization.
+            </p>
+            <Button variant="outline" asChild>
+              <Link to="/strategy">Open trading controls</Link>
+            </Button>
+          </div>
+          <p className="mb-5 text-sm text-muted-foreground">
+            Use a completed final test to begin a Sandbox trial of your saved strategy. Sandbox uses
+            simulated money. Live approval is a separate review after enough evidence has been
+            collected.
+          </p>
+          <QualificationPanel runs={overview.data?.runs ?? []} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={finalOpen} onOpenChange={setFinalOpen}>
         <DialogContent>

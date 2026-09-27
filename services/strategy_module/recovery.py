@@ -643,6 +643,7 @@ def _recover_run(run_id: int) -> RecoveredRun:
     if run_row is None:
         logger.warning("Run %s does not exist; nothing to recover", run_id)
         return RecoveredRun(run_id=run_id, ok=False, error="Run not found")
+    scalp_context = getattr(run_row, "scalp_context", None)
     # Keep no ORM row alive across the store calls below. Any commit expires
     # it, and worker/session cleanup can then detach it before recovery reaches
     # the stop facts again.
@@ -750,6 +751,11 @@ def _recover_run(run_id: int) -> RecoveredRun:
             )
     checkpoint = store.latest_checkpoint(run_id) or {}
     config_legs = _config_legs(strategy_id)
+    if scalp_context:
+        for leg in config_legs.values():
+            leg.update(sl_pts=scalp_context["premium_stop_points"],
+                       target_pts=scalp_context.get("premium_target_points"),
+                       trail={}, risk_unit="points")
 
     rebuilt = _rebuild_state(
         run_id,

@@ -151,6 +151,11 @@ export async function installStarterPack(): Promise<StarterPackInstallResult> {
   return response.data
 }
 
+export async function installScalpingPack(): Promise<{ created: number[]; existing: number[] }> {
+  const response = await webClient.post<{ created: number[]; existing: number[] }>(`${BASE}/automation/scalping-pack`)
+  return response.data
+}
+
 export async function getStrategy(id: number): Promise<Strategy> {
   const response = await webClient.get<{ data: Strategy }>(`${BASE}/strategies/${id}`)
   return response.data.data
@@ -255,7 +260,8 @@ export async function executeSandboxReset(version: string): Promise<SandboxReset
 }
 
 export interface StartedRun {
-  run_id: number
+  run_id: number | null
+  automation_state?: 'armed'
   mode: RunMode
   /** False means a broker order may exist but its durable acknowledgement is pending repair. */
   acknowledged?: boolean
@@ -1940,4 +1946,26 @@ export function lotSizeFromRows(rows: SearchRow[], root: string): number | null 
   if (futures) return futures.lotsize as number
   const any = mine.find(usable)
   return any ? (any.lotsize as number) : null
+}
+
+export interface StrategyTemplate {
+  id: string
+  name: string
+  underlying: string
+  installed_strategy_id: number | null
+  installation_pending: boolean
+}
+
+export async function getStrategyTemplates(): Promise<StrategyTemplate[]> {
+  const response = await webClient.get<{ data: StrategyTemplate[] }>(`${BASE}/templates`)
+  return response.data.data
+}
+
+export async function installStrategyTemplate(id: string): Promise<{
+  created: boolean; strategy_id: number; workflow_id: number
+}> {
+  const response = await webClient.post<{ created: boolean; strategy_id: number; workflow_id: number }>(
+    `${BASE}/templates/${encodeURIComponent(id)}/install`
+  )
+  return response.data
 }

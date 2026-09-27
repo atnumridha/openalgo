@@ -32,6 +32,8 @@ const date = (value: string | null | undefined) => {
   return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })
 }
 const costLabels: Record<keyof CostSchedule, string> = {
+  exchange: 'Exchange scope',
+  broker: 'Broker scope',
   schedule_id: 'Schedule',
   source: 'Source',
   effective_from: 'Effective from',

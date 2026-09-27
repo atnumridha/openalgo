@@ -1,9 +1,9 @@
 """Closed-bar rule screening on real option candles, with conservative fills."""
 
 import random
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from services.research.costs import (
     decimal_value,
@@ -24,6 +24,12 @@ DEFAULTS = {
 }
 CANDIDATES = [
     {
+        "id": "trend_breakout_filtered",
+        "name": "Filtered breakout · minute execution",
+        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, volatility-aware stops and a 15-minute cooldown. Research hypothesis, not proven profitable.",
+        "defaults": DEFAULTS,
+    },
+    {
         "id": "trend_breakout",
         "name": "Trend and breakout",
         "description": "Close breaks the previous N-bar range in the direction of a rising or falling N-bar mean.",
@@ -36,7 +42,23 @@ CANDIDATES = [
         "defaults": DEFAULTS,
     },
 ]
-ENGINE_VERSION = "closed-bar-rules-v1"
+ENGINE_VERSION = "closed-bar-rules-v2"
+FILTER_RULES = {
+    "fast_bars": 8,
+    "slow_bars": 21,
+    "slope_bars": 5,
+    "cooldown_minutes": 15,
+    "daily_trade_cap": 3,
+    "min_expiry_days": 1,
+    "max_expiry_days": 7,
+    "min_premium": 20,
+    "max_premium": 120,
+    "max_strike_distance": 500,
+    "min_volume_lots": 10,
+    "atr_bars": 10,
+    "atr_multiple": 1.5,
+    "max_stop_pct": 0.25,
+}
 
 
 class Cancelled(Exception):
@@ -63,7 +85,16 @@ def validate_configuration(data, candidate, parameters, costs, seed=42):
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
         raise ValueError("seed must be a whole number between 0 and 4294967295")
     schedule = validate_cost_schedule(costs)
+    if candidate == "trend_breakout_filtered":
+        if data["metadata"].get("execution_bar_minutes", data["metadata"]["bar_minutes"]) != 1:
+            raise ValueError("Filtered breakout requires one-minute option execution bars")
+        if any(not c.get("tick_size") for c in data["metadata"]["contracts"]):
+            raise ValueError("Filtered breakout requires explicit contract tick_size")
     validate_cost_dates(schedule, data["sessions"])
+    if schedule.get("exchange") and any(
+        contract["exchange"] != schedule["exchange"] for contract in data["metadata"]["contracts"]
+    ):
+        raise ValueError("Cost schedule exchange must match every dataset contract")
     if candidate == "vwap_pullback" and any(
         row["volume"] is None
         for row in data["rows"]
@@ -97,6 +128,7 @@ def validate_configuration(data, candidate, parameters, costs, seed=42):
         "seed": seed,
         "engine_version": ENGINE_VERSION,
         "dataset_hash": data["content_hash"],
+        **({"filters": dict(FILTER_RULES)} if candidate == "trend_breakout_filtered" else {}),
     }
 
 
@@ -109,7 +141,17 @@ def _signal(history, candidate, params):
     shifted_mean = sum(row["close"] for row in history[-n:]) / n
     rising = shifted_mean > mean
     falling = shifted_mean < mean
-    if candidate == "trend_breakout":
+    if candidate == "trend_breakout_filtered":
+        rules = FILTER_RULES
+        prior = history[:-1]
+        if len(prior) < rules["slow_bars"] + rules["slope_bars"]:
+            return None
+        fast = sum(r["close"] for r in prior[-rules["fast_bars"] :]) / rules["fast_bars"]
+        slow = sum(r["close"] for r in prior[-rules["slow_bars"] :]) / rules["slow_bars"]
+        older = prior[-rules["slow_bars"] - rules["slope_bars"] : -rules["slope_bars"]]
+        old_slow = sum(r["close"] for r in older) / rules["slow_bars"]
+        rising, falling = fast > slow > old_slow, fast < slow < old_slow
+    if candidate in ("trend_breakout", "trend_breakout_filtered"):
         if rising and current["close"] > max(row["high"] for row in previous):
             return "CE"
         if falling and current["close"] < min(row["low"] for row in previous):
@@ -145,6 +187,85 @@ def _signal(history, candidate, params):
     return None
 
 
+def _tick(price, contract, *, up=False):
+    tick = contract.get("tick_size")
+    if not tick:
+        return float(price)
+    step = Decimal(str(tick))
+    return float(
+        (Decimal(str(price)) / step).to_integral_value(
+            rounding=ROUND_CEILING if up else ROUND_FLOOR
+        )
+        * step
+    )
+
+
+def _slipped(price, slip, contract, *, buy=False):
+    factor = Decimal(1) + Decimal(str(slip)) * (1 if buy else -1)
+    return _tick(Decimal(str(price)) * factor, contract, up=buy)
+
+
+def _filtered_contract(
+    contracts,
+    bars,
+    option_history,
+    underlying,
+    direction,
+    day,
+    equity,
+    policy,
+    costs,
+    slip,
+    rejections,
+):
+    """Choose from quotes available at the signal; never consult the next candle."""
+    rules = FILTER_RULES
+    choices = sorted(
+        (c for c in contracts if c["option_type"] == direction),
+        key=lambda c: (c["expiry"], abs(c["strike"] - underlying["close"]), c["symbol"]),
+    )
+    for contract in choices:
+        quote = bars.get(contract["symbol"])
+        if quote is None:
+            continue
+        dte = (datetime.fromisoformat(contract["expiry"]) - datetime.fromisoformat(day)).days
+        reason = None
+        units = contract["lot_size"] * contract["multiplier"]
+        if not rules["min_expiry_days"] <= dte <= rules["max_expiry_days"]:
+            reason = "expiry_filter"
+        elif abs(contract["strike"] - underlying["close"]) > rules["max_strike_distance"]:
+            reason = "strike_distance_filter"
+        elif not rules["min_premium"] <= quote["close"] <= rules["max_premium"]:
+            reason = "premium_filter"
+        elif quote["volume"] is None or quote["volume"] < rules["min_volume_lots"] * units:
+            reason = "liquidity_filter"
+        observed = list(option_history[contract["symbol"]])
+        if reason is None and len(observed) < rules["atr_bars"] + 1:
+            reason = "missing_volatility_history"
+        if reason:
+            rejections[reason] += 1
+            continue
+        atr = (
+            sum(
+                max(b["high"] - b["low"], abs(b["high"] - a["close"]), abs(b["low"] - a["close"]))
+                for a, b in zip(observed, observed[1:], strict=False)
+            )
+            / rules["atr_bars"]
+        )
+        if atr * rules["atr_multiple"] > quote["close"] * rules["max_stop_pct"]:
+            rejections["volatility_filter"] += 1
+            continue
+        estimated = _slipped(quote["close"], slip, contract, buy=True)
+        premium = Decimal(str(estimated * units))
+        if premium + order_cost(premium, "BUY", costs) > min(equity, policy.capital) * (
+            1 - policy.cash_buffer_pct
+        ):
+            rejections["unaffordable_signal_quote"] += 1
+            continue
+        return contract, atr
+    return None, None
+
+
 def _metrics(trades, initial=10000):
     net = [trade["net_pnl"] for trade in trades]
     wins, losses = sum(x for x in net if x > 0), -sum(x for x in net if x < 0)
@@ -170,7 +291,7 @@ def _metrics(trades, initial=10000):
 
 
 def _liquidation_equity(active, price, equity, costs, slippage):
-    exit_price = price * (1 - slippage)
+    exit_price = _slipped(price, slippage, active["contract"])
     gross = Decimal(str((exit_price - active["entry_price"]) * active["units"]))
     return (
         equity
@@ -199,8 +320,42 @@ def _drawdown_exit_price(active, bar, equity, peak, policy, day, costs, slippage
     return lower
 
 
-def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
+def run_replay(
+    data, config, sessions=None, check_cancel=None, stress=False, *, research_signals=None
+):
     """One serial portfolio; long options only. Never synthesizes option bars."""
+    if research_signals is None and "research_signal_hash" in config:
+        raise ValueError("The recorded research signal schedule is required")
+    if research_signals is not None:
+        if not isinstance(research_signals, dict) or len(research_signals) > 100000:
+            raise ValueError("Research signal schedule must be a bounded mapping")
+        if config.get("research_signal_hash") != digest(research_signals):
+            raise ValueError("Research signal hash differs from the recorded schedule")
+        observed = {
+            row["timestamp"]
+            for row in data["rows"]
+            if row["symbol"] == data["metadata"]["underlying_symbol"]
+        }
+        contracts_by_symbol = {c["symbol"]: c for c in data["metadata"]["contracts"]}
+        for at, choice in research_signals.items():
+            direction = choice.get("direction") if isinstance(choice, dict) else choice
+            if at not in observed or direction not in ("CE", "PE"):
+                raise ValueError(
+                    "Research direction must reference an observed closed underlying bar"
+                )
+            if isinstance(choice, dict):
+                symbol = choice.get("symbol")
+                if (
+                    set(choice) != {"direction", "symbol"}
+                    or not isinstance(symbol, str)
+                    or symbol not in contracts_by_symbol
+                    or contracts_by_symbol[symbol]["option_type"] != direction
+                ):
+                    raise ValueError(
+                        "Research schedule must bind the scored contract and direction"
+                    )
+            elif "research_model_hash" in config:
+                raise ValueError("Model schedule must bind the scored contract")
     allowed = set(sessions if sessions is not None else data["sessions"])
     meta, params, costs = data["metadata"], config["parameters"], dict(config["costs"])
     if stress:
@@ -211,6 +366,12 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
         if row["timestamp"][:10] in allowed:
             by_time[row["timestamp"]][row["symbol"]] = row
     bar_delta = timedelta(minutes=meta["bar_minutes"])
+    execution_minutes = meta.get("execution_bar_minutes", meta["bar_minutes"])
+    execution_delta = timedelta(minutes=execution_minutes)
+    filtered = config["candidate"] == "trend_breakout_filtered"
+    option_history = defaultdict(lambda: deque(maxlen=FILTER_RULES["atr_bars"] + 1))
+    last_exit = None
+    daily_entries = 0
     policy, ledger = BudgetPolicy(), []
     equity = peak = Decimal("10000")
     history, trades, rejections = [], [], Counter()
@@ -228,6 +389,8 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
         day = at[:10]
         if day != prior_day:
             history = []
+            option_history.clear()
+            last_exit, daily_entries = None, 0
             underlying_session_complete = True
             if active:
                 incomplete.append(
@@ -246,20 +409,47 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
             if bar is None:
                 rejections["missing_next_option_bar"] += 1
             else:
-                entry = bar["open"] * (1 + slip)
+                entry = _slipped(bar["open"], slip, contract, buy=True)
+                exact_entry = Decimal(str(entry))
+                distance = exact_entry * Decimal(str(params["stop_pct"]))
+                if filtered:
+                    distance = max(
+                        distance,
+                        Decimal(str(pending["signal_atr"]))
+                        * Decimal(str(FILTER_RULES["atr_multiple"])),
+                    )
+                stop = _tick(exact_entry - distance, contract)
+                exact_distance = exact_entry - Decimal(str(stop))
+                target = _tick(
+                    (
+                        exact_entry
+                        + exact_distance
+                        * Decimal(str(params["target_pct"]))
+                        / Decimal(str(params["stop_pct"]))
+                    )
+                    if filtered
+                    else exact_entry * (1 + Decimal(str(params["target_pct"]))),
+                    contract,
+                    up=True,
+                )
+                entry_gap = filtered and (
+                    not FILTER_RULES["min_premium"] <= entry <= FILTER_RULES["max_premium"]
+                    or exact_distance > exact_entry * Decimal(str(FILTER_RULES["max_stop_pct"]))
+                )
                 lot_units = contract["lot_size"] * contract["multiplier"]
                 one_premium = Decimal(str(entry * lot_units))
                 max_lots = int(
                     (min(equity, policy.capital) * (1 - policy.cash_buffer_pct)) / one_premium
                 )
+                if entry_gap:
+                    max_lots = 0
                 admitted = None
                 low_lots, high_lots = 1, min(max_lots, 10000)
                 while low_lots <= high_lots:
                     lots = (low_lots + high_lots) // 2
                     units = lot_units * lots
                     entry_fees = order_cost(Decimal(str(entry * units)), "BUY", costs)
-                    stop = entry * (1 - params["stop_pct"])
-                    planned_exit = stop * (1 - slip)
+                    planned_exit = _slipped(stop, slip, contract)
                     planned = (
                         Decimal(str((entry - planned_exit) * units))
                         + entry_fees
@@ -279,6 +469,7 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                     else:
                         high_lots = lots - 1
                 if admitted:
+                    daily_entries += 1
                     lots, units, entry_fees, planned, bucket = admitted
                     active = {
                         **pending,
@@ -292,18 +483,22 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                         "risk": PositionRisk(
                             entry_price=entry,
                             quantity=units,
-                            stop_price=entry * (1 - params["stop_pct"]),
-                            target_price=entry * (1 + params["target_pct"]),
+                            stop_price=stop,
+                            target_price=target,
                         ),
                     }
                 else:
                     rejections[
-                        "unaffordable_whole_lot" if max_lots < 1 else "budget_or_drawdown_limit"
+                        "entry_gap_filter"
+                        if entry_gap
+                        else (
+                            "unaffordable_whole_lot" if max_lots < 1 else "budget_or_drawdown_limit"
+                        )
                     ] += 1
             pending = None
         if active:
             bar = bars.get(active["contract"]["symbol"])
-            expected = (datetime.fromisoformat(active["last_bar_at"]) + bar_delta).isoformat()
+            expected = (datetime.fromisoformat(active["last_bar_at"]) + execution_delta).isoformat()
             if at != active["entry_bar_at"] and (at > expected or (at == expected and bar is None)):
                 incomplete.append(
                     {
@@ -327,6 +522,7 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                     max_open_drawdown, float((peak - opening_mark) / peak * 100)
                 )
                 exit_price = reason = None
+                ambiguous_exit = False
                 opening = evaluate_position(risk, bar["open"])
                 if opening.reason == BreachReason.STOP:
                     exit_price, reason = bar["open"], "stop_loss"
@@ -346,6 +542,7 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                         # is crossed first. Do not use a low reached after exit.
                         if exit_price is None or drawdown_price >= exit_price:
                             exit_price, reason = drawdown_price, "portfolio_drawdown"
+                    ambiguous_exit = bool(reason and bar["high"] >= risk.target_price)
                     if reason is None:
                         max_open_drawdown = max(
                             max_open_drawdown, float((peak - low_mark) / peak * 100)
@@ -370,7 +567,7 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                     close_mark = _liquidation_equity(active, bar["close"], equity, costs, slip)
                     peak = max(peak, close_mark)
                 if reason:
-                    exit_price *= 1 - slip
+                    exit_price = _slipped(exit_price, slip, active["contract"])
                     gross = Decimal(str((exit_price - active["entry_price"]) * active["units"]))
                     charges = active["entry_fees"] + order_cost(
                         Decimal(str(exit_price * active["units"])), "SELL", costs
@@ -393,6 +590,9 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                         exit_reason=reason,
                         planned_risk=float(active["planned"]),
                         budget_bucket=active["bucket"],
+                        ambiguous_exit=ambiguous_exit,
+                        stop_price=risk.stop_price,
+                        target_price=risk.target_price,
                     )
                     trades.append(trade)
                     ledger.append(
@@ -409,9 +609,23 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                     equity += net
                     peak = max(peak, equity)
                     active = None
+                    last_exit = datetime.fromisoformat(at)
                     if len(trades) >= 5000:
                         incomplete.append({"reason": "trade_limit_reached"})
                         break
+        if filtered:
+            for symbol, row in bars.items():
+                if symbol == meta["underlying_symbol"]:
+                    continue
+                observed = option_history[symbol]
+                if (
+                    observed
+                    and datetime.fromisoformat(at)
+                    - datetime.fromisoformat(observed[-1]["timestamp"])
+                    != execution_delta
+                ):
+                    observed.clear()
+                observed.append(row)
         underlying = bars.get(meta["underlying_symbol"])
         if underlying:
             if (
@@ -423,20 +637,61 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
                 underlying_session_complete = False
                 rejections["underlying_bar_gap"] += 1
             history.append(underlying)
+            choice = research_signals.get(at) if research_signals is not None else None
+            scored_symbol = choice["symbol"] if isinstance(choice, dict) else None
             direction = (
-                _signal(history, config["candidate"], params)
+                (
+                    (choice["direction"] if isinstance(choice, dict) else choice)
+                    if research_signals is not None
+                    else _signal(history, config["candidate"], params)
+                )
                 if underlying_session_complete or config["candidate"] != "vwap_pullback"
                 else None
             )
             if direction and not active and not pending:
-                entry_at = (datetime.fromisoformat(at) + bar_delta).isoformat()
+                contracts = (
+                    [c for c in meta["contracts"] if c["symbol"] == scored_symbol]
+                    if scored_symbol is not None
+                    else meta["contracts"]
+                )
+                entry_at = (datetime.fromisoformat(at) + execution_delta).isoformat()
                 if entry_at[:10] != day or entry_at[11:16] >= meta["session_close"]:
                     rejections["after_entry_cutoff"] += 1
                     continue
+                if filtered:
+                    if daily_entries >= FILTER_RULES["daily_trade_cap"]:
+                        rejections["daily_trade_cap"] += 1
+                        continue
+                    if last_exit and datetime.fromisoformat(at) - last_exit < timedelta(
+                        minutes=FILTER_RULES["cooldown_minutes"]
+                    ):
+                        rejections["cooldown"] += 1
+                        continue
+                    contract, atr = _filtered_contract(
+                        contracts,
+                        bars,
+                        option_history,
+                        underlying,
+                        direction,
+                        day,
+                        equity,
+                        policy,
+                        costs,
+                        slip,
+                        rejections,
+                    )
+                    if contract is None:
+                        rejections["no_eligible_observed_contract"] += 1
+                        continue
+                    pending = {
+                        "contract": contract,
+                        "signal_at": at,
+                        "entry_bar_at": entry_at,
+                        "signal_atr": atr,
+                    }
+                    continue
                 eligible = [
-                    c
-                    for c in meta["contracts"]
-                    if c["option_type"] == direction and c["expiry"] >= day
+                    c for c in contracts if c["option_type"] == direction and c["expiry"] >= day
                 ]
                 eligible.sort(
                     key=lambda c: (c["expiry"], abs(c["strike"] - underlying["close"]), c["symbol"])
@@ -468,6 +723,9 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
         "Net liquidation equity at observed opens/closes; adverse lows use the previously observed peak."
     )
     metrics["exposure_bars"] = exposure_bars
+    metrics["signal_bar_minutes"] = meta["bar_minutes"]
+    metrics["execution_bar_minutes"] = execution_minutes
+    metrics["ambiguous_exit_count"] = sum(t["ambiguous_exit"] for t in trades)
     if incomplete:
         metrics["realized_net_pnl"] = metrics["net_pnl"]
         metrics["net_pnl"] = None
@@ -482,6 +740,10 @@ def run_replay(data, config, sessions=None, check_cancel=None, stress=False):
     ]
     if incomplete:
         reasons.append("Incomplete position outcomes make this replay unqualified.")
+    if metrics["ambiguous_exit_count"]:
+        reasons.append(
+            "Some candles touched both protective exit and target; stop-first results are conservative assumptions, not observed order."
+        )
     return {
         "metrics": metrics,
         "trades": trades,

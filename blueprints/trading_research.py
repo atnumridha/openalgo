@@ -1,11 +1,17 @@
 """Session-authenticated research routes. Requests only validate and enqueue."""
 
-from flask import Blueprint, jsonify, request, session
+import csv
+import gzip
+import io
+import json
+from datetime import date
+
+from flask import Blueprint, Response, jsonify, request, session
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 
 from database.trading_research_db import get_store
 from limiter import limiter
-from services.research import jobs
+from services.research import jobs, nse_archive, nse_archive_jobs
 from services.research.dataset import MAX_BODY_BYTES
 from services.research.replay import CANDIDATES
 from utils.session import is_session_valid
@@ -81,6 +87,77 @@ def overview():
 @_api_limit
 def import_dataset():
     return success(jobs.import_dataset(get_store(), session["user"], body()), 201)
+
+
+@trading_research_bp.get("/daily-options")
+@_api_limit
+def daily_options_status():
+    return success(nse_archive_jobs.status())
+
+
+@trading_research_bp.post("/daily-options")
+@_api_limit
+def daily_options_update():
+    if body():
+        raise ValueError(
+            "Use the default NSE history update; custom download settings are not supported here."
+        )
+    return success(nse_archive_jobs.start(), 202)
+
+
+@trading_research_bp.post("/daily-options/cancel")
+@_api_limit
+def daily_options_cancel():
+    return success(nse_archive_jobs.cancel())
+
+
+def daily_symbol():
+    symbol = request.args.get("symbol", "NIFTY").upper()
+    if not symbol or len(symbol) > 30 or not all(char.isalnum() or char in "&-" for char in symbol):
+        raise ValueError("Choose a valid NSE underlying symbol.")
+    return symbol
+
+
+@trading_research_bp.get("/daily-options/snapshot")
+@_api_limit
+def daily_options_snapshot():
+    before = request.args.get("before")
+    try:
+        before = date.fromisoformat(before) if before else nse_archive.today()
+    except ValueError:
+        raise ValueError("Choose a valid date for the prior-session view.") from None
+    return success(nse_archive.snapshot(nse_archive.ROOT, daily_symbol(), before=before))
+
+
+@trading_research_bp.get("/daily-options/export")
+@_api_limit
+def daily_options_export():
+    symbol = daily_symbol()
+    try:
+        day = date.fromisoformat(request.args.get("session", "")).isoformat()
+    except ValueError:
+        raise ValueError("Choose a downloaded daily session.") from None
+    item = nse_archive.manifest(nse_archive.ROOT)["days"].get(day, {})
+    if item.get("status") != "available":
+        raise LookupError()
+    raw = (nse_archive.ROOT / "daily" / f"{day}.json.gz").read_bytes()
+    if nse_archive._hash(raw) != item["daily_sha256"]:
+        raise ValueError("The daily file failed its integrity check. Update history to repair it.")
+    rows = [row for row in json.loads(gzip.decompress(raw)) if row["underlying"] == symbol]
+    if not rows:
+        raise LookupError()
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+    writer.writeheader()
+    writer.writerows(rows)
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="NSE-{symbol}-{day}-daily.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @trading_research_bp.post("/runs")

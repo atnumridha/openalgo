@@ -98,6 +98,13 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
         validate_cost_dates(costs, [day])
     except ValueError:
         return _refusal("cost_schedule_expired_or_invalid")
+    if costs.get("exchange") and costs["exchange"] != exchange:
+        return _refusal("cost_schedule_exchange_mismatch")
+    # Paper execution uses the virtual "sandbox" broker and models this schedule.
+    # Actual broker routes must match the fee schedule's broker scope.
+    paper_route = mode == "sandbox" and broker == "sandbox"
+    if costs.get("broker") and costs["broker"] != broker and not paper_route:
+        return _refusal("cost_schedule_broker_mismatch")
     if mode == "live":
         from services.research.jobs import live_release_reason
 

@@ -1,0 +1,16 @@
+{
+  "full_modern_regime50200": {
+    "net_pnl": 1718.01,
+    "largest_win": 4807.68,
+    "largest_win_date": "2025-06-20T10:15:00+05:30",
+    "net_without_largest_win": -3089.67,
+    "diagnostic_only_no_trades_deleted": true
+  },
+  "year_2026_ema915": {
+    "net_pnl": 7214.86,
+    "largest_win": 4814.53,
+    "largest_win_date": "2026-03-16T14:20:00+05:30",
+    "net_without_largest_win": 2400.33,
+    "diagnostic_only_no_trades_deleted": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "registered_at": "2026-09-27T08:52:39.385494+00:00",
+  "reason": "The delayed-exit scenario sometimes benefits from a price rebound. Isolate increased slippage with identical normal stop execution, without selecting an optimum.",
+  "scenario": {
+    "slippage_bps": 30,
+    "delay_protective": false
+  },
+  "original_protocol_sha256": "2101a2c51110202c7b7daff30d7d216c0956a33388ef7fc8ca6535bb07426d38",
+  "script_sha256": "c2d95e5619b87c29643018f710b1f0a86e62ccd547de44c14dcaca7af6ac7657",
+  "no_strategy_changes": true
+}

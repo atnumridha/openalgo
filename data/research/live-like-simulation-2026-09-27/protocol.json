@@ -1,0 +1,93 @@
+{
+  "registered_at": "2026-09-27T08:50:41.056539+00:00",
+  "capital": 25000,
+  "first_trade_loss_limit": 1000,
+  "later_trades_combined_loss_limit": 1000,
+  "daily_loss_limit": 2000,
+  "drawdown_pause_pct": 20,
+  "automatic_resume": false,
+  "cash_buffer_pct": 20,
+  "one_nifty_position": true,
+  "whole_historical_lot": true,
+  "premium_ceiling": 20000,
+  "max_hold_minutes": 15,
+  "costs": {
+    "brokerage_per_order": 20,
+    "exchange_rate": 0.0003553,
+    "sebi_rate": 1e-06,
+    "gst_rate": 0.18,
+    "stamp_buy_rate": 3e-05,
+    "stt_sell_rate": 0.0015
+  },
+  "scenarios": {
+    "normal": {
+      "slippage_bps": 10,
+      "delay_protective": false
+    },
+    "stress": {
+      "slippage_bps": 30,
+      "delay_protective": true
+    }
+  },
+  "windows": {
+    "full_modern": [
+      "2021-06-01",
+      "2026-07-02"
+    ],
+    "recent_2025_2026": [
+      "2025-01-01",
+      "2026-07-02"
+    ],
+    "year_2021": [
+      "2021-01-01",
+      "2021-12-31"
+    ],
+    "year_2022": [
+      "2022-01-01",
+      "2022-12-31"
+    ],
+    "year_2023": [
+      "2023-01-01",
+      "2023-12-31"
+    ],
+    "year_2024": [
+      "2024-01-01",
+      "2024-12-31"
+    ],
+    "year_2025": [
+      "2025-01-01",
+      "2025-12-31"
+    ],
+    "year_2026": [
+      "2026-01-01",
+      "2026-07-02"
+    ]
+  },
+  "combined_same_time_priority": "ascending installed strategy ID (13,14,15,16,17)",
+  "data_scope": "Prepared screened opportunity pool; missing/previously unaffordable paths excluded upstream. Not a complete causal replay of every market signal.",
+  "earlier_pool_limits": "At most three candidates/day/profile; original no-overlap candidate screen retained. Not outcome-optimized.",
+  "execution": "Entry at option minute open after signal closes; index OHLC exits next option minute open. Normal premium exits at adverse slipped barriers; stress all intraminute exits next minute open. Stop first on ambiguity.",
+  "marks": "Liquidation equity at observed opens/closes; stress pending exits also use adverse bar low; no favorable intrabar high used to inflate peak.",
+  "not_modeled": [
+    "native bid/ask spread gate",
+    "queue priority",
+    "partial/rejected fills",
+    "network outages",
+    "exact sub-minute polling phase",
+    "commercial data rights",
+    "live release approval"
+  ],
+  "cost_status": "Hypothetical uniform current-style cost scenarios, not historical contract-note charges; brokerage plan not verified.",
+  "shared_budget_functions": "services.risk.budget production code",
+  "governor": "production evaluate_entry with enabled managed-budget policy; regular NFO session adapter",
+  "verified_bundle_files": 34,
+  "source_hashes": {
+    "services/risk/budget.py": "a68f012a98cb3db2155f2293667320341372535cd9758d7edc29c369a61e3398",
+    "services/research/costs.py": "799117db19c3810fa5fda047d2f22d34e5f257b19cfae8f4e5d9b544b372d4a0",
+    "services/strategy_module/scalping.py": "7dd327b74e1d211cb740a5617a79caa7e503b625e79a5a998f74dc019a253cad",
+    "services/strategy_module/portfolio_governor.py": "43176bc79a36768bc8f3bf74d15ae0bf022c75fa1159efd75cf28197a920552a",
+    "data/research/live-like-simulation-2026-09-27/simulate.py": "c2d95e5619b87c29643018f710b1f0a86e62ccd547de44c14dcaca7af6ac7657"
+  },
+  "installed_rules_sha256": "3f5aca3e0cbe179015a4bf54fa3d33d3a439cca6d36853bf1467d601eca305c1",
+  "forward_holdout": false
+}

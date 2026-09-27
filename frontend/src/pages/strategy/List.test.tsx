@@ -798,6 +798,23 @@ describe('direct live mode controls', () => {
 })
 
 describe('individual strategy start controls', () => {
+  it('keeps a rejected start reason visible in the dialog after the toast disappears', async () => {
+    mockStrategyList([{ ...stoppedStrategy, id: 3, name: 'Batch strategy' }])
+    rest.post.mockRejectedValue(new Error('Fresh market data is unavailable.'))
+    renderList()
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Start run for Batch strategy' })
+    )
+    const dialog = screen.getByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Start sandbox' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Fresh market data is unavailable.'
+    )
+    expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/3/start', { mode: 'sandbox' })
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Start run for Batch strategy' }))
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument()
+  })
   it('starts a batch strategy in sandbox only after choosing in its row dialog', async () => {
     mockStrategyList([{ ...stoppedStrategy, id: 3, name: 'Batch strategy' }])
     rest.post.mockResolvedValue({ data: { run_id: 25, mode: 'sandbox', legs: [] } })

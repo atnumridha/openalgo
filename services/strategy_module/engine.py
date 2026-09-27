@@ -87,6 +87,7 @@ class StartResult:
     error: str | None = None
     #: Per-leg outcome, so a caller can say which leg failed and why.
     legs: list[dict[str, Any]] = field(default_factory=list)
+    waiting: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +325,17 @@ def start_run(
     if not api_key:
         return StartResult(ok=False, error="No API key is configured for this user")
 
+    scalp_context = None
+    if strategy.get("scalp_profile"):
+        from services.strategy_module import scalping
+
+        try:
+            scalp_context = scalping.prepare(strategy, user_id, api_key, mode)
+        except scalping.WaitingForSignal as exc:
+            return StartResult(ok=False, error=str(exc), waiting=True)
+        except ValueError as exc:
+            return StartResult(ok=False, error=str(exc))
+
     run_broker = _broker_for(api_key, mode)
     if mode == "live":
         from services.strategy_module import live_protection
@@ -355,7 +367,11 @@ def start_run(
     # resolved must not leave a half-started run behind, and resolution is the
     # step most likely to fail: an expiry that has rolled, a strike outside the
     # chain, a master contract that has not been downloaded.
-    resolved, failures = _resolve_all_legs(strategy, api_key)
+    resolution_strategy = strategy
+    if scalp_context:
+        resolution_strategy = dict(strategy, legs=[dict(strategy["legs"][0],
+            option_type=scalp_context["direction"])])
+    resolved, failures = _resolve_all_legs(resolution_strategy, api_key)
     if failures:
         _emit(
             strategy_id,
@@ -369,6 +385,15 @@ def start_run(
         return StartResult(ok=False, error=failures[0]["error"], legs=failures)
     for leg in resolved:
         leg["position_ref"] = state.new_position_ref()
+    if scalp_context:
+        from services.flow_openalgo_client import FlowOpenAlgoClient
+
+        client = FlowOpenAlgoClient(api_key)
+        client.broker_connection_id = strategy["broker_connection_id"]
+        try:
+            scalping.protect_leg(resolved[0], scalp_context, client)
+        except (ValueError, KeyError, TypeError) as exc:
+            return StartResult(ok=False, error=str(exc))
 
     if mode == "live":
         allowed, error = live_authorization.require_live_entry(user_id)
@@ -443,6 +468,26 @@ def start_run(
             )
             return StartResult(ok=False, error=loss_refusal)
 
+        if scalp_context:
+            from services.strategy_module.scalping import IST
+            from services.strategy_module.automation_control import require_automation_entry
+
+            allowed, reason = require_automation_entry(strategy_id, user_id)
+            if allowed:
+                try:
+                    scalping.require_origin(strategy, user_id, mode)
+                except ValueError as exc:
+                    allowed, reason = False, str(exc)
+            if not allowed:
+                if admission is not None:
+                    admission.release()
+                return StartResult(ok=False, error=reason)
+            age = (datetime.now(IST) - datetime.fromisoformat(scalp_context["signal_at"])).total_seconds()
+            if not 0 <= age <= 55:
+                if admission is not None:
+                    admission.release()
+                return StartResult(ok=False, error="Scalping signal expired before admission", waiting=True)
+
         # One conditional UPDATE, not a read then a write. The UI, the scheduler
         # and a webhook can all fire at the same instant.
         if not store.claim_strategy_for_run(strategy_id):
@@ -466,6 +511,7 @@ def start_run(
             resolved_expiries={
                 str(leg["leg_id"]): leg.get("expiry") for leg in resolved if leg.get("expiry")
             },
+            **({"scalp_context": scalp_context} if scalp_context else {}),
         )
         if not run:
             store.release_strategy(strategy_id)
@@ -1021,9 +1067,18 @@ def _place_entries(
             "owner": user_id, "strategy_id": int(strategy["id"]), "strategy_config": strategy,
             "trade_ref": leg.get("position_ref"), "order_id": row_id,
         }
-        result = order_dispatch.dispatch_order(
-            mode=mode, api_key=api_key, order=order, intent="entry"
-        )
+        if strategy.get("scalp_profile"):
+            run = store.get_run(run_id)
+            order["_strategy_scalp"] = {"signal_at": run.scalp_context["signal_at"],
+                                       "strategy": strategy, "owner": user_id}
+            result = order_dispatch.dispatch_signal_order(
+                strategy_id=int(strategy["id"]), user_id=user_id,
+                mode=mode, api_key=api_key, order=order, intent="entry",
+            )
+        else:
+            result = order_dispatch.dispatch_order(
+                mode=mode, api_key=api_key, order=order, intent="entry"
+            )
 
         acknowledged = _record_acknowledgement(
             row_id, result, strategy["id"], user_id, run_id, leg["leg_id"]

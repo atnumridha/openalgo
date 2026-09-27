@@ -841,12 +841,18 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
         node_type == "strategySignal" and data.get("action") in {"start", "long_entry", "short_entry"}
     )):
         evidence = data.get("barEvidence")
-        if not isinstance(evidence, dict) or any(
+        from services.strategy_module.scalping import PROFILES
+        scalp_evidence = (node_type == "strategyModuleRun" and isinstance(evidence, dict)
+                          and set(evidence) == {"scalpProfile"}
+                          and isinstance(evidence["scalpProfile"], str)
+                          and evidence["scalpProfile"] in PROFILES
+                          and data.get("marketHoursExchange") == "NSE")
+        if not scalp_evidence and (not isinstance(evidence, dict) or any(
             not isinstance(evidence.get(interval), list)
             or len(evidence[interval]) != 2
             or not all(isinstance(name, str) and name.strip() for name in evidence[interval])
             for interval in ("5m", "15m")
-        ):
+        )):
             found.append(_err(f"{base}/data/barEvidence", "required", "Entry requires current 5/15-minute candle variables", "two names per interval", evidence))
         if not data.get("marketHoursExchange"):
             found.append(_err(f"{base}/data/marketHoursExchange", "required", "Entry requires a market-hours exchange", "exchange", data.get("marketHoursExchange")))

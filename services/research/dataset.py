@@ -45,6 +45,11 @@ def validate_dataset(payload, now=None):
         raise ValueError("Use Asia/Kolkata and explicit bar_close timestamps")
     underlying = _text(raw.get("underlying_symbol"), "underlying_symbol")
     minutes = _integer(raw.get("bar_minutes"), "bar_minutes", maximum=60)
+    execution_minutes = _integer(
+        raw.get("execution_bar_minutes", minutes), "execution_bar_minutes", maximum=minutes
+    )
+    if minutes % execution_minutes:
+        raise ValueError("execution_bar_minutes must divide bar_minutes")
     try:
         close = time.fromisoformat(raw["session_close"])
         if close.second or close.tzinfo or len(raw["session_close"]) != 5:
@@ -104,6 +109,10 @@ def validate_dataset(payload, now=None):
                 ),
             }
         )
+        if "tick_size" in item:
+            contracts[-1]["tick_size"] = float(
+                decimal_value(item["tick_size"], "tick_size", minimum="0.000001", maximum=1000)
+            )
     if "rows" in payload and "csv" in payload:
         raise ValueError("Supply either rows or csv")
     rows = payload.get("rows")
@@ -179,6 +188,8 @@ def validate_dataset(payload, now=None):
     }
     if opening is not None:
         metadata["session_open"] = opening.strftime("%H:%M")
+    if "execution_bar_minutes" in raw:
+        metadata["execution_bar_minutes"] = execution_minutes
     content = {"metadata": metadata, "rows": normalized}
     return {
         "name": name,

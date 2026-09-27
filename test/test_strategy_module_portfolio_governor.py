@@ -594,6 +594,60 @@ def _broker_facts(monkeypatch, *, funds, positions, quote=None, runs=None):
     )
 
 
+@pytest.mark.parametrize("direction,stop,target", [("CE", 90, 120), ("PE", 110, 80)])
+@pytest.mark.parametrize("profile", ["ema915", "regime50200"])
+def test_scalp_index_reward_does_not_replace_premium_loss(monkeypatch, direction, stop, target, profile):
+    from database import token_db
+
+    monkeypatch.setattr(token_db, "get_symbol_info", lambda *_: SimpleNamespace(tick_size=0.05))
+    _broker_facts(monkeypatch, funds=(True, {"data": {"availablecash": "100000"}}, 200),
+                  positions=(True, {"data": []}, 200))
+    strategy = _strategy()
+    strategy["scalp_profile"] = profile
+    leg = _option_leg(target_pts=None, sl_pts=5, scalp_context={
+        "profile": profile, "direction": direction, "entry": 100, "stop": stop, "target": target})
+    result = build_entry_facts("scalp-governor", strategy, [leg], "key", "live")
+    assert result.minimum_reward_risk == Decimal("2")
+    assert result.reward_risk_basis == "underlying_index"
+    assert result.entry_risk == result.entry_option_lot_risk == Decimal("375")
+    assert result.estimated_debit == Decimal("7537.50")
+
+
+def test_box_reward_and_loss_both_use_option_premium(monkeypatch):
+    from database import token_db
+
+    monkeypatch.setattr(token_db, "get_symbol_info", lambda *_: SimpleNamespace(tick_size=0.05))
+    _broker_facts(monkeypatch, funds=(True, {"data": {"availablecash": "100000"}}, 200),
+                  positions=(True, {"data": []}, 200))
+    strategy = _strategy() | {"scalp_profile": "box15"}
+    leg = _option_leg(target_pts=20, sl_pts=10, scalp_context={"profile": "box15", "exit_basis": "option_premium"})
+    result = build_entry_facts("box-governor", strategy, [leg], "key", "live")
+    assert result.minimum_reward_risk == Decimal("2")
+    assert result.reward_risk_basis != "underlying_index"
+    assert result.entry_risk == result.entry_option_lot_risk == Decimal("750")
+
+
+@pytest.mark.parametrize("profile,context", [
+    (None, {"profile": "ema915", "direction": "CE", "entry": 100, "stop": 90, "target": 120}),
+    ("ema915", None),
+    ("ema915", {"profile": "ema5", "direction": "CE", "entry": 100, "stop": 90, "target": 120}),
+    ("ema915", {"profile": "ema915", "direction": "CE", "entry": 100, "stop": 110, "target": 120}),
+    ("ema915", {"profile": "ema915", "direction": "PE", "entry": 100, "stop": 110, "target": 120}),
+    ("ema915", {"profile": "ema915", "direction": "CE", "entry": "NaN", "stop": 90, "target": 120}),
+])
+def test_no_premium_target_requires_valid_private_scalp_context(monkeypatch, profile, context):
+    from database import token_db
+
+    monkeypatch.setattr(token_db, "get_symbol_info", lambda *_: SimpleNamespace(tick_size=0.05))
+    _broker_facts(monkeypatch, funds=(True, {"data": {"availablecash": "100000"}}, 200),
+                  positions=(True, {"data": []}, 200))
+    strategy = _strategy()
+    strategy["scalp_profile"] = profile
+    result = build_entry_facts("scalp-governor", strategy,
+        [_option_leg(target_pts=None, scalp_context=context)], "key", "live")
+    assert result.entry_risk is None and result.minimum_reward_risk is None
+
+
 @pytest.mark.parametrize("alias", ["availablecash", "available_cash", "cash"])
 def test_fund_aliases_produce_the_same_available_cash(monkeypatch, alias):
     from database import token_db

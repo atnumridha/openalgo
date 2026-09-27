@@ -2814,3 +2814,26 @@ def test_a_legacy_leg_with_no_exit_row_but_a_priced_exit_rebuilds():
     assert leg["symbol"] == "RELIANCE"
     assert leg["exit_avg"] == 1320.0, "the exit price was not read from the checkpoint"
     assert leg["exit_kind"] == "exit_sl", "the exit kind was not read from the checkpoint"
+
+
+@pytest.mark.parametrize("profile,target", [("box15", 20), ("regime50200", None), ("ema915", None)])
+def test_scalp_recovery_without_checkpoint_preserves_premium_exit(profile, target):
+    from services.strategy_module.risk_adapter import evaluate_leg
+
+    sid = _strategy(legs=[_leg(position="B")], scalp_profile=profile)
+    run_id = _run(sid)
+    store.get_run(run_id).scalp_context = {
+        "profile": profile, "premium_stop_points": 10,
+        "premium_target_points": target,
+    }
+    store.db_session.commit()
+    _order(run_id, action="BUY", avg=100, filled_qty=75)
+    assert store.latest_checkpoint(run_id) is None
+
+    assert recovery.recover_run(run_id).ok
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["sl_pts"] == 10 and leg["target_pts"] == target
+    decision = evaluate_leg(leg, 120)
+    assert decision.breached is (profile == "box15")
+    if target:
+        assert decision.reason.value == "target"

@@ -78,6 +78,26 @@ def fees(**overrides):
     return value | overrides
 
 
+def test_scoped_costs_refuse_history_from_a_different_exchange():
+    data = dataset.validate_dataset(payload())
+    valid = replay.validate_configuration(
+        data, "trend_breakout", {}, fees(exchange="NFO", broker="kotak"), 42
+    )
+    assert valid["costs"]["exchange"] == "NFO"
+    with pytest.raises(ValueError, match="exchange"):
+        replay.validate_configuration(
+            data, "trend_breakout", {}, fees(exchange="BFO", broker="kotak"), 42
+        )
+
+
+def test_cost_scope_rejects_unknown_markets_and_brokers():
+    from services.research.costs import validate_cost_schedule
+
+    for extras in ({"exchange": "unknown"}, {"broker": "unknown"}):
+        with pytest.raises(ValueError):
+            validate_cost_schedule(fees(**extras))
+
+
 def test_import_has_stable_content_hash_and_preserves_missing_volume():
     body = payload()
     body["rows"][0].pop("volume")

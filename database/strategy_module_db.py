@@ -329,6 +329,7 @@ class SmStrategy(Base):
     pricetype = Column(String(10), nullable=False, default="MARKET")
 
     legs = Column(JSON, nullable=False, default=list)
+    scalp_profile = Column(String(20), nullable=True)
 
     overall_sl_mtm = Column(Numeric(18, 2), nullable=True)
     overall_target_mtm = Column(Numeric(18, 2), nullable=True)
@@ -417,6 +418,7 @@ class SmStrategyRun(Base):
     # Expiries are resolved once at run start and held for the run, so a
     # positional strategy does not silently roll to a new contract mid-run.
     resolved_expiries = Column(JSON, nullable=True)
+    scalp_context = Column(JSON, nullable=True)
 
     __table_args__ = (Index("ix_sm_run_strategy_started", "strategy_id", "started_at"),)
 
@@ -694,6 +696,13 @@ def init_db() -> None:
     """Create the strategy-module tables if they do not exist."""
     logger.info("Initializing Strategy Module DB")
     Base.metadata.create_all(bind=engine)
+    for table, column, ddl in (
+        ("sm_strategy", "scalp_profile", "VARCHAR(20)"),
+        ("sm_strategy_run", "scalp_context", "JSON"),
+    ):
+        if column not in {item["name"] for item in inspect(engine).get_columns(table)}:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     try:
         columns = {item["name"] for item in inspect(engine).get_columns("sm_strategy")}
         if "broker_connection_id" not in columns:
@@ -949,6 +958,7 @@ def strategy_to_dict(row: SmStrategy, *, include_legs: bool = True) -> dict:
         "name": row.name,
         "broker_connection_id": row.broker_connection_id,
         "strategy_kind": row.strategy_kind,
+        "scalp_profile": row.scalp_profile,
         "direction": row.direction,
         "universe_tab": row.universe_tab,
         "underlying": row.underlying,
@@ -998,6 +1008,7 @@ def run_to_dict(row: SmStrategyRun) -> dict:
         "trigger_source": row.trigger_source,
         "webhook_event_id": row.webhook_event_id,
         "resolved_expiries": row.resolved_expiries,
+        "scalp_context": row.scalp_context,
     }
 
 
@@ -1170,6 +1181,7 @@ def create_strategy(user_id: str, config: dict) -> tuple[dict | None, str | None
             product=config.get("product", "NRML"),
             pricetype=config.get("pricetype", "MARKET"),
             legs=config.get("legs", []),
+            scalp_profile=config.get("scalp_profile"),
             overall_sl_mtm=config.get("overall_sl_mtm"),
             overall_target_mtm=config.get("overall_target_mtm"),
             lock_profit=config.get("lock_profit"),
@@ -1307,6 +1319,7 @@ def get_strategy_unscoped(strategy_id: int) -> SmStrategy | None:
 # refuses to send it; this is the half that a caller cannot route around.
 UPDATABLE_FIELDS = frozenset(
     {
+        "scalp_profile",
         "name",
         "broker_connection_id",
         "direction",
@@ -1340,6 +1353,8 @@ def update_strategy(
             return None, "Strategy not found"
         if row.status == "running":
             return None, "Stop the strategy before editing it"
+        if (row.scalp_profile or changes.get("scalp_profile")) and row.automation_state != "disabled":
+            return None, "Disable scalping automation before editing it"
 
         # Said rather than silently dropped. strategy_kind is outside
         # UPDATABLE_FIELDS, so a caller asking to change it would otherwise get
@@ -1388,6 +1403,8 @@ def delete_strategy(strategy_id: int, user_id: str) -> tuple[bool, str | None]:
             return False, "Strategy not found"
         if row.status == "running":
             return False, "Stop the strategy before deleting it"
+        if row.scalp_profile and row.automation_state != "disabled":
+            return False, "Disable scalping automation before deleting it"
 
         run_ids = [
             r.id
@@ -1512,6 +1529,8 @@ def set_live_enabled(strategy_id: int, user_id: str, enabled: bool) -> tuple[boo
             return False, "Strategy not found"
         if row.status == "running":
             return False, "Stop the strategy before changing its mode"
+        if row.scalp_profile and row.automation_state != "disabled":
+            return False, "Disable scalping automation before changing mode"
         row.live_enabled = bool(enabled)
         db_session.commit()
         return True, None
@@ -1577,6 +1596,7 @@ def create_run(
     trigger_source: str = "manual",
     webhook_event_id: int | None = None,
     resolved_expiries: dict | None = None,
+    scalp_context: dict | None = None,
 ) -> SmStrategyRun | None:
     """Open a new run for a strategy."""
     try:
@@ -1591,6 +1611,7 @@ def create_run(
             trigger_source=trigger_source,
             webhook_event_id=webhook_event_id,
             resolved_expiries=resolved_expiries,
+            scalp_context=scalp_context,
         )
         db_session.add(row)
         db_session.commit()

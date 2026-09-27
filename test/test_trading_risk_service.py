@@ -70,6 +70,26 @@ def test_fees_can_make_a_nominally_affordable_stop_unaffordable():
     ].allowed
 
 
+def test_kotak_nse_costs_cannot_be_used_for_bse_or_another_broker():
+    ledger.set_costs("u", {**COSTS, "exchange": "NFO", "broker": "kotak"})
+    decision, _ = service.reserve_entry(
+        "u", STRATEGY, [{**LEG, "exchange": "BFO"}], "sandbox", "kotak", FACTS, NOW
+    )
+    assert decision.code == "cost_schedule_exchange_mismatch"
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "other", FACTS, NOW)
+    assert decision.code == "cost_schedule_broker_mismatch"
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "kotak", FACTS, NOW)
+    assert decision.allowed
+
+
+def test_kotak_costs_are_modeled_by_virtual_sandbox_but_not_a_live_sandbox_route():
+    ledger.set_costs("u", {**COSTS, "exchange": "NFO", "broker": "kotak"})
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG], "live", "sandbox", FACTS, NOW)
+    assert decision.code == "cost_schedule_broker_mismatch"
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "sandbox", FACTS, NOW)
+    assert decision.allowed
+
+
 def test_unsupported_naked_option_or_incomplete_lot_is_refused():
     ledger.set_costs("u", COSTS)
     for override in ({"position": "S"}, {"quantity": 51}, {"lot_size": None}, {"exchange": "MCX"}):

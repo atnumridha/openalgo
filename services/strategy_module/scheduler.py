@@ -140,6 +140,18 @@ def start(paused: bool = False) -> BackgroundScheduler:
         # No jobstores argument: the default MemoryJobStore is the point. The
         # schedule is a projection of the database, rebuilt on every boot.
         _scheduler = BackgroundScheduler(timezone=IST, job_defaults=JOB_DEFAULTS)
+        from services.strategy_module.scalping import monitor as monitor_scalps, monitor_deadlines
+
+        _scheduler.add_job(
+            func=monitor_scalps, trigger=IntervalTrigger(seconds=5, timezone=IST),
+            id="strategy-scalping-monitor", name="Scalping index stops and time exits",
+            replace_existing=True,
+        )
+        _scheduler.add_job(
+            func=monitor_deadlines, trigger=IntervalTrigger(seconds=5, timezone=IST),
+            id="strategy-scalping-deadlines", name="Scalping durable deadline exits",
+            replace_existing=True,
+        )
         _scheduler.add_job(
             func=reconcile_pending_stops,
             trigger=IntervalTrigger(
