@@ -16,6 +16,7 @@ from services.research.dataset import digest
 from services.risk import BreachReason, PositionRisk, evaluate_position
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
 from services.risk.budget import (
+    SHARED_POLICY_VERSIONS,
     BudgetPolicy,
     BudgetTrade,
     budget_snapshot,
@@ -25,11 +26,18 @@ from services.risk.budget import (
 from services.risk.cash_exit import (
     CASH_RECIPES,
     CASH_RISK_RECIPE,
-    cash_exit,
     current_configuration,
     pacing_config,
+    recipe_exit,
+    recipe_policy,
 )
-from services.risk.profit_exit import profit_config, profit_open, profit_reason
+from services.risk.profit_exit import (
+    PROFIT_RECIPE,
+    PROFIT_RECIPES,
+    profit_config,
+    profit_open,
+    profit_reason,
+)
 
 LEGACY_DEFAULTS = {
     "lookback": 20,
@@ -43,7 +51,7 @@ CANDIDATES = [
     {
         "id": "trend_breakout_filtered",
         "name": "Filtered breakout · minute execution",
-        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, one-lot cash stops up to ₹300, a rising profit stop with no hard target and a 5-minute cooldown. Research hypothesis, not proven profitable.",
+        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, one-lot technical stops admitted within the all-in equity risk limit, a rising profit stop with no hard target and a 5-minute cooldown. Research hypothesis, not proven profitable.",
         "defaults": DEFAULTS,
     },
     {
@@ -59,7 +67,7 @@ CANDIDATES = [
         "defaults": DEFAULTS,
     },
 ]
-ENGINE_VERSION = "closed-bar-profit-trail-v4"
+ENGINE_VERSION = "closed-bar-technical-profit-trail-v5"
 FILTER_RULES = {
     "fast_bars": 8,
     "slow_bars": 21,
@@ -101,14 +109,25 @@ def validate_configuration(
     capital=25000,
     cooldown_minutes=5,
     policy_version=None,
+    risk_recipe=None,
 ):
     if candidate not in {c["id"] for c in CANDIDATES}:
         raise ValueError("Select a supported deterministic candidate")
     if not isinstance(parameters, dict) or set(parameters) - set(DEFAULTS):
         raise ValueError("Unknown rule parameters")
     legacy = policy_version == BudgetPolicy().version
-    if policy_version not in (None, BudgetPolicy().version, current_policy().version):
+    if policy_version not in (None, BudgetPolicy().version, *SHARED_POLICY_VERSIONS):
         raise ValueError("Unsupported risk policy version")
+    selected_recipe = (
+        risk_recipe
+        if risk_recipe is not None
+        else (PROFIT_RECIPE if policy_version == "shared-300-3r-v1" else CASH_RISK_RECIPE)
+    )
+    selected_policy = policy_version or current_policy().version
+    if legacy and risk_recipe is not None:
+        raise ValueError("Legacy policy cannot bind a whole-lot risk recipe")
+    if not legacy and recipe_policy(selected_recipe).version != selected_policy:
+        raise ValueError("Risk recipe and risk policy must be bound together")
     params = (LEGACY_DEFAULTS if legacy else DEFAULTS) | parameters
     pace = pacing_config(cooldown_minutes)
     for key, (minimum, maximum) in {
@@ -171,13 +190,21 @@ def validate_configuration(
         "parameters": params,
         "costs": schedule,
         "seed": seed,
-        "engine_version": "closed-bar-rules-v2" if legacy else ENGINE_VERSION,
+        "engine_version": (
+            "closed-bar-rules-v2"
+            if legacy
+            else (
+                "closed-bar-profit-trail-v4"
+                if selected_policy == "shared-300-3r-v1"
+                else ENGINE_VERSION
+            )
+        ),
         **(
             {}
             if legacy
             else {
-                "risk_policy_version": current_policy().version,
-                "risk_recipe": CASH_RISK_RECIPE,
+                "risk_policy_version": selected_policy,
+                "risk_recipe": selected_recipe,
                 "pacing": pace,
                 "max_hold_minutes": 15,
             }
@@ -386,6 +413,24 @@ def _drawdown_exit_price(active, bar, equity, peak, policy, day, costs, slippage
     return lower
 
 
+def _report_budget_snapshot(policy, ledger, day, equity, peak, day_start_equity):
+    snapshot = budget_snapshot(policy, ledger, day, equity, peak, day_start_equity=day_start_equity)
+    if policy.version != "equity-1pct-v2":
+        # Additive live-account diagnostics must not rewrite sealed old reports.
+        for key in (
+            "daily_limit",
+            "day_start_equity",
+            "risk_reduced",
+            "drawdown_pct",
+            "position_count",
+        ):
+            snapshot.pop(key, None)
+        if policy.version == "two-bucket-v1":
+            for key in ("policy_version", "per_trade_limit"):
+                snapshot.pop(key, None)
+    return snapshot
+
+
 def run_replay(
     data, config, sessions=None, check_cancel=None, stress=False, *, research_signals=None
 ):
@@ -453,10 +498,14 @@ def run_replay(
     daily_entries = 0
     initial_capital = research_capital(config)
     policy, ledger = (
-        (current_policy(initial_capital) if current else BudgetPolicy(capital=initial_capital)),
+        (
+            recipe_policy(risk_recipe, initial_capital)
+            if current
+            else BudgetPolicy(capital=initial_capital)
+        ),
         [],
     )
-    equity = peak = initial_capital
+    equity = peak = day_start_equity = initial_capital
     history, trades, rejections = [], [], Counter()
     underlying_session_complete = True
     active = pending = None
@@ -486,6 +535,7 @@ def run_replay(
                 break
             pending = None
             prior_day = day
+            day_start_equity = equity
         if pending and at >= pending["entry_bar_at"]:
             contract = pending["contract"]
             bar = bars.get(contract["symbol"]) if at == pending["entry_bar_at"] else None
@@ -517,7 +567,7 @@ def run_replay(
                 )
                 if current:
                     try:
-                        stop, target, _ = cash_exit(exact_entry, distance, contract, runner=risk_recipe == CASH_RISK_RECIPE)
+                        stop, target, _ = recipe_exit(exact_entry, distance, contract, risk_recipe)
                         exact_distance = exact_entry - stop
                         stop, target = float(stop), float(target)
                     except ValueError:
@@ -569,6 +619,7 @@ def run_replay(
                         peak,
                         planned,
                         paused=drawdown_paused,
+                        day_start_equity=day_start_equity,
                         proposed_gross_risk=exact_distance * Decimal(str(units))
                         if current
                         else None,
@@ -593,7 +644,9 @@ def run_replay(
                         "last_bar_at": at,
                         "initial_stop": stop,
                         "target_milestone": target,
-                        "profit_protection": profit_config(contract, costs) if risk_recipe == CASH_RISK_RECIPE else None,
+                        "profit_protection": profit_config(contract, costs, recipe=risk_recipe)
+                        if risk_recipe in PROFIT_RECIPES
+                        else None,
                         "risk": PositionRisk(
                             entry_price=entry,
                             quantity=units,
@@ -642,7 +695,10 @@ def run_replay(
                 else:
                     opening = evaluate_position(risk, bar["open"])
                 if opening.reason == BreachReason.STOP:
-                    exit_price, reason = bar["open"], profit_reason(risk) if protection else "stop_loss"
+                    exit_price, reason = (
+                        bar["open"],
+                        profit_reason(risk) if protection else "stop_loss",
+                    )
                 elif _drawdown_breached(policy, day, opening_mark, peak):
                     exit_price, reason = bar["open"], "portfolio_drawdown"
                 elif opening.reason == BreachReason.TARGET:
@@ -650,7 +706,10 @@ def run_replay(
                 else:
                     low_mark = _liquidation_equity(active, bar["low"], equity, costs, slip)
                     if evaluate_position(risk, bar["low"]).reason == BreachReason.STOP:
-                        exit_price, reason = risk.stop_price, profit_reason(risk) if protection else "stop_loss"
+                        exit_price, reason = (
+                            risk.stop_price,
+                            profit_reason(risk) if protection else "stop_loss",
+                        )
                     if _drawdown_breached(policy, day, low_mark, peak):
                         drawdown_price = _drawdown_exit_price(
                             active, bar, equity, peak, policy, day, costs, slip
@@ -659,7 +718,11 @@ def run_replay(
                         # is crossed first. Do not use a low reached after exit.
                         if exit_price is None or drawdown_price >= exit_price:
                             exit_price, reason = drawdown_price, "portfolio_drawdown"
-                    ambiguous_exit = bool(reason and risk.target_price is not None and bar["high"] >= risk.target_price)
+                    ambiguous_exit = bool(
+                        reason
+                        and risk.target_price is not None
+                        and bar["high"] >= risk.target_price
+                    )
                     if reason is None:
                         max_open_drawdown = max(
                             max_open_drawdown, float((peak - low_mark) / peak * 100)
@@ -718,7 +781,10 @@ def run_replay(
                         exit_reason=reason,
                         planned_risk=float(active["planned"]),
                         gross_planned_risk=float(
-                            (Decimal(str(active["entry_price"])) - Decimal(str(active["initial_stop"])))
+                            (
+                                Decimal(str(active["entry_price"]))
+                                - Decimal(str(active["initial_stop"]))
+                            )
                             * Decimal(str(active["units"]))
                         ),
                         completion_sequence=len(trades) + 1,
@@ -750,7 +816,9 @@ def run_replay(
                     peak = max(peak, equity)
                     trade["budget_after_close"] = {
                         k: float(v) if isinstance(v, Decimal) else v
-                        for k, v in budget_snapshot(policy, ledger, day, equity, peak).items()
+                        for k, v in _report_budget_snapshot(
+                            policy, ledger, day, equity, peak, day_start_equity
+                        ).items()
                     }
                     active = None
                     last_exit = datetime.fromisoformat(at)

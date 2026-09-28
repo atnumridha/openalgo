@@ -826,9 +826,30 @@ it('qualifies the setup summary when Live remains on the legacy policy', async (
   const setup = await screen.findByRole('region', { name: 'Setup status' })
   await waitFor(() => expect(setup).toHaveTextContent('Policy transition needed'))
   expect(setup).toHaveTextContent('Legacy policy still active: Live')
-  expect(setup).toHaveTextContent('Current ₹300 / 3R limits apply only to upgraded modes')
+  expect(setup).toHaveTextContent('Current equity-based limits apply only to upgraded modes')
   expect(setup).not.toHaveTextContent('Your managed strategy entries share these limits')
   expect(setup).not.toHaveTextContent('Shared limits enabled')
   expect(rest.post).not.toHaveBeenCalled()
   expect(rest.put).not.toHaveBeenCalled()
+})
+
+it('shows actual all-in equity limits and reduced risk instead of treating ceilings as allowance', async () => {
+  const current = risk()
+  current.policy.version = 'equity-1pct-v2'
+  current.policy.drawdown_pct = 0.08
+  Object.assign(current.accounts.sandbox, {
+    policy_version: 'equity-1pct-v2', capital: 25000, equity: 23750, peak_equity: 25000,
+    per_trade_limit: 118.75, daily_limit: 750, daily_remaining: 500, risk_reduced: true,
+    day_start_equity: 25000,
+  })
+  rest.get.mockImplementation((url: string) => Promise.resolve({
+    data: { status: 'success', data: url === '/strategy/api/risk' ? current : overview() },
+  }))
+  renderResearch()
+  await userEvent.click(await screen.findByText('View budget details and pause rules'))
+  const sandbox = await screen.findByRole('region', { name: 'Sandbox risk budget' })
+  expect(sandbox).toHaveTextContent('Maximum planned loss incl. costs₹118.75')
+  expect(sandbox).toHaveTextContent('Session loss allowance₹750.00')
+  expect(sandbox).toHaveTextContent('Risk per trade is halved')
+  expect(screen.getByRole('region', { name: 'Setup status' })).toHaveTextContent('One open position')
 })

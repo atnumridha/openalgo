@@ -10,6 +10,7 @@ from test_trading_research import fees
 from services.research import dataset, replay
 from services.research.ml_live import entry_plan
 from services.risk.budget import BudgetTrade
+from services.risk.cash_exit import CASH_RISK_RECIPE
 from services.risk.profit_exit import PROFIT_RECIPE
 
 RECIPE = "one-lot-cash300-3r-v1"
@@ -77,7 +78,7 @@ def test_new_configuration_binds_three_r_and_pacing_and_rejects_ratio_override()
     config = replay.validate_configuration(
         data, "trend_breakout_filtered", {}, fees(), capital=25000
     )
-    assert config["risk_recipe"] == PROFIT_RECIPE
+    assert config["risk_recipe"] == CASH_RISK_RECIPE
     assert config["parameters"]["target_pct"] == 0.3
     assert config["pacing"] == {"cooldown_minutes": 5, "daily_trade_cap": None}
     hashes = {
@@ -138,6 +139,7 @@ def test_replay_chronological_loss_stop_and_no_successful_entry_cap(outcomes, wa
         data, "trend_breakout_filtered", {}, fees(slippage_bps=0), capital=25000, cooldown_minutes=0
     )
     config["risk_recipe"] = RECIPE
+    config["risk_policy_version"] = "shared-300-3r-v1"
     config["research_signal_hash"] = dataset.digest(signals)
     result = replay.run_replay(data, config, research_signals=signals)
     assert len(result["trades"]) == want
@@ -161,7 +163,7 @@ def test_label_live_and_replay_share_cash_exit_and_net_costs(stress):
         data, "trend_breakout_filtered", {}, costs, capital=25000, cooldown_minutes=0
     )
     config["risk_recipe"] = RECIPE
-    config["risk_recipe"] = RECIPE
+    config["risk_policy_version"] = "shared-300-3r-v1"
     config["research_signal_hash"] = dataset.digest(signals)
     result = replay.run_replay(data, config, stress=stress, research_signals=signals)
     trade = result["trades"][0]
@@ -209,7 +211,7 @@ def test_new_scalp_context_uses_option_target_and_keeps_deadline():
         100,
     )
     assert context["exit_basis"] == "option_premium"
-    assert context["risk_recipe"] == PROFIT_RECIPE
+    assert context["risk_recipe"] == CASH_RISK_RECIPE
     assert exit_reason(context, datetime.fromisoformat("2026-01-01T10:01:00+05:30"), 110) is None
     assert (
         exit_reason(context, datetime.fromisoformat("2026-01-01T10:15:00+05:30"), 110)
@@ -250,8 +252,8 @@ def test_new_queued_ml_binds_current_recipe_and_source(monkeypatch):
         lambda *args, **kwargs: {
             "candidate": "trend_breakout_filtered",
             "parameters": deepcopy(replay.DEFAULTS),
-            "risk_recipe": RECIPE,
-            "risk_policy_version": "shared-300-3r-v1",
+            "risk_recipe": CASH_RISK_RECIPE,
+            "risk_policy_version": "equity-1pct-v2",
             "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
         },
     )
@@ -266,8 +268,8 @@ def test_new_queued_ml_binds_current_recipe_and_source(monkeypatch):
         },
     )
     configuration = args[2]
-    assert configuration["risk_recipe"] == PROFIT_RECIPE
-    assert configuration["risk_policy_version"] == "shared-300-3r-v1"
+    assert configuration["risk_recipe"] == CASH_RISK_RECIPE
+    assert configuration["risk_policy_version"] == "equity-1pct-v2"
 
 
 def test_optimization_rejects_independent_target_grid():
@@ -313,7 +315,13 @@ def test_daily_loss_stop_resets_for_new_session():
         for at, choice in list(signals.items())
     }
     config = replay.validate_configuration(
-        data, "trend_breakout_filtered", {}, fees(slippage_bps=0), capital=25000, cooldown_minutes=0
+        data,
+        "trend_breakout_filtered",
+        {},
+        fees(slippage_bps=0),
+        capital=25000,
+        cooldown_minutes=0,
+        policy_version="shared-300-3r-v1",
     )
     config["research_signal_hash"] = dataset.digest(signals)
     result = replay.run_replay(data, config, research_signals=signals)
@@ -378,7 +386,6 @@ def test_current_configuration_has_no_legacy_pacing_and_rejects_boolean_paramete
 
 def test_profit_recipe_runs_past_900_and_exits_on_the_rising_floor():
     from services.research.ml import label_option_trade
-    from services.risk.profit_exit import PROFIT_RECIPE
 
     data, signals = scheduled_data([True])
     signal = next(iter(signals))
@@ -392,7 +399,13 @@ def test_profit_recipe_runs_past_900_and_exits_on_the_rising_floor():
         row = next(r for r in option_rows if r["timestamp"] == at)
         row.update(open=o, high=h, low=low, close=c)
     config = replay.validate_configuration(
-        data, "trend_breakout_filtered", {}, fees(slippage_bps=0), capital=25000, cooldown_minutes=0
+        data,
+        "trend_breakout_filtered",
+        {},
+        fees(slippage_bps=0),
+        capital=25000,
+        cooldown_minutes=0,
+        policy_version="shared-300-3r-v1",
     )
     assert config["risk_recipe"] == PROFIT_RECIPE
     config["research_signal_hash"] = dataset.digest(signals)

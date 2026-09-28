@@ -16,8 +16,8 @@ from services.research.ml import (
 from services.research.ml_artifact import predict_probabilities, validate_artifact
 from services.research.replay import _tick, research_capital
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
-from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
-from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit
+from services.risk.budget import BudgetPolicy, evaluate_budget
+from services.risk.cash_exit import CASH_RECIPES, recipe_exit, recipe_policy
 
 
 def validate_completed_rows(rows, now, symbol, *, minutes=1, settle_seconds=5):
@@ -144,14 +144,17 @@ def entry_plan(
     paused=False,
     risk_recipe=ML_RISK_RECIPE,
     daily_stopped=False,
+    day_start_equity=None,
 ):
     """Use replay's tick, fee, affordability and shared budget math at observed entry."""
     amount = research_capital({"capital": capital})
     equity = Decimal(str(equity if equity is not None else amount))
     peak = Decimal(str(peak if peak is not None else equity))
+    if day_start_equity is not None:
+        day_start_equity = Decimal(str(day_start_equity))
     day = day or datetime.now().date().isoformat()
     current = risk_recipe in CASH_RECIPES
-    policy = current_policy(amount) if current else BudgetPolicy(capital=amount)
+    policy = recipe_policy(risk_recipe, amount) if current else BudgetPolicy(capital=amount)
     if risk_recipe not in (ML_RISK_RECIPE, *CASH_RECIPES):
         raise ValueError("Frozen ML admission risk recipe changed")
     if not isfinite(float(entry)) or not isfinite(float(atr)) or entry <= 0 or atr < 0:
@@ -159,7 +162,7 @@ def entry_plan(
     exact = Decimal(str(entry))
     technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
     if current:
-        stop, target, _ = cash_exit(exact, technical, contract, runner=risk_recipe == CASH_RISK_RECIPE)
+        stop, target, _ = recipe_exit(exact, technical, contract, risk_recipe)
     else:
         stop = Decimal(str(_tick(exact - technical, contract)))
         target = Decimal(str(_tick(exact + (exact - stop) * 2, contract, up=True)))
@@ -194,6 +197,7 @@ def entry_plan(
             paused=paused,
             proposed_gross_risk=distance * quantity_units if current else None,
             daily_stopped=daily_stopped,
+            day_start_equity=day_start_equity,
         )
         if not decision.allowed:
             break

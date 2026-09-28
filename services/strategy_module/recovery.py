@@ -766,9 +766,9 @@ def _recover_run(run_id: int) -> RecoveredRun:
             target_value is None or not math.isfinite(target_value) or target_value <= 0
         ):
             raise _ManagedRecoveryError("Persisted ML target geometry is unavailable")
-        from services.risk.profit_exit import PROFIT_RECIPE, validate_profit_config
+        from services.risk.profit_exit import PROFIT_RECIPES, validate_profit_config
         protection = scalp_context.get("profit_protection")
-        if scalp_context.get("risk_recipe") == PROFIT_RECIPE:
+        if scalp_context.get("risk_recipe") in PROFIT_RECIPES:
             try:
                 protection = validate_profit_config(protection)
             except ValueError as exc:

@@ -149,11 +149,12 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
     entry_fee = order_cost(premium, "BUY", costs)
     # Preserve the established conservative guard arithmetic for all profiles.
     risk = planned_entry_risk(facts.entry_risk, premium, costs)
-    from services.risk.profit_exit import PROFIT_RECIPE, profit_config
+    from services.risk.profit_exit import PROFIT_RECIPES, profit_config
     protection = None
-    if (leg.get("scalp_context") or {}).get("risk_recipe") == PROFIT_RECIPE:
+    recipe = (leg.get("scalp_context") or {}).get("risk_recipe")
+    if recipe in PROFIT_RECIPES:
         try:
-            protection = profit_config(leg, costs)
+            protection = profit_config(leg, costs, recipe=recipe)
         except (ValueError, TypeError):
             return _refusal("profit_protection_metadata_required")
     ref = str(leg.get("position_ref") or "")
@@ -176,7 +177,7 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
             "policy_version": ledger.POLICY.version,
         },
         broker_cash=facts.available_cash,
-        gross_risk=facts.entry_risk if ledger.POLICY.version == "shared-300-3r-v1" else None,
+        gross_risk=facts.entry_risk,
     )
     if result.allowed and mode == "sandbox":
         try:

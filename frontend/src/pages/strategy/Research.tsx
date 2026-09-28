@@ -217,10 +217,11 @@ function Budget({
           <Metric label="Legacy first filled trade remaining" value={money(account.first_remaining)} />
           <Metric label="Legacy later trades remaining" value={money(account.later_remaining)} />
         </> : <>
-          <Metric label="Per-trade price-stop limit" value={money(account?.per_trade_limit)} />
+          <Metric label={account?.policy_version === "equity-1pct-v2" ? "Maximum planned loss incl. costs" : "Per-trade price-stop limit"} value={money(account?.per_trade_limit)} />
           <Metric label="Consecutive completed losses" value={number(account?.consecutive_losses)} />
         </>}
         <Metric label="Daily remaining" value={money(account?.daily_remaining)} />
+        {account?.daily_limit !== undefined && <Metric label="Session loss allowance" value={money(account.daily_limit)} />}
         <Metric label="Drawdown headroom" value={money(account?.drawdown_headroom)} />
         <Metric label="Equity" value={money(account?.equity)} />
         <Metric label="Reserved risk" value={money(account?.reserved_risk)} />
@@ -231,6 +232,7 @@ function Budget({
           : account.daily_stop_reason}
       </p>}
       {account?.policy_transition_blocked && <p className="text-sm text-destructive">{account.policy_transition_blocked}</p>}
+      {account?.risk_reduced && <p className="text-sm text-destructive">Risk per trade is halved because drawdown has reached 5% of peak equity.</p>}
       {account?.pause_reason && <p className="text-sm text-destructive">{account.pause_reason}</p>}
       <p className="text-xs text-muted-foreground">
         {account
@@ -384,7 +386,7 @@ export default function Research() {
     refetchInterval: (query) => (activeRun(query.state.data) ? 3_000 : false),
   })
   const legacyModes = Object.entries(risk.data?.accounts ?? {})
-    .filter(([, account]) => account?.policy_transition_blocked || account?.policy_version === 'two-bucket-v1')
+    .filter(([, account]) => account?.policy_transition_blocked || (account && account.policy_version !== risk.data?.policy.version))
     .map(([mode]) => mode === 'sandbox' ? 'Sandbox' : 'Live')
   const transitionPending = legacyModes.length > 0
   const candidate = overview.data?.candidates.find((item) => item.id === candidateId)
@@ -650,7 +652,7 @@ export default function Research() {
         <p className="max-w-3xl text-sm text-muted-foreground">
           {risk.data?.enabled
             ? transitionPending
-              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current ₹300 / 3R limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
+              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current equity-based limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
               : 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
             : 'Your existing flows keep their current rules. Complete step 1 to apply these shared limits to managed Strategy Module entries. Saving this setup does not start trading.'}
         </p>
@@ -664,20 +666,22 @@ export default function Research() {
             <Metric label="Sandbox allocation" value={money(risk.data.accounts.sandbox?.capital)} />
             <Metric label="Live allocation" value={money(risk.data.accounts.live?.capital)} />
             <Metric
-              label={transitionPending ? "Current profile price-stop limit" : "Per-trade price-stop limit"}
+              label="Absolute per-trade ceiling incl. costs"
               value={money(risk.data.policy.per_trade_limit)}
             />
             <Metric
               label="Profit objective"
               value="₹900–₹1,500+ gross"
             />
-            <Metric label="Shared daily net-loss allowance" value={money(risk.data.policy.daily_limit)} />
+            <Metric label="Absolute daily loss ceiling" value={money(risk.data.policy.daily_limit)} />
           </dl>
         )}
         <p className="text-xs text-muted-foreground">
-          These are strategy limits, not your broker balance. Profits do not refill the loss
-          allowance. Profit trailing needs OpenAlgo and its price feed running; the broker-held fallback
-          stop stays fixed. Market gaps can exceed a planned stop.
+          Actual limits follow each mode’s allocated equity: 1% per trade including estimated costs,
+          and 3% of session-opening equity per day, up to the ceilings above. One open position across
+          managed strategies. Profits do not refill the allowance. At 5% drawdown, trade risk halves;
+          at 8%, entries pause. New entries keep the technical stop or are skipped.
+          Kotak stop advances are verified against broker evidence. Market gaps can exceed a planned stop.
         </p>
         {risk.data && (risk.data.accounts.sandbox?.paused || risk.data.accounts.live?.paused) && (
           <p role="alert" className="text-sm text-destructive">
@@ -882,7 +886,9 @@ export default function Research() {
                 A {number(risk.data.policy.drawdown_pct * 100, '%')} fall from peak allocated equity
                 pauses new entries across days. A{' '}
                 {number(risk.data.policy.cash_buffer_pct * 100, '%')} cash buffer stays uncommitted.
-                Completed losses after charges consume a shared ₹2,000 daily allowance; wins do not refill it.
+                Planned loss including estimated charges and slippage is capped at 1% of equity or ₹300,
+                whichever is lower; risk halves at 5% drawdown. Completed losses after charges consume
+                3% of session-opening equity, up to ₹2,000 per day; wins do not refill it.
                 Three consecutive completed net losses block entries for the rest of the trading day.
                 Protective exits continue. These limits cover managed Strategy Module entries only.
               </p>
@@ -1079,8 +1085,9 @@ export default function Research() {
                   />
                   <p className="text-sm text-muted-foreground">
                     New experiments start at ₹25,000. This amount sets whole-lot affordability and
-                    the 20% portfolio drawdown limit. One option lot risks at most ₹300 before charges,
-                    with a ₹900–₹1,500+ objective and a rising profit stop, a shared ₹2,000 daily net-loss allowance and 20% cash buffer. Planned risk is not
+                    an 8% portfolio drawdown pause. One option lot must fit 1% of equity including estimated
+                    charges and slippage, up to ₹300. Daily loss allowance is 3% of session-opening equity,
+                    capped at ₹2,000, with a 20% cash buffer. Profit has no fixed ceiling. Planned risk is not
                     a guarantee of realized loss.
                   </p>
                 </div>
@@ -1155,7 +1162,8 @@ export default function Research() {
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Requires one-minute option history with tick sizes. Uses the filtered
-                        execution rules, one lot with a tick-rounded price stop capped at ₹300 and a rising profit stop aiming for ₹900–₹1,500+ before charges. Labels and
+                        execution rules and one whole lot with its technical stop. Trades exceeding the equity-based
+                        all-in risk budget are skipped. The rising profit stop has no hard profit cap. Labels and
                         replay exits share the selected 5, 10 or 15-minute limit. Training balances
                         sessions and reduces the weight of overlapping trades.
                       </p>
@@ -1187,8 +1195,10 @@ export default function Research() {
                       Uses 8/21-bar prior trend, 1–7 days to expiry, observed liquidity and
                       whole-lot affordability. One lot per entry, a 5-minute post-exit cooldown and a
                       15-minute maximum holding time. Three consecutive net losses stop new entries for the day.
-                      Requires one-minute option bars and contract tick sizes. Technical stop distance is capped
-                      at ₹300 per lot and rounded toward entry; profit protection starts at ₹300 gross and trails by ₹300 after ₹600; strong moves can run past ₹1,500 before charges.
+                      Requires one-minute option bars and contract tick sizes. Technical stops are rounded away
+                      from entry; entries that exceed the all-in risk budget are skipped. Profit protection starts
+                      at ₹300 gross. At ₹1,000 gross, protect ₹900; at ₹1,500, protect ₹1,200, then follow the peak
+                      by ₹300. Strong moves can continue beyond ₹1,500 before charges within the holding deadline.
                     </p>
                   )}
                 </div>

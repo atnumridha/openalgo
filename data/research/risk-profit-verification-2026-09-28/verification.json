@@ -1,0 +1,17 @@
+{
+  "backend": {
+    "passed": 4267,
+    "skipped": 16,
+    "xfailed": 1,
+    "warnings": 7
+  },
+  "frontend": {
+    "passed": 61,
+    "files": 4
+  },
+  "build": "TypeScript and Vite passed",
+  "ruff": "changed Python files passed",
+  "review": "verified broker floor restored after checkpoint crash; scoped re-review passed",
+  "ui": "isolated host only; synthetic ledger; no order routes",
+  "orders_submitted": 0
+}

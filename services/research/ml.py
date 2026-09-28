@@ -16,9 +16,9 @@ from services.research.costs import order_cost
 from services.research.replay import _filtered_contract, _slipped, _tick, research_capital
 from services.risk import BreachReason, PositionRisk, evaluate_position
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
-from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
-from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit
-from services.risk.profit_exit import profit_bar, profit_config
+from services.risk.budget import BudgetPolicy, evaluate_budget
+from services.risk.cash_exit import CASH_RECIPES, recipe_exit, recipe_policy
+from services.risk.profit_exit import PROFIT_RECIPES, profit_bar, profit_config
 
 MAX_SEED_GAP_DAYS = 7
 
@@ -166,7 +166,7 @@ def label_option_trade(
     technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
     if risk_recipe in CASH_RECIPES:
         try:
-            stop, target, _ = cash_exit(exact, technical, contract, runner=risk_recipe == CASH_RISK_RECIPE)
+            stop, target, _ = recipe_exit(exact, technical, contract, risk_recipe)
             stop, target = float(stop), float(target)
         except ValueError:
             return None
@@ -181,7 +181,7 @@ def label_option_trade(
     entry_fee = order_cost(Decimal(str(entry * units)), "BUY", costs)
     capital = research_capital({"capital": capital})
     policy = (
-        current_policy(capital)
+        recipe_policy(risk_recipe, capital)
         if risk_recipe in CASH_RECIPES
         else BudgetPolicy(capital=capital)
     )
@@ -209,14 +209,16 @@ def label_option_trade(
         capital,
         capital,
         planned,
-        proposed_gross_risk=distance * Decimal(str(units))
-        if risk_recipe in CASH_RECIPES
-        else None,
+        proposed_gross_risk=distance * Decimal(str(units)) if risk_recipe in CASH_RECIPES else None,
     )
     if not admission.allowed:
         return None
     risk = PositionRisk(entry_price=entry, quantity=units, stop_price=stop, target_price=target)
-    protection = profit_config(contract, costs) if risk_recipe == CASH_RISK_RECIPE else None
+    protection = (
+        profit_config(contract, costs, recipe=risk_recipe)
+        if risk_recipe in PROFIT_RECIPES
+        else None
+    )
     for bar in rows[start:]:
         at = bar["timestamp"]
         if at != expected or at[:10] != signal_at[:10] or at[11:16] > session_close:
@@ -356,7 +358,7 @@ def build_opportunities(
     meta = data["metadata"]
     capital = research_capital({"capital": capital})
     policy = (
-        current_policy(capital)
+        recipe_policy(risk_recipe, capital)
         if risk_recipe in CASH_RECIPES
         else BudgetPolicy(capital=capital)
     )

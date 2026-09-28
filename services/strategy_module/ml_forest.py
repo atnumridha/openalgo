@@ -289,7 +289,9 @@ def prepare(strategy, owner, api_key, mode):
         data["metadata"]["session_close"],
         pacing=config["pacing"],
     )
-    quote = scalping.quote_price(client, scored["symbol"], "NFO")
+    from services.strategy_module.executable_price import executable_quote
+    quote_leg = {"symbol": scored["symbol"], "exchange": "NFO", "quantity": scored["contract"]["lot_size"]}
+    quote = float(executable_quote(quote_leg, client.get_quotes(scored["symbol"], "NFO")).ask)
     snapshot, ledger = trading_risk_db.budget_state(
         owner, mode, datetime.now(IST).date().isoformat()
     )
@@ -302,7 +304,8 @@ def prepare(strategy, owner, api_key, mode):
         entry=quote,
         atr=scored["atr"],
         costs=config["costs"],
-        capital=25000,
+        capital=snapshot["capital"],
+        day_start_equity=snapshot.get("day_start_equity"),
         day=now.date().isoformat(),
         equity=snapshot["equity"],
         peak=snapshot["peak_equity"],

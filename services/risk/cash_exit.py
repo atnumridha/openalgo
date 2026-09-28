@@ -1,17 +1,29 @@
 """Versioned whole-lot price-stop geometry shared by research and managed entries."""
 
-from decimal import ROUND_CEILING, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 
-from services.risk.budget import current_policy
-from services.risk.profit_exit import PROFIT_RECIPE
+from services.risk.admission import ML_RISK_RECIPE
+from services.risk.budget import SHARED_POLICY_VERSIONS, policy_for_version
+from services.risk.profit_exit import PROFIT_RECIPE, PROFIT_RECIPES, TECHNICAL_PROFIT_RECIPE
 
 FIXED_CASH_RECIPE = "one-lot-cash300-3r-v1"
-CASH_RISK_RECIPE = PROFIT_RECIPE
-CASH_RECIPES = (FIXED_CASH_RECIPE, CASH_RISK_RECIPE)
+CASH_RISK_RECIPE = TECHNICAL_PROFIT_RECIPE
+CASH_RECIPES = (FIXED_CASH_RECIPE, *PROFIT_RECIPES)
+_RECIPE_POLICIES = {
+    FIXED_CASH_RECIPE: "shared-300-3r-v1",
+    PROFIT_RECIPE: "shared-300-3r-v1",
+    TECHNICAL_PROFIT_RECIPE: "equity-1pct-v2",
+}
 
 
-def cash_exit(entry, technical_distance, contract, *, runner=False):
-    """Cap monetary loss, rounding the absolute stop toward the entry tick."""
+def recipe_policy(recipe, capital=Decimal("25000")):
+    """An exit recipe retains its original risk contract for reproducible replay."""
+    if recipe not in _RECIPE_POLICIES:
+        raise ValueError("Unsupported risk recipe")
+    return policy_for_version(_RECIPE_POLICIES[recipe], Decimal(str(capital)))
+
+
+def _geometry(entry, technical_distance, contract, *, technical=False, runner=False):
     try:
         exact, distance = Decimal(str(entry)), Decimal(str(technical_distance))
         tick = Decimal(str(contract.get("tick_size", 0)))
@@ -24,17 +36,37 @@ def cash_exit(entry, technical_distance, contract, *, runner=False):
     units = lot * multiplier
     if lot != lot.to_integral_value() or units != units.to_integral_value() or exact % tick:
         raise ValueError("Cash stop requires tick-aligned entry and whole lot units")
-    distance = min(distance, current_policy().per_trade_limit / units)
-    stop = ((exact - distance) / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+    if not technical:
+        distance = min(distance, Decimal("300") / units)
+    rounding = ROUND_FLOOR if technical else ROUND_CEILING
+    stop = ((exact - distance) / tick).to_integral_value(rounding=rounding) * tick
     actual = exact - stop
     if actual < tick or stop <= 0:
         raise ValueError("Cash stop cannot be represented by at least one price tick")
     target = exact + 3 * actual
     if runner:
+        # This is a reporting milestone only; profit recipes have no hard target.
         target = ((exact + Decimal(900) / units) / tick).to_integral_value(
             rounding=ROUND_CEILING
         ) * tick
     return stop, target, actual * units
+
+
+def cash_exit(entry, technical_distance, contract, *, runner=False):
+    """Immutable legacy INR300 cap, rounded toward the entry tick."""
+    return _geometry(entry, technical_distance, contract, runner=runner)
+
+
+def recipe_exit(entry, technical_distance, contract, recipe):
+    if recipe not in CASH_RECIPES:
+        raise ValueError("Unsupported risk recipe")
+    return _geometry(
+        entry,
+        technical_distance,
+        contract,
+        technical=recipe == TECHNICAL_PROFIT_RECIPE,
+        runner=recipe in PROFIT_RECIPES,
+    )
 
 
 def pacing_config(cooldown_minutes=5):
@@ -44,13 +76,18 @@ def pacing_config(cooldown_minutes=5):
 
 
 def current_configuration(config):
-    """Reject partial/mixed version bindings; absent bindings retain legacy math."""
-    if config.get("risk_policy_version") not in (None, "two-bucket-v1", current_policy().version):
+    """Validate an explicit recipe/policy pair, including frozen legacy recipes.
+
+    The boolean identifies whole-lot recipe configurations, not live eligibility.
+    Qualification separately requires the current recipe and policy versions.
+    """
+    version, recipe = config.get("risk_policy_version"), config.get("risk_recipe")
+    if version not in (None, "two-bucket-v1", *SHARED_POLICY_VERSIONS):
         raise ValueError("Unsupported risk policy version")
-    current = config.get("risk_recipe") in CASH_RECIPES
-    if current or config.get("risk_policy_version") == current_policy().version:
-        if not current or config.get("risk_policy_version") != current_policy().version:
-            raise ValueError("Current cash recipe and risk policy must be bound together")
+    current = recipe in CASH_RECIPES
+    if current or version in SHARED_POLICY_VERSIONS:
+        if not current or version != _RECIPE_POLICIES[recipe]:
+            raise ValueError("Risk recipe and risk policy must be bound together")
         if type(config.get("max_hold_minutes")) is not int or config["max_hold_minutes"] not in (
             5,
             10,
@@ -63,4 +100,6 @@ def current_configuration(config):
         params = config.get("parameters", {})
         if Decimal(str(params.get("target_pct", 0))) != Decimal(str(params.get("stop_pct", 0))) * 3:
             raise ValueError("Current cash recipe requires exactly 3R before charges")
+    elif recipe not in (None, ML_RISK_RECIPE):
+        raise ValueError("Unsupported risk recipe and policy binding")
     return current

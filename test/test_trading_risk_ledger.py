@@ -134,12 +134,12 @@ def test_unrealized_profit_is_not_available_cash_for_another_entry():
     assert result.code == "cash_buffer"
 
 
-def test_current_policy_day_stop_is_durable_and_a_late_win_cannot_clear_it(tmp_path, monkeypatch):
+def test_shared_v1_policy_day_stop_is_durable_and_a_late_win_cannot_clear_it(tmp_path, monkeypatch):
     from sqlalchemy.orm import Session
 
-    from services.risk.budget import current_policy
+    from services.risk.budget import policy_for_version
 
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/current.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -177,10 +177,10 @@ def test_current_policy_day_stop_is_durable_and_a_late_win_cannot_clear_it(tmp_p
     engine.dispose()
 
 
-def test_current_policy_new_day_still_blocks_prior_exposure(tmp_path, monkeypatch):
-    from services.risk.budget import current_policy
+def test_shared_v1_policy_new_day_still_blocks_prior_exposure(tmp_path, monkeypatch):
+    from services.risk.budget import policy_for_version
 
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/current-exposure.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -190,10 +190,10 @@ def test_current_policy_new_day_still_blocks_prior_exposure(tmp_path, monkeypatc
     engine.dispose()
 
 
-def test_current_policy_concurrent_reservations_share_remaining_headroom(tmp_path, monkeypatch):
-    from services.risk.budget import current_policy
+def test_shared_v1_policy_concurrent_reservations_share_remaining_headroom(tmp_path, monkeypatch):
+    from services.risk.budget import policy_for_version
 
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/current-concurrency.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -216,7 +216,7 @@ def test_legacy_upgrade_keeps_unknown_close_order_unknown(tmp_path, monkeypatch)
     from sqlalchemy import inspect, text
     from sqlalchemy.orm import Session
 
-    from services.risk.budget import current_policy
+    from services.risk.budget import policy_for_version
 
     engine = create_db_engine(f"sqlite:///{tmp_path}/prior.db")
     with engine.begin() as db:
@@ -225,7 +225,7 @@ def test_legacy_upgrade_keeps_unknown_close_order_unknown(tmp_path, monkeypatch)
         db.execute(text("CREATE TABLE trading_risk_trade (scope VARCHAR(180), ref VARCHAR(64), session_day VARCHAR(10), bucket VARCHAR(10), status VARCHAR(12), planned_risk NUMERIC(20,4), premium NUMERIC(20,4), net_pnl NUMERIC(20,4), filled BOOLEAN, segment VARCHAR(12), broker VARCHAR(50), strategy_id INTEGER, run_id INTEGER, details JSON, evidence JSON, PRIMARY KEY(scope,ref))"))
         db.execute(text("INSERT INTO trading_risk_trade(scope,ref,session_day,bucket,status,planned_risk,premium,net_pnl,filled,segment,broker,strategy_id,details,evidence) VALUES ('prior|sandbox','old','2026-09-26','first','closed',100,1000,-100,1,'index','sandbox',1,'{}','{}')"))
     monkeypatch.setattr(ledger, "engine", engine)
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     ledger.init_db()
     ledger.init_db()
     assert {"closed_at", "close_sequence", "completion_day"} <= {c["name"] for c in inspect(engine).get_columns("trading_risk_trade")}
@@ -243,12 +243,12 @@ def test_legacy_upgrade_keeps_unknown_close_order_unknown(tmp_path, monkeypatch)
 
 
 def test_idle_legacy_upgrade_preserves_current_day_loss_and_peak(monkeypatch):
-    from services.risk.budget import current_policy
+    from services.risk.budget import policy_for_version
 
     assert reserve("old").allowed
     value("old", "-500", completed_at=completion())
     before = ledger.status("user", "sandbox", DAY)
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     ledger.ensure_current_policy("user", "sandbox", DAY)
     after = ledger.status("user", "sandbox", DAY)
     assert after["policy_version"] == "shared-300-3r-v1"
@@ -259,10 +259,10 @@ def test_idle_legacy_upgrade_preserves_current_day_loss_and_peak(monkeypatch):
     assert after["allocation_revision"] == before["allocation_revision"]
 
 
-def test_current_ledger_rejects_unfilled_closed_row_without_changing_streak(tmp_path, monkeypatch):
-    from services.risk.budget import current_policy
+def test_shared_v1_ledger_rejects_unfilled_closed_row_without_changing_streak(tmp_path, monkeypatch):
+    from services.risk.budget import policy_for_version
 
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/unfilled.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -276,10 +276,10 @@ def test_current_ledger_rejects_unfilled_closed_row_without_changing_streak(tmp_
     engine.dispose()
 
 
-def test_current_ledger_charges_overnight_close_to_completion_day(tmp_path, monkeypatch):
-    from services.risk.budget import current_policy
+def test_shared_v1_ledger_charges_overnight_close_to_completion_day(tmp_path, monkeypatch):
+    from services.risk.budget import policy_for_version
 
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/overnight.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -313,13 +313,13 @@ def test_current_ledger_charges_overnight_close_to_completion_day(tmp_path, monk
         ("05:30", "2026-09-27T05:30:00+05:30", "2026-09-27"),
     ],
 )
-def test_current_completion_uses_configured_session_reset(
+def test_shared_v1_completion_uses_configured_session_reset(
     tmp_path, monkeypatch, reset, observed, expected_day
 ):
-    from services.risk.budget import current_policy
+    from services.risk.budget import policy_for_version
 
     monkeypatch.setenv("SESSION_EXPIRY_TIME", reset)
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     engine = create_db_engine(f"sqlite:///{tmp_path}/reset.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()

@@ -789,3 +789,50 @@ def _normalise(ok: bool, response: Any) -> DispatchResult:
         response=payload,
         error=payload.get("message") or "Order rejected",
     )
+
+
+def modify_protective_stop(
+    *, api_key: str, order: dict[str, Any], connection_id: str
+) -> DispatchResult:
+    """Submit one same-order Kotak modification, never retry or follow analyzer mode.
+
+    The caller must commit its modification intent first and independently
+    verify the broker book afterward. An accepted reply is only an ack.
+    Kotak SL-M conversion supplies the tick-aligned protected limit price.
+    """
+    from services.strategy_module.live_protection import _active_kotak_pin
+
+    broker_id = str(order.get("orderid") or "")
+    if not broker_id or not _active_kotak_pin(api_key, connection_id):
+        return DispatchResult(ok=False, error="Pinned Kotak connection is unavailable")
+    token, broker, error = resolve_live_auth(api_key)
+    if error or broker != "kotak":
+        return DispatchResult(ok=False, error=error or "Protective modify requires Kotak")
+    from broker.kotak.api.order_api import modify_order
+
+    try:
+        payload, status = modify_order(dict(order), token)
+    except Exception:
+        logger.exception("Kotak protective modification outcome is uncertain for %s", broker_id)
+        return DispatchResult(
+            ok=False,
+            broker_order_id=broker_id,
+            unknown=True,
+            error="Protective modification outcome is unknown",
+        )
+    payload = payload if isinstance(payload, dict) else {}
+    if (
+        status == 200
+        and payload.get("status") == "success"
+        and str(payload.get("orderid") or "") == broker_id
+    ):
+        return DispatchResult(ok=True, broker_order_id=broker_id, response=payload)
+    # Even an HTTP 200 can carry a broker error, and a 500 can be a caught
+    # timeout after acceptance. The caller reconciles all dispatched attempts.
+    return DispatchResult(
+        ok=False,
+        broker_order_id=broker_id,
+        response=payload,
+        unknown=True,
+        error=payload.get("message") or "Modification is unverified",
+    )

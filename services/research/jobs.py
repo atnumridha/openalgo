@@ -35,6 +35,15 @@ from services.risk.budget import current_policy
 from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, current_configuration
 
 
+def _require_current_recipe(configuration):
+    if (
+        configuration.get("risk_recipe") != CASH_RISK_RECIPE
+        or configuration.get("risk_policy_version") != current_policy().version
+    ):
+        raise ValueError("Current research requires the current risk recipe and policy")
+    current_configuration(configuration)
+
+
 def implementation_hash():
     """Bind jobs to actual rules, fees and risk source, including uncommitted changes."""
     root = Path(__file__).resolve().parents[2]
@@ -60,6 +69,10 @@ def implementation_hash():
         "services/risk/models.py",
         "services/strategy_module/ml_forest.py",
         "services/strategy_module/engine.py",
+        "services/strategy_module/executable_price.py",
+        "services/strategy_module/live_protection.py",
+        "services/strategy_module/order_dispatch.py",
+        "services/strategy_module/stop_modifications.py",
         "services/strategy_module/recovery.py",
         "services/strategy_module/trading_budget.py",
         "services/strategy_module/scalping.py",
@@ -115,7 +128,7 @@ def optimize_experiment(
         capital=capital,
         cooldown_minutes=cooldown_minutes,
     )
-    base["risk_policy_version"] = current_policy().version
+    _require_current_recipe(base)
     base["implementation_hash"] = implementation_hash()
     results = []
     scored = []
@@ -352,7 +365,8 @@ def run_ml_experiment(data, configuration, *, check_cancel=None, include_schedul
     )
     if current_configuration(configuration):
         model["artifact"].update(
-            risk_recipe=configuration["risk_recipe"], risk_policy_version=current_policy().version
+            risk_recipe=configuration["risk_recipe"],
+            risk_policy_version=configuration["risk_policy_version"],
         )
         model["model_hash"] = digest(model["artifact"])
     replay_configuration = dict(configuration)
@@ -428,8 +442,8 @@ def run_ml_final_experiment(data, configuration, parent, *, check_cancel=None):
     artifact = ml_report.get("artifact")
     validate_artifact(artifact)
     if (
-        artifact.get("risk_recipe") != CASH_RISK_RECIPE
-        or artifact.get("risk_policy_version") != current_policy().version
+        artifact.get("risk_recipe") != configuration["risk_recipe"]
+        or artifact.get("risk_policy_version") != configuration["risk_policy_version"]
     ):
         raise ValueError("Frozen ML artifact belongs to an earlier exit or risk recipe")
     model_hash = digest(artifact)
@@ -626,7 +640,7 @@ def queue_run(store, owner, payload):
             or configuration["parameters"] != DEFAULTS
         ):
             raise ValueError(
-                "ML uses filtered minute execution with one-lot cash stops up to ₹300 and a rising profit stop with no hard target; use the default rule parameters"
+                "ML uses filtered minute execution with one-lot technical stops within the all-in equity risk limit and a rising profit stop with no hard target; use the default rule parameters"
             )
         configuration["ml_settings"] = validate_ml_settings(payload.get("ml_settings"))
         configuration["max_hold_minutes"] = configuration["ml_settings"]["max_hold_minutes"]
@@ -639,9 +653,8 @@ def queue_run(store, owner, payload):
                 "More development sessions are needed for training folds before the out-of-sample period"
             )
         configuration["ml_dependencies"] = dependency
-        configuration["risk_recipe"] = CASH_RISK_RECIPE
         configuration["run_kind"] = run_kind
-    configuration["risk_policy_version"] = current_policy().version
+    _require_current_recipe(configuration)
     configuration["implementation_hash"] = implementation_hash()
     return store.queue_run(
         owner,
@@ -687,6 +700,7 @@ def queue_optimized_best(store, owner, run_id):
         {"metadata": data["metadata"], "rows": data["rows"]}
     ):
         raise ValueError("The optimized dataset is unavailable or has changed")
+    _require_current_recipe(configuration)
     configuration = dict(configuration)
     configuration.pop("run_kind", None)
     configuration.pop("parameter_grid", None)
@@ -712,6 +726,7 @@ def queue_final(store, owner, run_id):
         or run["configuration"].get("implementation_hash") != implementation_hash()
     ):
         raise ValueError("The frozen version differs from the current rules or risk policy")
+    _require_current_recipe(run["configuration"])
     data = store.get_dataset(owner, run["dataset_id"])
     if data is None:
         raise ValueError("The frozen dataset is unavailable")
@@ -756,6 +771,7 @@ def process_job(store, token, run, *, should_stop=None):
             or run["configuration"].get("implementation_hash") != implementation_hash()
         ):
             raise ValueError("Rules or risk policy changed after this job was queued")
+        _require_current_recipe(run["configuration"])
         run_kind = (
             run["kind"]
             if run["kind"] == "final"

@@ -225,6 +225,10 @@ export interface RiskAccount {
   later_remaining: number | null
   policy_version?: string
   per_trade_limit?: number
+  daily_limit?: number
+  day_start_equity?: number
+  risk_reduced?: boolean
+  drawdown_pct?: number
   consecutive_losses?: number
   daily_stopped?: boolean
   daily_stop_reason?: string | null

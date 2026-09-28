@@ -7,7 +7,7 @@ import pytz
 
 from database import trading_risk_db as ledger
 from database.engine_factory import create_db_engine
-from services.risk.budget import current_policy, legacy_policy
+from services.risk.budget import current_policy, legacy_policy, policy_for_version
 from services.strategy_module import trading_budget as service
 
 NOW = pytz.timezone("Asia/Kolkata").localize(datetime(2026, 9, 26, 10))
@@ -64,8 +64,8 @@ def test_missing_costs_blocks_entry_and_explicit_costs_reserve_full_risk():
     assert ledger.status("u", "sandbox", "2026-09-26")["reserved_risk"] == D("940")
 
 
-def test_current_managed_admission_caps_gross_and_reserves_fees(monkeypatch):
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+def test_legacy_shared_admission_caps_gross_and_reserves_fees(monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("shared-300-3r-v1", D("25000")))
     ledger.set_costs("new", COSTS)
     over = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("301")})
     assert service.reserve_entry("new", STRATEGY, [LEG], "sandbox", "sandbox", over, NOW)[0].code == "per_trade_risk_exceeded"
@@ -399,22 +399,41 @@ def test_closed_loss_triggers_exit_for_other_active_run(monkeypatch):
 
 
 def test_profit_protection_binds_admitted_fees_and_missing_tick_refuses(monkeypatch):
-    from services.risk.profit_exit import PROFIT_RECIPE
-    from services.strategy_module.state import _new_leg_state
+    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPE
     from services.strategy_module.risk_adapter import evaluate_leg
+    from services.strategy_module.state import _new_leg_state
     monkeypatch.setattr(ledger, 'POLICY', current_policy())
     ledger.set_costs('profit', COSTS)
-    facts = SimpleNamespace(**{**vars(FACTS), 'entry_risk': D('300')})
-    leg = dict(LEG, scalp_context={'risk_recipe': PROFIT_RECIPE}, sl_pts=6, target_pts=18)
+    facts = SimpleNamespace(**{**vars(FACTS), 'entry_risk': D('210')})
+    leg = dict(LEG, scalp_context={'risk_recipe': TECHNICAL_PROFIT_RECIPE}, sl_pts=4.2, target_pts=12.6)
     decision, _ = service.reserve_entry('profit', STRATEGY, [leg], 'sandbox', 'sandbox', facts, NOW)
     assert not decision.allowed and decision.code == 'profit_protection_metadata_required'
     assert ledger.list_trades('profit', 'sandbox') == []
     leg['tick_size'] = .05
     decision, _ = service.reserve_entry('profit', STRATEGY, [leg], 'sandbox', 'sandbox', facts, NOW)
     assert decision.allowed
+    assert leg['profit_protection']['version'] == TECHNICAL_PROFIT_RECIPE
+    assert ledger.list_trades('profit', 'sandbox')[0]['planned_risk'] == D('250')
     ledger.set_costs('profit', COSTS | {'brokerage_per_order': 200})
     live = _new_leg_state(leg)
     live.update(entry_avg=100, status='open')
     decision = evaluate_leg(live, 106)
     assert decision.stop_price == 100.8  # admitted fees40 / units50, not the later400
     assert not decision.breached
+
+
+def test_equity_admission_caps_total_loss_after_binding_operator_fees(monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    ledger.set_costs("equity", COSTS)
+    # Equity 25,000 permits 250 total: gross 210 plus two 20-rupee fees.
+    over = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("210.01")})
+    refused, _ = service.reserve_entry("equity", STRATEGY, [LEG], "sandbox", "sandbox", over, NOW)
+    assert refused.code == "per_trade_risk_exceeded"
+    assert ledger.list_trades("equity", "sandbox") == []
+    fits = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("210")})
+    decision, ref = service.reserve_entry("equity", STRATEGY, [LEG], "sandbox", "sandbox", fits, NOW)
+    assert decision.allowed and ref == "p1"
+    snapshot = ledger.status("equity", "sandbox", "2026-09-26")
+    assert snapshot["per_trade_limit"] == D("250")
+    assert snapshot["reserved_risk"] == D("250")
+    assert snapshot["daily_remaining"] == D("500")

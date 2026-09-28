@@ -8,19 +8,23 @@ from services.risk.models import BreachReason, PositionRisk, is_price
 from services.risk.position import evaluate_position
 
 PROFIT_RECIPE = "one-lot-cash300-profit-trail-v2"
+TECHNICAL_PROFIT_RECIPE = "one-lot-technical-profit-trail-v3"
+PROFIT_RECIPES = (PROFIT_RECIPE, TECHNICAL_PROFIT_RECIPE)
 
 
-def profit_config(contract, costs):
+def profit_config(contract, costs, *, recipe=PROFIT_RECIPE):
+    if recipe not in PROFIT_RECIPES:
+        raise ValueError("Unsupported profit protection recipe")
     tick = decimal_value(contract.get("tick_size"), "tick_size")
     if not tick.is_finite() or tick <= 0:
         raise ValueError("Profit protection requires a positive price tick")
-    return {"version": PROFIT_RECIPE, "tick_size": str(tick), "costs": execution_economics(costs)}
+    return {"version": recipe, "tick_size": str(tick), "costs": execution_economics(costs)}
 
 
 def validate_profit_config(config):
-    if not isinstance(config, dict) or config.get("version") != PROFIT_RECIPE:
+    if not isinstance(config, dict) or config.get("version") not in PROFIT_RECIPES:
         raise ValueError("Unsupported profit protection recipe")
-    validated = profit_config(config, config.get("costs"))
+    validated = profit_config(config, config.get("costs"), recipe=config["version"])
     if set(config) != set(validated):
         raise ValueError("Unexpected profit protection settings")
     return validated
@@ -51,7 +55,7 @@ def _break_even(entry, quantity, peak, tick, costs):
 
 
 def evaluate_profit(risk, last_price, config):
-    """Ratchet after ₹300 gross; from ₹600 trail by ₹300. No hard target."""
+    """Ratchet after INR300 gross, trail from INR600; v3 locks INR900 at INR1000."""
     config = validate_profit_config(config)
     if not risk.is_long or not is_price(risk.entry_price) or not is_price(risk.quantity):
         raise ValueError("Profit protection requires a filled long option position")
@@ -69,6 +73,10 @@ def evaluate_profit(risk, last_price, config):
                 rounding=ROUND_CEILING
             ) * tick
             candidate = max(candidate, min(peak, trail))
+    if config["version"] == TECHNICAL_PROFIT_RECIPE and gross_peak >= 1000:
+        gross_floor = max(entry + Decimal(900) / units, peak - Decimal(300) / units)
+        milestone = (gross_floor / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+        candidate = max(candidate or entry, min(peak, milestone))
     old = risk.effective_stop
     stop = old if candidate is None else max(old or 0, float(candidate))
     decision = evaluate_position(

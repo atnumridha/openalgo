@@ -25,7 +25,10 @@ def test_scenarios_reuse_one_fit_per_hold_and_preserve_schedule(tmp_path, monkey
     from services.research.replay import validate_configuration
 
     data, signals = scheduled_data([True])
-    config = validate_configuration(data, "trend_breakout_filtered", {}, fees(), capital=25000)
+    config = validate_configuration(
+        data, "trend_breakout_filtered", {}, fees(), capital=25000,
+        policy_version="shared-300-3r-v1",
+    )
     calls = []
 
     def fit(data, configuration, **kwargs):

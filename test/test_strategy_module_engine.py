@@ -2371,7 +2371,7 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
                           'brokerage_per_order': 20, 'exchange_rate': 0, 'sebi_rate': 0, 'gst_rate': 0,
                           'stamp_buy_rate': 0, 'stt_sell_rate': 0, 'slippage_bps': 0})
     config = _config()
-    config['legs'][0].update(position='B', sl_pts=4, target_pts=12)
+    config['legs'][0].update(position='B', sl_pts=2, target_pts=6)
     sid = _make(config)
     calls = []
     def dispatch(**kwargs):
@@ -2379,7 +2379,7 @@ def test_configured_capital_profile_uses_real_ledger_at_dispatch(api_key, tmp_pa
         assert len(rows) == 1
         assert rows[0]['status'] == 'pending'
         assert rows[0]['run_id'] is not None
-        assert rows[0]['planned_risk'] == Decimal('340')
+        assert rows[0]['planned_risk'] == Decimal('190')
         calls.append(kwargs)
         return DispatchResult(ok=not unknown, unknown=unknown, broker_order_id=None if unknown else 'SB-managed', error='timeout' if unknown else None)
     try:

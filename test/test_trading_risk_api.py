@@ -36,15 +36,17 @@ def test_risk_settings_require_session_and_show_distinct_budgets(client):
     assert data["policy"]["daily_limit"] == 2000
 
 
-def test_current_api_reports_shared_policy_fields(client, monkeypatch):
+def test_current_api_reports_equity_policy_fields(client, monkeypatch):
     monkeypatch.setattr(ledger, "POLICY", current_policy())
     with client.session_transaction() as session:
         session["user"] = "new-owner"
     data = client.get("/strategy/api/risk").json["data"]
     account = data["accounts"]["sandbox"]
-    assert data["policy"]["version"] == "shared-300-3r-v1"
-    assert account["per_trade_limit"] == 300
-    assert account["daily_remaining"] == 2000
+    assert data["policy"]["version"] == "equity-1pct-v2"
+    assert account["per_trade_limit"] == 250
+    assert account["day_start_equity"] == 25000
+    assert account["daily_limit"] == 750
+    assert account["daily_remaining"] == 750
     assert account["consecutive_losses"] == 0
     assert account["daily_stopped"] is False
     assert account["first_remaining"] is None
@@ -58,9 +60,11 @@ def test_current_api_upgrades_idle_existing_account_without_changing_allocation(
         session["user"] = "owner"
     data = client.get("/strategy/api/risk").json["data"]
     after = data["accounts"]["sandbox"]
-    assert after["policy_version"] == "shared-300-3r-v1"
-    assert after["per_trade_limit"] == 300
-    assert after["daily_remaining"] == 2000
+    assert after["policy_version"] == "equity-1pct-v2"
+    assert after["per_trade_limit"] == 250
+    assert after["day_start_equity"] == 25000
+    assert after["daily_limit"] == 750
+    assert after["daily_remaining"] == 750
     assert after["capital"] == 25000
     assert after["allocation_revision"] == before["allocation_revision"]
 
@@ -97,7 +101,10 @@ def test_current_api_counts_overnight_loss_on_completion_day(client, monkeypatch
         session["user"] = "overnight-owner"
     account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
     assert account["daily_loss"] == 150
-    assert account["daily_remaining"] == 1850
+    assert account["day_start_equity"] == 25000
+    assert account["daily_limit"] == 750
+    assert account["daily_remaining"] == 600
+    assert account["per_trade_limit"] == 248.5
     assert account["consecutive_losses"] == 1
 
 
@@ -122,7 +129,10 @@ def test_current_api_uses_session_reset_for_completed_loss(client, monkeypatch, 
         session["user"] = "reset-owner"
     account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
     assert account["daily_loss"] == 150
-    assert account["daily_remaining"] == 1850
+    assert account["day_start_equity"] == 25000
+    assert account["daily_limit"] == 750
+    assert account["daily_remaining"] == 600
+    assert account["per_trade_limit"] == 248.5
     assert account["consecutive_losses"] == 1
 
 

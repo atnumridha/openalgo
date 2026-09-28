@@ -142,6 +142,8 @@ def run_study(inputs, output):
             loaded["research-costs.json"],
             seed=42,
             capital=25000,
+            # This named historical study retains its original cash/profit recipe.
+            policy_version="shared-300-3r-v1",
         )
         for identifier, data in datasets.items()
     }

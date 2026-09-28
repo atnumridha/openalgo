@@ -12,19 +12,19 @@ const profiles = [
     id: 'regime50200',
     title: 'EMA 50/200 + regime',
     description: '5-minute crossover filtered by prior-day trend and volatility.',
-    exits: 'ATM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ATM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'ema915',
     title: 'EMA 9/15',
     description: 'Nifty pullback with Bank Nifty trend confirmation.',
-    exits: 'ITM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ITM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'box15',
     title: 'Opening-box breakout',
     description: 'First 1-minute breakout of the completed 09:15–09:30 Nifty range.',
-    exits: 'ATM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ATM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
   },
 ] as const
 
@@ -124,11 +124,12 @@ export function ScalpingStrategies({
         })}
       </div>
       <p className="text-xs text-muted-foreground">
-        Current entries use one Nifty option lot and a price stop capped at ₹300 gross. At ₹300
-        gross profit, move the stop to estimated break-even after fees. From ₹600, trail ₹300
-        behind the best observed profit; aim for ₹900–₹1,500+ before charges, with no hard profit cap.
-        Stops only rise. The existing holding deadline still applies. Profit trailing is monitored
-        by OpenAlgo and requires a connected price feed; the Kotak-held fallback stop stays fixed. ₹20,000
+        Current entries use one Nifty option lot with its technical stop, and are skipped if planned
+        loss including costs exceeds 1% of equity or ₹300. At ₹300 gross profit, move the stop to
+        estimated break-even after fees. From ₹600, trail ₹300 behind executable profit. At ₹1,000,
+        protect ₹900; at ₹1,500, protect ₹1,200, then follow the peak by ₹300. These profit levels are before charges; there is no hard profit cap.
+        Stops only rise; the holding deadline still applies. Kotak stop advances require broker verification.
+        Charges and slippage can reduce realized profit. ₹20,000
         premium ceiling based on the ₹25,000 research assumption; your saved account budget may be
         lower. Enable the shared capital profile and costs in{' '}
         <Link className="underline" to="/strategy/research">

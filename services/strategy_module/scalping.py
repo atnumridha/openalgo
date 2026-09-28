@@ -14,7 +14,13 @@ from services.research.scalp_strategies import ema_reversal_signals, macd_featur
 from services.research.tradejini_scalping import tradejini_signals
 from services.risk import PositionRisk, evaluate_position
 from services.risk.budget import current_policy
-from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit, pacing_config
+from services.risk.cash_exit import (
+    CASH_RECIPES,
+    CASH_RISK_RECIPE,
+    TECHNICAL_PROFIT_RECIPE,
+    pacing_config,
+    recipe_exit,
+)
 
 IST = ZoneInfo("Asia/Kolkata")
 PROFILES = {
@@ -348,7 +354,7 @@ def require_option_liquidity(leg, context, client):
 
 
 def protect_leg(leg, context, client):
-    """New contexts use one-lot cash exits; recorded legacy contexts retain their recipe."""
+    """New contexts preserve technical stops; recorded contexts retain their recipe."""
     from services.strategy_module.symbol_resolver import _parse_expiry
 
     expiry = _parse_expiry(leg["expiry"])
@@ -362,12 +368,16 @@ def protect_leg(leg, context, client):
     quantity = int(leg["quantity"])
     if quantity <= 0 or quantity != int(leg["lot_size"]):
         raise ValueError("Scalping requires exactly one option lot")
-    premium = quote_price(client, leg["symbol"], leg["exchange"])
+    if context.get("risk_recipe") == TECHNICAL_PROFIT_RECIPE:
+        from services.strategy_module.executable_price import executable_quote
+        premium = float(executable_quote(leg, client.get_quotes(leg["symbol"], leg["exchange"])).ask)
+    else:
+        premium = quote_price(client, leg["symbol"], leg["exchange"])
     if premium * quantity > 20000:
         raise ValueError("One option lot exceeds the ₹20,000 premium ceiling")
     if profile in {"box15", "regime50200"}:
         require_option_liquidity(leg, context, client)
-    # Retain the former technical distance as the input to the new cash cap.
+    # Retain the profile technical distance; new recipes skip when its risk cannot fit.
     # Unversioned recorded contexts retain their legacy premium protection.
     step = Decimal("0.05")
     stop_points = (
@@ -382,7 +392,7 @@ def protect_leg(leg, context, client):
         raise ValueError("Option stop cannot be represented at the price tick")
     target_points = 20 if profile == "box15" else None
     if context.get("risk_recipe") in CASH_RECIPES:
-        stop, target, gross = cash_exit(premium, stop_points, leg, runner=context.get("risk_recipe") == CASH_RISK_RECIPE)
+        stop, target, gross = recipe_exit(premium, stop_points, leg, context["risk_recipe"])
         stop_points = Decimal(str(premium)) - stop
         target_points = float(target - Decimal(str(premium)))
         context["gross_planned_risk"] = float(gross)

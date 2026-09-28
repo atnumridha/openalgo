@@ -66,8 +66,8 @@ def test_nonfinite_and_nonpositive_risk_is_rejected():
         assert not decision([], value).allowed
 
 
-def test_current_policy_uses_one_shared_loss_pool_and_a_separate_gross_cap():
-    policy = budget.current_policy()
+def test_shared_v1_policy_uses_one_shared_loss_pool_and_a_separate_gross_cap():
+    policy = budget.policy_for_version("shared-300-3r-v1", D("25000"))
     trades = [
         budget.BudgetTrade("winner", "2026-09-26", "shared", "closed", D("280"), D("700"), True, 1, "2026-09-26"),
         budget.BudgetTrade("loser", "2026-09-26", "shared", "closed", D("280"), D("-1700"), True, 2, "2026-09-26"),
@@ -80,8 +80,8 @@ def test_current_policy_uses_one_shared_loss_pool_and_a_separate_gross_cap():
     assert budget.evaluate_budget(policy, [], "2026-09-26", D("25000"), D("25000"), D("340"), proposed_gross_risk=D("301")).code == "per_trade_risk_exceeded"
 
 
-def test_current_policy_latches_three_completed_losses_and_needs_order():
-    policy = budget.current_policy()
+def test_shared_v1_policy_latches_three_completed_losses_and_needs_order():
+    policy = budget.policy_for_version("shared-300-3r-v1", D("25000"))
     trades = [budget.BudgetTrade(str(i), "2026-09-26", "shared", "closed", D("100"), D(pnl), True, i, "2026-09-26") for i, pnl in enumerate(["-100", "0", "-100", "-100", "-100"], 1)]
     result = budget.evaluate_budget(policy, trades, "2026-09-26", D("24600"), D("25000"), D("100"), proposed_gross_risk=D("100"))
     assert result.code == "consecutive_losses_stop"
@@ -92,8 +92,8 @@ def test_current_policy_latches_three_completed_losses_and_needs_order():
     assert budget.evaluate_budget(policy, incomplete, "2026-09-26", D("24900"), D("25000"), D("100"), proposed_gross_risk=D("100")).code == "risk_evidence_missing"
 
 
-def test_current_daily_actual_loss_keeps_managed_exit_protection():
-    policy = budget.current_policy()
+def test_shared_v1_daily_actual_loss_keeps_managed_exit_protection():
+    policy = budget.policy_for_version("shared-300-3r-v1", D("25000"))
     open_trade = budget.BudgetTrade("open", "2026-09-26", "shared", "open", D("300"), D("-2000"), True)
     snapshot = budget.budget_snapshot(policy, [open_trade], "2026-09-26", D("23000"), D("25000"))
     assert snapshot["daily_remaining"] == 0
@@ -101,8 +101,8 @@ def test_current_daily_actual_loss_keeps_managed_exit_protection():
     assert not snapshot["daily_stopped"]
 
 
-def test_current_unfilled_closed_row_does_not_reset_completed_loss_streak():
-    policy = budget.current_policy()
+def test_shared_v1_unfilled_closed_row_does_not_reset_completed_loss_streak():
+    policy = budget.policy_for_version("shared-300-3r-v1", D("25000"))
     trades = [
         budget.BudgetTrade("loss-1", "2026-09-26", "shared", "closed", D("100"), D("-100"), True, 1, "2026-09-26"),
         budget.BudgetTrade("unfilled", "2026-09-26", "shared", "closed", D("100"), D("0"), False, 2, "2026-09-26"),
@@ -115,8 +115,8 @@ def test_current_unfilled_closed_row_does_not_reset_completed_loss_streak():
     assert result.metrics["daily_loss"] == D("300")
 
 
-def test_current_overnight_completion_spends_close_day_allowance_and_streak():
-    policy = budget.current_policy()
+def test_shared_v1_overnight_completion_spends_close_day_allowance_and_streak():
+    policy = budget.policy_for_version("shared-300-3r-v1", D("25000"))
     trades = [
         budget.BudgetTrade("overnight", "2026-09-25", "shared", "closed", D("300"), D("-700"), True, 1, "2026-09-26"),
         budget.BudgetTrade("today-1", "2026-09-26", "shared", "closed", D("300"), D("-600"), True, 2, "2026-09-26"),

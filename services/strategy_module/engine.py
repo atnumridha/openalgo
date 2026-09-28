@@ -486,8 +486,8 @@ def start_run(
             return StartResult(ok=False, error=loss_refusal)
 
         if scalp_context:
-            from services.risk.profit_exit import PROFIT_RECIPE, validate_profit_config
-            if scalp_context.get("risk_recipe") == PROFIT_RECIPE:
+            from services.risk.profit_exit import PROFIT_RECIPES, validate_profit_config
+            if scalp_context.get("risk_recipe") in PROFIT_RECIPES:
                 scalp_context["profit_protection"] = validate_profit_config(
                     resolved[0].get("profit_protection")
                 )
@@ -2693,6 +2693,29 @@ def _daily_loss_breached(
     )
 
 
+def _executable_tick_quote(run_id, run_row, user_id, symbol, exchange):
+    """Fetch outside the state lock; old recipes retain their recorded tick semantics."""
+    from services.flow_openalgo_client import FlowOpenAlgoClient
+    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPE
+    from services.strategy_module.executable_price import fetch_executable_quote
+
+    snapshot = state.get_run_state(run_id)
+    legs = [leg for leg in (snapshot or {}).get("legs", {}).values()
+            if leg.get("status") == "open" and leg.get("symbol") == symbol
+            and leg.get("exchange") == exchange
+            and (leg.get("profit_protection") or {}).get("version") == TECHNICAL_PROFIT_RECIPE]
+    if not legs:
+        return None
+    key = _api_key_for(user_id)
+    if not key:
+        raise ValueError("Executable quote authorization unavailable")
+    if str(run_row.mode) == "live":
+        from services.strategy_module.live_protection import _active_kotak_pin
+        if not _active_kotak_pin(key, run_row.broker_connection_id):
+            raise ValueError("The run's Kotak connection is unavailable")
+    return fetch_executable_quote(FlowOpenAlgoClient(key), legs[0], scope=(user_id, run_id))
+
+
 def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -> None:
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
@@ -2712,6 +2735,17 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     stop_reason: str | None = None
     events: list[tuple[str, str, dict]] = []
 
+    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPE
+    broker_trails = []
+    try:
+        executable = _executable_tick_quote(run_id, run_row, user_id, symbol, exchange)
+    except ValueError as exc:
+        _emit(strategy_id, user_id, "executable_quote_unavailable", str(exc), run_id=run_id, severity="critical")
+        # Untrusted prices cannot advance a profit floor. Existing protective
+        # ownership/cancel-reconcile handling remains responsible for the exit.
+        stop_run(run_id, user_id, reason="executable_quote_unavailable")
+        return
+
     # Read before the lock is taken, never inside it. This is the one input to
     # the tick evaluation that can reach the database, and only on a cache
     # miss; a query held under the run lock stalls the hub, and a greenlet
@@ -2726,7 +2760,16 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
             return
 
         for leg in state.legs_for_symbol(run, symbol, exchange):
-            decision = risk_adapter.evaluate_leg(leg, ltp)
+            requires_bid = (leg.get("profit_protection") or {}).get("version") == TECHNICAL_PROFIT_RECIPE
+            if requires_bid and executable is None:
+                continue
+            price = float(executable.bid) if requires_bid else ltp
+            decision = risk_adapter.evaluate_leg(leg, price)
+            if requires_bid:
+                leg["price_basis"] = "executable_bid"
+                leg["native_quote_at"] = executable.timestamp.isoformat()
+                if run_mode == "live" and leg.get("status") == "open" and not decision.breached:
+                    broker_trails.append(dict(leg))
             if decision.trail_armed:
                 events.append(
                     (
@@ -2884,3 +2927,12 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
 
     for leg_id, kind in leg_exits:
         _exit_legs(run_id, strategy, [leg_id], kind, run_mode, api_key, user_id)
+
+    if broker_trails:
+        from services.strategy_module.live_protection import ratchet_stop
+        for leg in broker_trails:
+            result = ratchet_stop(strategy, run_id, leg)
+            if result.status == "failed":
+                _emit(strategy_id, user_id, "broker_profit_stop_failed", result.error or "Broker profit protection could not be verified", run_id=run_id, severity="critical")
+                stop_run(run_id, user_id, reason="broker_profit_stop_failed")
+                break
