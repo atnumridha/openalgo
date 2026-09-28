@@ -420,6 +420,7 @@ def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any]
                 "lotsize": result.lotsize,
                 "instrumenttype": result.instrumenttype,
                 "tick_size": result.tick_size,
+                "contract_value": result.contract_value,
             }
         else:
             logger.warning(f"Option symbol not found in database: {option_symbol} on {exchange}")

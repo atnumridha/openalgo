@@ -135,6 +135,7 @@ class ResolvedLeg:
     segment: str | None = None
     lotsize: int | None = None
     tick_size: float | None = None
+    price_multiplier: float | None = 1.0
     strike: float | None = None
     expiry: str | None = None
     expiry_symbol: str | None = None
@@ -974,7 +975,7 @@ def _finish(
     order for zero or for a negative quantity.
     """
     lotsize = contract.get("lotsize")
-    if isinstance(lotsize, bool) or not isinstance(lotsize, int | float) or lotsize <= 0:
+    if (not _is_positive_number(lotsize) or not float(lotsize).is_integer()):
         return _fail_leg(
             "invalid_lotsize",
             f"The master contract gives {symbol} on {exchange} a lot size of {lotsize!r}, "
@@ -990,6 +991,22 @@ def _finish(
     lotsize = int(lotsize)
     lots = context.get("lots") or 1
     tick_size = contract.get("tick_size")
+    from services.risk.contract_units import SUPPORTED_MCX_ROOTS, price_multiplier
+    try:
+        if exchange == "MCX" and context.get("underlying") not in SUPPORTED_MCX_ROOTS:
+            # Contract discovery still supports other commodities. Admission
+            # refuses them until their monetary units have been verified.
+            multiplier = None
+        else:
+            if exchange == "MCX" and contract.get("contract_value") is None:
+                raise ValueError("MCX contract value is missing; refresh the Kotak master contract")
+            multiplier = price_multiplier({
+                "symbol": symbol, "exchange": exchange, "lot_size": lotsize,
+                "price_multiplier": contract.get("contract_value") if exchange == "MCX" else None,
+            })
+    except ValueError as exc:
+        return _fail_leg("contract_metadata_required", str(exc), symbol=symbol,
+                         exchange=exchange, **context)
 
     return ResolvedLeg(
         ok=True,
@@ -997,6 +1014,7 @@ def _finish(
         exchange=exchange,
         lotsize=lotsize,
         tick_size=float(tick_size) if _is_positive_number(tick_size) else None,
+        price_multiplier=multiplier,
         strike=strike,
         expiry=expiry,
         expiry_symbol=expiry_symbol,

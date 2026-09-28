@@ -169,6 +169,8 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "exchange": leg["exchange"],
         "lots": leg.get("lots", 1),
         "qty": leg["quantity"],
+        "price_multiplier": leg.get("price_multiplier"),
+        "lot_size": leg.get("lot_size"),
         # Order plumbing
         "position_ref": leg.get("position_ref"),
         "entry_order_id": None,
@@ -654,6 +656,10 @@ def add_leg(
                     "position": previous.get("position"),
                     "entry_avg": previous.get("entry_avg"),
                     "qty": previous.get("qty"),
+                    "symbol": previous.get("symbol"),
+                    "exchange": previous.get("exchange"),
+                    "price_multiplier": previous.get("price_multiplier"),
+                    "lot_size": previous.get("lot_size"),
                 }
         if previous is not None:
             # A signal leg is re-entered on the same id after it has been

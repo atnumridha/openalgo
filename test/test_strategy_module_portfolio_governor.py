@@ -758,6 +758,9 @@ def test_mini_commodity_options_select_the_tighter_risk_profile(monkeypatch, und
                 symbol=f"{underlying}30SEP261000CE",
                 exchange="MCX",
                 underlying=underlying,
+                lot_size=5 if underlying == "SILVERM" else 250,
+                quantity=5 if underlying == "SILVERM" else 250,
+                price_multiplier=1,
             )
         ],
         "api-key",
@@ -1988,3 +1991,26 @@ def test_live_authorization_is_rechecked_after_waiting_for_user_admission(monkey
     assert decision.message == "Live authorization expired while waiting"
     assert admission is None
     assert builds == ["built"]
+
+
+@pytest.mark.parametrize('root,lot,multiplier', [('GOLDM',100,.1),('CRUDEOILM',10,1),('SILVERM',5,1),('NATGASMINI',250,1)])
+def test_mcx_admission_values_use_quote_units_and_keep_broker_quantity(monkeypatch, root, lot, multiplier):
+    _broker_facts(monkeypatch, funds=(True, {'data': {'availablecash': '100000'}}, 200),
+                  positions=(True, {'data': []}, 200))
+    leg = _option_leg(symbol=f'{root}30SEP261000CE', exchange='MCX', underlying=root,
+                      lot_size=lot, quantity=lot, price_multiplier=multiplier)
+    from services.strategy_module import order_dispatch
+    monkeypatch.setattr(order_dispatch, '_limit_price_from_quote', lambda symbol, exchange, action, price: price)
+    result = build_entry_facts('governor-user', _strategy(), [leg], 'api-key', 'live')
+    money_qty = Decimal(str(lot)) * Decimal(str(multiplier))
+    assert result.estimated_debit == Decimal('100') * money_qty
+    assert result.entry_risk == Decimal('10') * money_qty
+    assert result.entry_option_lot_risk == Decimal('10') * money_qty
+    assert result.reservation_components[0].quantity_delta == lot
+
+
+def test_low_reward_risk_names_the_actual_ratio_and_requirement():
+    result=evaluate_entry(facts(minimum_reward_risk=Decimal("1.12601626016")),DEFAULT_POLICY,NOW)
+    assert not result.allowed and result.code == "risk_missing"
+    assert "1.13R" in result.message and "1.50R" in result.message
+    assert result.metrics["required_reward_risk"] == Decimal("1.5")

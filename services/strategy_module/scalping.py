@@ -14,13 +14,13 @@ from services.research.scalp_strategies import ema_reversal_signals, macd_featur
 from services.research.tradejini_scalping import tradejini_signals
 from services.risk import PositionRisk, evaluate_position
 from services.risk.budget import current_policy
-from services.risk.option_structure import STRUCTURE_RECIPE, structure_plan
 from services.risk.cash_exit import (
     CASH_RECIPES,
     TECHNICAL_PROFIT_RECIPES,
     pacing_config,
     recipe_exit,
 )
+from services.risk.option_structure import STRUCTURE_RECIPE, structure_plan
 
 IST = ZoneInfo("Asia/Kolkata")
 PROFILES = {
@@ -281,6 +281,14 @@ def prepare(strategy, owner, api_key, mode):
     now = datetime.now(IST)
     audit = {"evaluated_at": now.isoformat(), "profile": strategy["scalp_profile"], "mode": mode}
     try:
+        from services.strategy_module.portfolio_governor import EntryFacts, entry_window_refusal
+
+        gate = entry_window_refusal(
+            EntryFacts(mode=mode, has_option_entry=True, entry_exchanges=("NFO",)), now
+        )
+        if gate is not None:
+            audit["entry_gate"] = gate.code
+            raise WaitingForSignal(gate.message)
         signal = latest_signal(strategy["scalp_profile"], client, now, audit=audit)
         audit.update(stage="signal_found", reason="Fresh signal found; contract, costs, risk and execution checks still required")
     except WaitingForSignal as exc:

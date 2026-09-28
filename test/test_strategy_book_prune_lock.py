@@ -138,3 +138,24 @@ def test_startup_initialisation_leaves_no_open_transaction():
         "init_strategy_book_db left the write lock held, which is what blocked "
         "strategy recovery at startup"
     )
+
+
+@pytest.mark.parametrize('symbol,factor,expected', [
+    ('GOLDM05OCT261000CE', .1, 120),
+    ('GOLDM05OCT261000CE', 10, 12000),
+    ('GOLD05OCT261000CE', None, 1200),
+])
+def test_mcx_realized_book_pnl_keeps_physical_quantity(monkeypatch, symbol, factor, expected):
+    from types import SimpleNamespace
+    from utils import contract_value
+    monkeypatch.setattr(contract_value,'get_symbol_info',lambda *a:SimpleNamespace(contract_value=factor))
+    book.record_order_tag('mcx-test-entry','unit-user','mcx-unit-test',symbol,'MCX','MIS')
+    book.record_order_tag('mcx-test-exit','unit-user','mcx-unit-test',symbol,'MCX','MIS')
+    book.apply_fill('mcx-test-entry',100,100,'BUY')
+    book.apply_fill('mcx-test-exit',40,130,'SELL')
+    row=book.db_session.query(book.StrategyPosition).filter_by(strategy='mcx-unit-test').one()
+    assert row.quantity==60
+    assert row.realized_pnl==pytest.approx(expected)
+    book.db_session.query(book.StrategyPosition).filter_by(strategy='mcx-unit-test').delete()
+    book.db_session.query(book.StrategyOrderTag).filter_by(strategy='mcx-unit-test').delete()
+    book.db_session.commit()

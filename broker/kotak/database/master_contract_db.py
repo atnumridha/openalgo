@@ -17,6 +17,7 @@ from database.auth_db import get_auth_token
 from database.engine_factory import create_db_engine
 from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
+from services.risk.contract_units import SUPPORTED_MCX_ROOTS, mcx_contract_multiplier
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -45,6 +46,7 @@ class SymToken(Base):
     lotsize = Column(Integer)
     instrumenttype = Column(String)
     tick_size = Column(Float)
+    contract_value = Column(Float)
 
     # Define a composite index on symbol and exchange columns
     __table_args__ = (Index("idx_symbol_exchange", "symbol", "exchange"),)
@@ -498,6 +500,13 @@ def process_kotak_mcx_csv(path):
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
+    # Broker quantities stay in physical units. Prices can use a different
+    # quotation unit (GOLDM: rupees per 10 grams, quantity in grams).
+    # Unknown contracts remain unverified; never assume a monetary factor.
+    tokensymbols["contract_value"] = [
+        mcx_contract_multiplier(name, lot) if name in SUPPORTED_MCX_ROOTS else None
+        for name, lot in zip(tokensymbols["name"], tokensymbols["lotsize"], strict=True)
+    ]
     tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]

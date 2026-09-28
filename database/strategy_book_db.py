@@ -30,7 +30,6 @@ traded price and would be stale the moment it was written; it is computed at
 read time in `services/strategy_pnl_service.py`.
 """
 
-import os
 import threading
 from datetime import datetime, timedelta
 
@@ -473,7 +472,11 @@ def _apply_fill_locked(
         else:
             closing = min(abs(signed), abs(qty))
             direction = 1.0 if qty > 0 else -1.0
-            realized = closing * (price - avg) * direction
+            from utils.contract_value import accounting_multiplier
+
+            realized = closing * (price - avg) * direction * accounting_multiplier(
+                leg.symbol, leg.exchange
+            )
             leg.realized_pnl = float(leg.realized_pnl or 0) + realized
             leg.today_realized_pnl = float(leg.today_realized_pnl or 0) + realized
             remaining = abs(signed) - closing

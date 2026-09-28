@@ -116,7 +116,7 @@ def attach_confirmed_entry(run_id: int, leg_id: int | str) -> dict | None:
         symbol=leg["symbol"], exchange=leg["exchange"],
         run_open_positions=1, mode="sandbox",
         side="BUY" if leg.get("position") == "B" else "SELL",
-        entry_price=position.entry_price, quantity=int(position.quantity),
+        entry_price=position.entry_price, quantity=int(leg["qty"]),
         planned_stop_risk=planned, overall_stop_remaining=overall_remaining,
         daily_allowance_remaining=daily_remaining,
         baseline_risk=asdict(risk_adapter.run_to_aggregate_risk(snapshot, store.strategy_to_dict(strategy))),

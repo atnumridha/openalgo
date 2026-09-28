@@ -188,6 +188,12 @@ describe('foldStrategyFrame', () => {
     expect(leg.highest_price).toBeNull()
   })
 
+  it('preserves the MCX price multiplier for stop P&L displayed from live frames', () => {
+    const commodity = wireLeg({ leg_id: 1, exchange: 'MCX', price_multiplier: 5 })
+    const folded = foldStrategyFrame(null, stateFrame('snapshot', [commodity]))
+    expect(folded.leg_state['1'].price_multiplier).toBe(5)
+  })
+
   it('carries the run forward when a frame omits it', () => {
     const snapshot = foldStrategyFrame(null, stateFrame('snapshot', [openLeg]))
     const delta = foldStrategyFrame(snapshot, stateFrame('delta', [openLeg], { run_id: null }))

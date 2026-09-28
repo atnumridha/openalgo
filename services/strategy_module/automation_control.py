@@ -85,8 +85,8 @@ def requires_signal_start(strategy) -> bool:
 def signal_start_message(strategy) -> str:
     if strategy.underlying_exchange == "MCX":
         return (
-            "Signal monitoring is active, but MCX entries remain blocked: "
-            "contract value conversion is not yet supported by the capital risk checks."
+            "Waiting for a valid MCX signal. Entry requires verified contract units, "
+            "fresh quotes and the configured risk limits."
         )
     return "Waiting for a valid signal"
 

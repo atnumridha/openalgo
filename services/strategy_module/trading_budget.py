@@ -16,7 +16,8 @@ from services.research.costs import (
     validate_cost_schedule,
 )
 from services.risk.admission import planned_entry_risk
-from services.risk.budget import BudgetDecision, EQUITY_POLICY_VERSION
+from services.risk.budget import EQUITY_POLICY_VERSION, BudgetDecision
+from services.risk.contract_units import price_multiplier
 from services.strategy_module import session
 from utils.logging import get_logger
 
@@ -73,8 +74,8 @@ def refusal_message(decision, legs):
     if decision.code == "contract_metadata_required":
         if len(legs) == 1 and legs[0].get("exchange") == "MCX" and legs[0].get("price_multiplier") is None:
             return (
-                "MCX entry blocked: MCX contract value conversion is not yet supported "
-                "by the capital risk checks. Signal monitoring can run, but no trade will be placed."
+                "MCX entry blocked: verified MCX contract value conversion is missing "
+                "or inconsistent. Refresh the Kotak master contract data."
             )
         return "Trade blocked: verified contract lot size, quantity and value conversion are required. Refresh contract data and retry."
     if decision.code == "unsupported_contract_multiplier":
@@ -108,13 +109,9 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
             return _refusal("whole_lots_required")
         # NFO/BFO quantities are exchange units. MCX monetary units must be
         # explicitly verified by the resolver; this build must not guess them.
-        multiplier = decimal_value(
-            leg.get("price_multiplier", 1 if exchange in {"NFO", "BFO"} else None),
-            "price_multiplier",
-            minimum=1,
-        )
-        if multiplier != 1:
-            return _refusal("unsupported_contract_multiplier")
+        if exchange == "MCX" and leg.get("price_multiplier") is None:
+            return _refusal("contract_metadata_required")
+        multiplier = Decimal(str(price_multiplier(leg)))
     except ValueError:
         return _refusal("contract_metadata_required")
     costs = ledger.get_costs(user, exchange)
@@ -251,6 +248,8 @@ def _sync_trade(row, order_snapshot=None):
         return
     buy_qty = sell_qty = buy_value = sell_value = fees = ZERO
     costs = row["details"]["costs"]
+    multiplier = Decimal(str(price_multiplier({**row["details"],
+        "price_multiplier": row["details"].get("multiplier")})))
     working = False
     for order in orders:
         status = str(order.get("status") or "").lower()
@@ -262,7 +261,7 @@ def _sync_trade(row, order_snapshot=None):
         if qty == 0:
             continue
         price = decimal_value(order.get("avg_fill_price"), "filled price", minimum="0.000001")
-        value = price * qty
+        value = price * qty * multiplier
         action = str(order.get("action") or "").upper()
         fees += order_cost(value, action, costs)
         if action == "BUY":
@@ -295,7 +294,7 @@ def _sync_trade(row, order_snapshot=None):
         if leg is None:
             raise ValueError("Filled exposure is missing from managed state")
         mark = decimal_value(
-            leg.get("ltp") or leg.get("entry_avg") or buy_value / buy_qty,
+            leg.get("ltp") or leg.get("entry_avg") or buy_value / (buy_qty * multiplier),
             "mark",
             minimum="0.000001",
         )
@@ -311,14 +310,14 @@ def _sync_trade(row, order_snapshot=None):
             o = working_sells[0]
             prior = Decimal(str(o.get("filled_qty") or 0)) * Decimal(
                 str(o.get("avg_fill_price") or 0)
-            )
-            closing_cost = order_cost(prior + mark * remaining, "SELL", costs) - (
+            ) * multiplier
+            closing_cost = order_cost(prior + mark * remaining * multiplier, "SELL", costs) - (
                 order_cost(prior, "SELL", costs) if prior else ZERO
             )
         else:
-            closing_cost = order_cost(mark * remaining, "SELL", costs)
-        closing_cost += mark * remaining * Decimal(str(costs["slippage_bps"])) / Decimal("10000")
-    net = sell_value + mark * remaining - buy_value - fees - closing_cost
+            closing_cost = order_cost(mark * remaining * multiplier, "SELL", costs)
+        closing_cost += mark * remaining * multiplier * Decimal(str(costs["slippage_bps"])) / Decimal("10000")
+    net = sell_value + mark * remaining * multiplier - buy_value - fees - closing_cost
     status = "open" if remaining or working else "closed"
     cash_flow = sell_value - buy_value - fees
     working_buy = any(

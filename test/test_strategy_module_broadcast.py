@@ -310,6 +310,7 @@ FIGURE_KEYS = {
 }
 
 LEG_KEYS = {
+    "price_multiplier",
     "leg_id",
     "symbol",
     "exchange",

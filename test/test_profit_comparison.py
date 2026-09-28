@@ -288,3 +288,19 @@ def test_entry_records_local_confirmation_time_provenance():
     state = _started()
     assert state["entry_timestamp_source"] == "local_confirmation"
     assert summarize_comparison(state)["entry_timestamp_source"] == "local_confirmation"
+
+
+def test_goldm_shadow_partial_fill_uses_physical_depth_and_monetary_pnl():
+    symbol='GOLDM05OCT261000CE'
+    state=_started(symbol=symbol, exchange='MCX', quantity=100, baseline_leg_state={
+        'leg_id':1,'symbol':symbol,'exchange':'MCX','price_multiplier':.1,'lot_size':100,
+        'position':'B','entry_avg':100.,'qty':100,'sl_pts':15,'target_pts':30},
+        daily_allowance_remaining=40)
+    _observe(state,10,106,symbol=symbol,exchange='MCX')
+    _observe(state,20,104,symbol=symbol,exchange='MCX',bid=103.5,ask=104,bid_qty=40,
+             ask_qty=100,quote_at=START+timedelta(seconds=20))
+    early=state['profiles']['early']
+    assert early['peak_profit']==60
+    assert early['remaining_qty']==60
+    assert early['filled_qty']==40
+    assert early['simulated_realized_pnl']==14

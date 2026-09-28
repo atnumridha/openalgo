@@ -327,3 +327,29 @@ def test_deadline_monitor_cancels_expired_structure_entry_remainder(saved_scalp,
     scalping.monitor_deadlines()
     store.db_session.remove()
     assert store.get_run(run_id).stop_requested_reason == "scheduler"
+
+
+def test_prepare_reports_closed_entry_window_before_waiting_for_signal(monkeypatch):
+    from datetime import datetime as RealDatetime
+    from zoneinfo import ZoneInfo
+    from database import trading_risk_db, market_calendar_db, strategy_module_db
+    from services import flow_openalgo_client
+    from types import SimpleNamespace
+    import pytest
+    now=RealDatetime(2026,9,28,14,53,tzinfo=ZoneInfo('Asia/Kolkata'))
+    class Clock:
+        @staticmethod
+        def now(_tz): return now
+    monkeypatch.setattr(scalping,'datetime',Clock)
+    monkeypatch.setattr(scalping,'require_origin',lambda *a: None)
+    monkeypatch.setattr(trading_risk_db,'policy_enabled',lambda _:True)
+    monkeypatch.setattr(flow_openalgo_client,'FlowOpenAlgoClient',lambda _:SimpleNamespace())
+    monkeypatch.setattr(market_calendar_db,'get_effective_session_window',lambda *a:{
+        'start_ms':int(now.replace(hour=9,minute=15).timestamp()*1000),
+        'end_ms':int(now.replace(hour=15,minute=40).timestamp()*1000)})
+    events=[]
+    monkeypatch.setattr(strategy_module_db,'record_event',lambda *a,**kw:events.append(kw['payload']))
+    monkeypatch.setattr(scalping,'latest_signal',lambda *a,**kw:pytest.fail('Must report cutoff before fetching signals'))
+    with pytest.raises(scalping.WaitingForSignal,match='14:45 IST'):
+        scalping.prepare({'id':19,'scalp_profile':'bollinger','broker_connection_id':'fixture'},'owner','key','live')
+    assert events[0]['entry_gate']=='option_window_closed'

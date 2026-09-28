@@ -331,6 +331,7 @@ def _leg_payload(leg: dict[str, Any]) -> dict[str, Any]:
         "mtm": _num0(leg.get("mtm")),
         "realized_pnl": _num0(leg.get("realized_pnl")),
         "effective_sl": _num(leg.get("effective_sl")),
+        "price_multiplier": _num(leg.get("price_multiplier")),
         "effective_target": _num(leg.get("effective_target")),
         "trail_active": bool(leg.get("trail_active", False)),
         # Derived rather than stored, so it cannot disagree with the price

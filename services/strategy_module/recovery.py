@@ -64,6 +64,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database import strategy_module_db as store
+from services.risk.contract_units import price_multiplier
 from services.strategy_module import state
 from services.strategy_module.lifecycle_events import record_and_notify
 from utils.db_sessions import remove_all_scoped_sessions
@@ -1213,7 +1214,7 @@ def _rebuild_referenced_position(
             last_exit_avg = exit_price or last_exit_avg
             if entry_avg > 0.0 and exit_price is not None:
                 sign = 1.0 if leg.get("position") == "B" else -1.0
-                realized += (exit_price - entry_avg) * applied * sign
+                realized += (exit_price - entry_avg) * applied * sign * price_multiplier(leg)
             else:
                 pnl_coverage_complete = False
 
@@ -1331,6 +1332,10 @@ def _as_superseded(leg: dict[str, Any]) -> dict[str, Any]:
         "position": leg.get("position"),
         "entry_avg": leg.get("entry_avg"),
         "qty": leg.get("qty"),
+        "symbol": leg.get("symbol"),
+        "exchange": leg.get("exchange"),
+        "price_multiplier": leg.get("price_multiplier"),
+        "lot_size": leg.get("lot_size"),
     }
 
 
@@ -1371,6 +1376,8 @@ def _rebuild_legacy_leg(
 
     if not symbol or not exchange:
         raise ValueError(f"Leg {leg_id} has no instrument to recover")
+
+    multiplier = price_multiplier({**cp_leg, "symbol": symbol, "exchange": exchange})
 
     # The side comes from the action that opened the leg, never from the
     # configuration: an ATM offset resolved again names a different strike, and
@@ -1463,7 +1470,7 @@ def _rebuild_legacy_leg(
     realized = _float(cp_leg.get("realized_pnl"), 0.0) or 0.0
     if exit_applied and not realized and entry_avg and exit_avg is not None:
         sign = 1.0 if position == "B" else -1.0
-        realized = (float(exit_avg) - float(entry_avg)) * applied_exit_qty * sign
+        realized = (float(exit_avg) - float(entry_avg)) * applied_exit_qty * sign * multiplier
 
     sl_pts, target_pts, trail_x, trail_y, lots = _risk_params(cp_leg, config_leg)
 
@@ -1498,6 +1505,8 @@ def _rebuild_legacy_leg(
         "position": position,
         "symbol": symbol,
         "exchange": exchange,
+        "price_multiplier": multiplier,
+        "lot_size": cp_leg.get("lot_size"),
         "lots": lots,
         "qty": qty,
         # Order plumbing

@@ -7,6 +7,8 @@ shared aggregate risk core alone decides stops, targets and profit floors.
 
 from __future__ import annotations
 
+from services.risk.contract_units import price_multiplier
+
 from datetime import UTC, datetime
 from math import isfinite
 from typing import Any
@@ -17,7 +19,7 @@ from services.strategy_module import risk_adapter
 
 _LEG_FIELDS = frozenset(
     {
-        "leg_id",
+        "leg_id", "symbol", "exchange", "price_multiplier", "lot_size",
         "position",
         "entry_avg",
         "qty",
@@ -136,7 +138,7 @@ def start_comparison(
     leg_risk = risk_adapter.leg_to_position_risk(leg_state)
     if (
         leg_risk.entry_price != entry
-        or int(leg_risk.quantity) != quantity
+        or leg_state.get("qty") != quantity
         or (leg_risk.is_long != (side == "BUY"))
     ):
         raise ValueError("baseline leg must match the admitted entry")
@@ -308,12 +310,13 @@ def observe_comparison(
     }
     direction = 1 if state["side"] == "BUY" else -1
     entry = float(state["entry_price"])
+    multiplier = price_multiplier(state["baseline_leg_state"])
     for name, profile in state["profiles"].items():
         if profile["status"] in {"closed", "trigger_only", "cutoff"}:
             continue
         realized = float(profile["simulated_realized_pnl"] or 0.0)
         remaining = int(profile["remaining_qty"])
-        mark = realized + direction * (price - entry) * remaining
+        mark = realized + direction * (price - entry) * remaining * multiplier
         previous_peak = float(profile["peak_profit"])
         profile["peak_profit"] = max(previous_peak, mark)
         profile["trough_pnl"] = min(float(profile["trough_pnl"]), mark)
@@ -362,7 +365,7 @@ def observe_comparison(
         profile["filled_qty"] += fill_qty
         profile["remaining_qty"] -= fill_qty
         profile["simulated_realized_pnl"] = (
-            realized + direction * (execution_price - entry) * fill_qty
+            realized + direction * (execution_price - entry) * fill_qty * multiplier
         )
         profile["fill_events"].append(
             {

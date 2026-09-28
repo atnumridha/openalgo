@@ -64,6 +64,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.engine_factory import create_db_engine
+from services.risk.contract_units import price_multiplier
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1242,14 +1243,20 @@ def list_strategies(user_id: str, status: str | None = None, q: str | None = Non
         if q:
             query = query.filter(SmStrategy.name.ilike(f"%{q}%"))
         rows = query.order_by(SmStrategy.created_at.desc()).all()
+        current_ids = [strategy.current_run_id for strategy, _ in rows if strategy.current_run_id]
+        current_modes = dict(db_session.query(SmStrategyRun.id, SmStrategyRun.mode).filter(
+            SmStrategyRun.id.in_(current_ids)
+        ).all()) if current_ids else {}
         listed = []
         for strategy, last_run in rows:
             data = strategy_to_dict(strategy, include_legs=False)
+            data["current_run_mode"] = current_modes.get(strategy.current_run_id)
             data["last_finalized_run"] = (
                 None
                 if last_run is None
                 else {
                     "id": last_run.id,
+                    "mode": last_run.mode,
                     "pnl_realized": _num(last_run.pnl_realized),
                     "stopped_at": _iso(last_run.stopped_at),
                 }
@@ -2113,6 +2120,7 @@ class _PnlFillFact:
     action: str
     quantity: int
     price: float | None
+    multiplier: float = 1.0
 
 
 def _pnl_fill_fact(order: SmStrategyOrder) -> _PnlFillFact | None:
@@ -2137,6 +2145,7 @@ def _pnl_fill_fact(order: SmStrategyOrder) -> _PnlFillFact | None:
         action=(order.action or "").upper(),
         quantity=quantity,
         price=raw_price if raw_price > 0 else None,
+        multiplier=price_multiplier({"symbol": order.symbol, "exchange": order.exchange}),
     )
 
 
@@ -2169,6 +2178,7 @@ def _fold_owner_pnl(facts: list[_PnlFillFact], *, referenced: bool) -> tuple[flo
                     "action": fact.action,
                     "price": fact.price,
                     "remaining": fact.quantity,
+                    "multiplier": fact.multiplier,
                 }
             )
             continue
@@ -2186,11 +2196,11 @@ def _fold_owner_pnl(facts: list[_PnlFillFact], *, referenced: bool) -> tuple[flo
         matched = 0
         for lot in remaining_lots:
             lot_exit = "SELL" if lot["action"] == "BUY" else "BUY"
-            if fact.action != lot_exit:
+            if fact.action != lot_exit or fact.multiplier != lot["multiplier"]:
                 return None
             applied = min(quantity_left, int(lot["remaining"]))
             sign = 1.0 if lot["action"] == "BUY" else -1.0
-            realized += (float(fact.price) - float(lot["price"])) * applied * sign
+            realized += (float(fact.price) - float(lot["price"])) * applied * sign * fact.multiplier
             lot["remaining"] -= applied
             quantity_left -= applied
             matched += applied
@@ -2350,6 +2360,7 @@ def filled_orders_have_usable_evidence(
                     action=str(order.action or "").upper(),
                     quantity=quantity,
                     price=price,
+                    multiplier=price_multiplier({"symbol": order.symbol, "exchange": order.exchange}),
                 )
             )
 

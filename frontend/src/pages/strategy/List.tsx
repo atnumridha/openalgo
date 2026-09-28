@@ -873,6 +873,16 @@ export default function StrategyList() {
               <TableBody>
                 {rows.map((row, index) => {
                   const pnl = pnlById.get(row.id)
+                  const pnlRun = row.status === 'stopped'
+                    ? row.last_finalized_run
+                    : row.current_run_id != null
+                      ? { id: row.current_run_id, mode: row.current_run_mode }
+                      : null
+                  const pnlMode = pnlRun?.mode === 'sandbox' || pnlRun?.mode === 'live'
+                    ? pnlRun.mode : null
+                  const pnlSource = pnlRun
+                    ? `${row.status === 'stopped' ? 'Last' : 'Active'}${pnlMode ? ` ${pnlMode}` : ''} run #${pnlRun.id}${pnlMode ? '' : ' · mode unavailable'}`
+                    : null
                   const research = strategyResearch(row.scalp_profile)
                   const state = row.automation_state ?? 'disabled'
                   const pending =
@@ -981,6 +991,13 @@ export default function StrategyList() {
                         )}
                       >
                         {pnl?.finalized ? formatPnl(pnl.total) : formatListPnl(pnl?.total)}
+                        {pnlSource && (
+                          <div>
+                            <Badge variant="outline" className="mt-1 max-w-full whitespace-normal text-[10px] font-normal leading-tight">
+                              {pnlSource}
+                            </Badge>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="min-w-20">
                         <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>

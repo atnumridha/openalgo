@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pytz
 
@@ -36,10 +36,40 @@ from database.sandbox_db import (
     get_config,
 )
 from database.token_db import get_symbol_info
+from services.risk.contract_units import mcx_contract_multiplier
 from utils.logging import get_logger
 from utils.symbol_utils import is_future, is_option
 
 logger = get_logger(__name__)
+
+
+def contract_value_multiplier(symbol, exchange, symbol_info):
+    """Read monetary units without altering a broker's order quantity basis.
+
+    MCX requires explicit master evidence. Only Kotak's physical-unit master
+    is checked against the verified mini-contract specifications; another
+    broker's explicit multiplier must retain its own quantity convention.
+    """
+    value = getattr(symbol_info, "contract_value", None)
+    if value is None:
+        if exchange == "MCX":
+            raise ValueError(f"MCX contract units are missing for {symbol}")
+        return Decimal("1")
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid contract units for {symbol}")
+    try:
+        multiplier = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"Invalid contract units for {symbol}") from exc
+    if not multiplier.is_finite() or multiplier <= 0:
+        raise ValueError(f"Invalid contract units for {symbol}")
+    if exchange == "MCX" and getattr(symbol_info, "brexchange", None) == "mcx_fo":
+        verified = Decimal(str(mcx_contract_multiplier(
+            getattr(symbol_info, "name", None), getattr(symbol_info, "lotsize", None)
+        )))
+        if multiplier != verified:
+            raise ValueError(f"MCX contract units conflict with the master lot for {symbol}")
+    return multiplier
 
 
 class FundManager:
@@ -523,8 +553,9 @@ class FundManager:
                 logger.error(f"Symbol {symbol} not found on {exchange}")
                 return None, "Symbol not found"
 
-            # Calculate trade value (quantity × price)
-            trade_value = quantity * price
+            # Monetary quote units can differ from the physical order quantity.
+            multiplier = contract_value_multiplier(symbol, exchange, symbol_obj)
+            trade_value = quantity * price * multiplier
 
             # Determine leverage based on action, product and symbol type
             leverage = self._get_leverage(exchange, product, symbol, action)

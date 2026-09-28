@@ -863,6 +863,7 @@ export interface StrategyWireLeg {
   position: LegPosition
   lots: number
   qty: number
+  price_multiplier?: number | null
   status: string
   entry_status: string
   exit_kind: string | null
@@ -927,6 +928,7 @@ export function wireLegToLegState(leg: StrategyWireLeg): LegState {
     exchange: leg.exchange,
     lots: leg.lots,
     qty: leg.qty,
+    price_multiplier: leg.price_multiplier,
     entry_order_id: null,
     entry_status: leg.entry_status,
     entry_avg: leg.entry_avg,
@@ -1302,6 +1304,7 @@ export function useStrategyListPnl(rows: StrategySummary[]): Map<number, Strateg
     const page = results[index]?.data
     if (!page || page.data.length === 0) return
     const latest = page.data[page.data.length - 1]
+    if (latest.run_id !== row.current_run_id) return
     byId.set(row.id, {
       realized: latest.pnl_realized,
       unrealized: latest.pnl_unrealized,

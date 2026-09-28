@@ -322,10 +322,42 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
   )
 }
 
+const stopPnlFormat = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  signDisplay: 'exceptZero',
+})
+
+function grossPnlAtStop(leg: LegState | undefined): number | null {
+  if (!leg || leg.status !== 'open') return null
+  const multiplier = leg.price_multiplier ?? (leg.exchange.toUpperCase() === 'MCX' ? null : 1)
+  const stop = leg.effective_sl
+  if (
+    stop == null ||
+    !Number.isFinite(stop) ||
+    stop <= 0 ||
+    !Number.isFinite(leg.entry_avg) ||
+    leg.entry_avg <= 0 ||
+    !Number.isFinite(leg.qty) ||
+    leg.qty <= 0 ||
+    multiplier == null ||
+    !Number.isFinite(multiplier) ||
+    multiplier <= 0 ||
+    (leg.position !== 'B' && leg.position !== 'S')
+  ) {
+    return null
+  }
+  const pnl = (stop - leg.entry_avg) * leg.qty * multiplier * (leg.position === 'B' ? 1 : -1)
+  return Number.isFinite(pnl) ? pnl : null
+}
+
 function LiveTab({
   strategy,
   orders,
   live,
+  currentRun,
   lastRun,
   closingLegId,
   onCloseLeg,
@@ -333,6 +365,7 @@ function LiveTab({
   strategy: Strategy
   orders: Order[]
   live: StrategyLiveState
+  currentRun: Run | null
   /** The most recent run, so a stopped strategy still shows its last result. */
   lastRun: Run | null
   closingLegId: number | null
@@ -369,7 +402,8 @@ function LiveTab({
   // checkpoint endpoint deliberately keeps the last sample after stop, so a
   // stopped page can still retain the curve without presenting that sample as
   // the final result.
-  const checkpoint = isStopped ? null : live.checkpoint
+  const checkpoint = !isStopped && strategy.current_run_id != null &&
+    live.checkpoint?.run_id === strategy.current_run_id ? live.checkpoint : null
 
   // While a run is active the checkpoint is the truth. Once it stops, the run
   // row carries the finalised realized P&L, and unrealized is zero by
@@ -381,17 +415,33 @@ function LiveTab({
   const pnlPeak = showLast ? lastRun.pnl_peak : (checkpoint?.pnl_peak ?? null)
   const pnlTrough = showLast ? lastRun.pnl_trough : (checkpoint?.pnl_trough ?? null)
   const formatCurrentPnl = showLast ? formatPnl : formatLivePnl
+  const displayedRun = showLast ? lastRun : currentRun
+  const pnlTitle = showLast
+    ? `Last ${lastRun.mode} run P&L`
+    : isRunning
+      ? `${currentRun?.mode === 'sandbox' ? 'Sandbox' : currentRun?.mode === 'live' ? 'Live' : 'Active'} run P&L`
+      : 'Run P&L'
+  const monitoring = !isRunning && strategy.current_run_id == null &&
+    strategy.automation_state === 'armed'
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>
-            <CardTitle>Live P&amp;L</CardTitle>
+            <CardTitle>{pnlTitle}</CardTitle>
             <CardDescription>
-              {isRunning
-                ? 'Realized + Unrealized = Total, streamed from the engine while the run is active.'
-                : 'Last run — realized P&L from the most recent run; resets on the next Start.'}
+              {displayedRun && <>Run #{displayedRun.id} · </>}
+              {showLast
+                ? 'Final realized result, retained until another run starts.'
+                : isRunning
+                  ? 'Realized + Unrealized = Total for this run.'
+                  : 'No completed run result is available.'}
+              {monitoring && (
+                <span className="block">
+                  {strategy.live_enabled ? 'Live' : 'Sandbox'} monitoring is on; no active run.
+                </span>
+              )}
             </CardDescription>
           </div>
           <Badge
@@ -452,10 +502,13 @@ function LiveTab({
           <CardTitle>Legs</CardTitle>
           <CardDescription>
             {isRunning
-              ? 'Active run — LTP, MTM and effective SL from the engine.'
+              ? 'Active run — LTP, MTM and stop prices from the engine.'
               : strategy.automation_state === 'armed'
                 ? 'Waiting for a valid signal — legs appear when a trade starts.'
                 : 'Run inactive — start the strategy to see live state here.'}
+            {isRunning && (
+              <span className="block">P&amp;L at stop is gross, before charges and slippage.</span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -470,7 +523,7 @@ function LiveTab({
                   <TableHead className="text-right">Entry</TableHead>
                   <TableHead className="text-right">LTP</TableHead>
                   <TableHead className="text-right">MTM</TableHead>
-                  <TableHead className="text-right">Eff. SL</TableHead>
+                  <TableHead className="text-right">Stop price (₹)</TableHead>
                   <TableHead className="text-right">Eff. Tgt</TableHead>
                   <TableHead className="text-right">Trail</TableHead>
                   <TableHead>State</TableHead>
@@ -507,6 +560,7 @@ function LiveTab({
                         ? 'shares'
                         : 'lots'
                   const mtm = legLive?.mtm
+                  const stopPnl = grossPnlAtStop(legLive)
 
                   return (
                     <TableRow key={leg.id}>
@@ -536,6 +590,18 @@ function LiveTab({
                         {formatPrice(legLive?.effective_sl)}
                         {Boolean(legLive?.trail_active) && (
                           <span className="ml-1 text-[10px] text-amber-600">(trail)</span>
+                        )}
+                        {legLive?.effective_sl != null && (
+                          <div
+                            className={cn(
+                              'mt-0.5 whitespace-nowrap text-xs',
+                              stopPnl == null ? 'text-muted-foreground' : pnlToneClass(stopPnl)
+                            )}
+                          >
+                            {stopPnl == null
+                              ? 'Gross at stop unavailable'
+                              : `${stopPnlFormat.format(stopPnl)} gross at stop`}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono">
@@ -3066,7 +3132,8 @@ export default function StrategyDetail() {
             strategy={strategy}
             orders={orders}
             live={live}
-            lastRun={runs[0] ?? null}
+            currentRun={runs.find((run) => run.id === strategy.current_run_id) ?? null}
+            lastRun={runs.find((run) => run.stopped_at != null) ?? null}
             closingLegId={closingLegId}
             onCloseLeg={(legId) => {
               setClosingLegId(legId)

@@ -133,6 +133,8 @@ def test_entry_selects_its_saved_exchange_costs_without_replacing_nifty(exchange
     ledger.init_db()  # schedules survive reload and additive schema initialization
     assert ledger.get_costs("u")["exchange"] == "NFO"
     leg = LEG | {"exchange": exchange, "price_multiplier": 1}
+    if exchange == "MCX":
+        leg.update(symbol="CRUDEOILM19OCT261000CE", lot_size=10, quantity=10)
     decision, _ = service.reserve_entry("u", STRATEGY, [leg], "sandbox", "sandbox", FACTS, NOW)
     assert decision.allowed, decision.code
     trade = ledger.list_trades("u", "sandbox")[0]
@@ -297,7 +299,7 @@ def test_other_broker_position_cannot_mask_untracked_exposure():
             "broker_quantities": (("NFO", "NIFTYTESTCE", D("50")),),
         }
     )
-    leg = {**LEG, "exchange": "MCX", "price_multiplier": 1, "position_ref": "new"}
+    leg = {**LEG, "exchange": "MCX", "price_multiplier": 1, "position_ref": "new", "symbol": "CRUDEOILM19OCT261000CE", "lot_size":10, "quantity":10}
     decision, _ = service.reserve_entry("u", STRATEGY, [leg], "sandbox", "broker-b", facts, NOW)
     assert decision.code == "untracked_portfolio_exposure"
 
@@ -377,7 +379,7 @@ def test_partial_working_entry_keeps_full_cash_commitment(monkeypatch):
             "broker_quantities": (("NFO", "NIFTYTESTCE", D("1")),),
         }
     )
-    candidate = {**LEG, "position_ref": "second", "exchange": "MCX", "price_multiplier": 1}
+    candidate = {**LEG, "position_ref": "second", "exchange": "MCX", "price_multiplier": 1, "symbol": "CRUDEOILM19OCT261000CE", "lot_size":10, "quantity":10}
     decision, _ = service.reserve_entry(
         "u", STRATEGY, [candidate], "sandbox", "sandbox", facts, NOW
     )
@@ -508,3 +510,34 @@ def test_legacy_schedule_survives_adding_an_exchange_and_qualification_selects_e
     monkeypatch.setattr(service, "trading_day", lambda: "2026-09-26")
     assert _risk_context("u", "BFO")["costs"]["brokerage_per_order"] == 7
     assert _risk_context("u", "NFO")["costs"] == original
+
+
+def test_goldm_partial_and_final_fills_use_quote_units_for_cash_pnl_and_fees(monkeypatch):
+    from database import strategy_module_db as store
+    from services.strategy_module import state
+    monkeypatch.setattr(ledger, 'POLICY', current_policy())
+    ledger.set_costs('u', COSTS | {'exchange': 'MCX'})
+    leg = LEG | {'symbol': 'GOLDM05OCT261000CE', 'exchange': 'MCX', 'quantity':100,
+                  'lot_size':100, 'price_multiplier':.1}
+    facts = SimpleNamespace(**{**vars(FACTS), 'entry_risk':D('300'), 'estimated_debit':D('1000')})
+    decision, _ = service.reserve_entry('u', STRATEGY, [leg], 'sandbox', 'sandbox', facts, NOW)
+    assert decision.allowed, decision.code
+    ledger.bind_run('u','sandbox','p1',12)
+    orders=[{'id':1,'position_ref':'p1','action':'BUY','filled_qty':100,'avg_fill_price':100,'status':'complete'}]
+    monkeypatch.setattr(store,'list_orders',lambda _: orders)
+    monkeypatch.setattr(state,'get_run_state',lambda _: {'legs':{'1':{'position_ref':'p1','ltp':130}}})
+    service.sync_run(12)
+    row=ledger.list_trades('u','sandbox')[0]
+    assert row['net_pnl'] == D('260')
+    assert D(row['evidence']['net_cash_flow']) == D('-1020')
+    orders.append({'id':2,'position_ref':'p1','action':'SELL','filled_qty':40,'avg_fill_price':130,'status':'open'})
+    service.sync_run(12)
+    row=ledger.list_trades('u','sandbox')[0]
+    assert row['net_pnl'] == D('260')
+    assert D(row['evidence']['remaining_quantity']) == 60
+    orders[1].update(filled_qty=100, status='complete')
+    service.sync_run(12)
+    row=ledger.list_trades('u','sandbox')[0]
+    assert row['status']=='closed'
+    assert row['net_pnl'] == D('260')
+    assert D(row['evidence']['net_cash_flow']) == D('260')

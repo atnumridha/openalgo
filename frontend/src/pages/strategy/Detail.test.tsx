@@ -44,7 +44,7 @@ import {
   type StrategyLiveState,
   useBrokerBook,
 } from '@/api/strategy_module'
-import type { Order, Run, Strategy, StrategyEvent } from '@/types/strategy_module'
+import type { LegState, Order, Run, Strategy, StrategyEvent } from '@/types/strategy_module'
 import StrategyDetail, { EventsTab, OrdersTab, PositionsTab, ProfitComparisonTab, TradesTab, eventRefreshInterval } from './Detail'
 
 function client() {
@@ -148,6 +148,82 @@ beforeEach(() => {
   liveHook.mockReturnValue(live)
   for (const mock of Object.values(toast)) mock.mockReset()
   hookClient = client()
+})
+
+describe('live stop price and its gross P&L', () => {
+  function mockStopLeg(overrides: Partial<LegState> = {}) {
+    const leg: LegState = {
+      leg_id: 3,
+      position: 'B',
+      symbol: 'NIFTY29SEP2622750CE',
+      exchange: 'NFO',
+      lots: 1,
+      qty: 65,
+      entry_order_id: 1,
+      entry_status: 'complete',
+      entry_avg: 109.7,
+      exit_order_id: null,
+      exit_kind: null,
+      exit_avg: null,
+      ltp: 122.6,
+      mtm: 838.5,
+      realized_pnl: 0,
+      status: 'open',
+      tick_source: 'ws',
+      sl_pts: 3,
+      target_pts: null,
+      trail_x: 0,
+      trail_y: 0,
+      effective_sl: 119.85,
+      effective_target: null,
+      trail_active: true,
+      highest_price: 124.45,
+      lowest_price: null,
+      ...overrides,
+    }
+    liveHook.mockReturnValue({ ...live, legs: [leg] })
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data: {
+          data: url === '/strategy/api/strategies/7'
+            ? { ...strategy, legs: [{ id: 3, segment: 'options', position: leg.position, lots: 1 }] }
+            : [],
+        },
+      })
+    )
+    renderDetail()
+  }
+
+  it('distinguishes the stop price from the profit protected at that price', async () => {
+    mockStopLeg()
+    expect(await screen.findByRole('columnheader', { name: 'Stop price (₹)' })).toBeInTheDocument()
+    expect(screen.getByText('119.85')).toBeInTheDocument()
+    expect(screen.getByText('+₹659.75 gross at stop')).toBeInTheDocument()
+    expect(screen.getByText(/before charges and slippage/i)).toBeInTheDocument()
+  })
+
+  it('shows a signed loss when the stop remains below a long entry', async () => {
+    mockStopLeg({ effective_sl: 106.7, trail_active: false })
+    expect(await screen.findByText('-₹195.00 gross at stop')).toBeInTheDocument()
+  })
+
+  it('uses the short direction and the known MCX value multiplier', async () => {
+    mockStopLeg({
+      exchange: 'MCX', position: 'S', entry_avg: 100, effective_sl: 95,
+      qty: 5, price_multiplier: 5,
+    })
+    expect(await screen.findByText('+₹125.00 gross at stop')).toBeInTheDocument()
+  })
+
+  it.each([
+    { exchange: 'MCX' },
+    { entry_avg: 0, entry_status: 'open' },
+    { price_multiplier: 0 },
+  ])('does not invent stop P&L when valuation is missing: %j', async (overrides) => {
+    mockStopLeg(overrides)
+    expect(await screen.findByText('Gross at stop unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('+₹659.75 gross at stop')).not.toBeInTheDocument()
+  })
 })
 
 it('labels comparison triggers without executable quotes as estimates, not fills', () => {
@@ -569,6 +645,23 @@ describe('strategy Orderbook broker truth', () => {
 })
 
 describe('strategy Positions broker truth', () => {
+  it.each(['sandbox', 'live'] as const)('labels active %s P&L from its run, independently of the permission switch', async (mode) => {
+    rest.get.mockImplementation((url: string) => Promise.resolve({ data: { data:
+      url === '/strategy/api/strategies/7'
+        ? { ...strategy, live_enabled: mode === 'sandbox' }
+        : url === '/strategy/api/strategies/7/runs'
+          ? [{ id: 42, strategy_id: 7, mode, stopped_at: null }]
+          : [],
+    } }))
+
+    renderDetail()
+
+    const title = mode === 'sandbox' ? 'Sandbox run P&L' : 'Live run P&L'
+    const card = (await screen.findByText(title)).closest('[data-slot="card"]')
+    expect(card).toHaveTextContent('Run #42')
+    expect(card).not.toHaveTextContent('Last run')
+  })
+
   it('uses the finalized run across Live and Positions after a stale checkpoint survives stop', async () => {
     const stoppedStrategy = {
       ...strategy,
@@ -576,6 +669,8 @@ describe('strategy Positions broker truth', () => {
       name: 'Test Strategy Monthly',
       status: 'stopped',
       current_run_id: null,
+      live_enabled: true,
+      automation_state: 'armed',
       updated_at: '2026-08-31T04:15:29.517782+00:00',
     } satisfies Strategy
     const lastRun = {
@@ -638,8 +733,10 @@ describe('strategy Positions broker truth', () => {
     renderDetail()
 
     await screen.findByText('Test Strategy Monthly')
-    const liveCard = screen.getByText('Live P&L').closest('[data-slot="card"]')
+    const liveCard = screen.getByText('Last sandbox run P&L').closest('[data-slot="card"]')
     expect(liveCard).not.toBeNull()
+    expect(liveCard).toHaveTextContent('Run #12')
+    expect(liveCard).toHaveTextContent('Live monitoring is on; no active run.')
     expect(within(liveCard as HTMLElement).getByText('Realized').parentElement).toHaveTextContent(
       '+117.00'
     )

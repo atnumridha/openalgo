@@ -24,6 +24,7 @@ price.
 
 from typing import Any
 
+from utils.contract_value import accounting_multiplier
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -94,7 +95,7 @@ def pnl_from_book(
                 # counted as zero.
                 entry["unpriced_legs"] += 1
             else:
-                unrealized = qty * (ltp - avg)
+                unrealized = qty * (ltp - avg) * accounting_multiplier(*key[:2])
             entry["open_quantity"] += qty
 
         entry["realized"] += realized

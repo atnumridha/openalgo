@@ -77,6 +77,7 @@ MIGRATIONS = [
     ("migrate_health_process_details.py", "Health Metrics Process Details"),
     ("migrate_master_contract_stats.py", "Master Contract Smart Download"),
     ("migrate_contract_value.py", "Contract Value Column for Crypto"),
+    ("migrate_kotak_mcx_contract_values.py", "Kotak MCX Contract Quote Units"),
     ("migrate_market_holidays.py", "2026 Market Holiday Calendar Update"),
     ("migrate_leverage.py", "Leverage Configuration for Crypto"),
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
@@ -101,6 +102,7 @@ MIGRATIONS = [
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
 REQUIRED_MIGRATIONS = frozenset({
+    "migrate_kotak_mcx_contract_values.py",
     "migrate_strategy_module.py",
     "migrate_profit_comparison.py",
     "migrate_trading_research.py",

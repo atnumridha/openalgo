@@ -19,6 +19,7 @@ from typing import Any
 
 import pytz
 
+from services.risk.contract_units import price_multiplier
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -740,22 +741,8 @@ def _decision(allowed: bool, code: str, message: str, metrics: dict[str, Any]) -
     return GovernorDecision(allowed=allowed, code=code, message=message, metrics=metrics)
 
 
-def evaluate_entry(
-    facts: EntryFacts,
-    policy: GovernorPolicy,
-    now: datetime,
-) -> GovernorDecision:
-    """Apply the live-entry policy in stable, fail-closed order."""
-
-    if facts.intent == "exit":
-        return _decision(True, "exit_allowed", "Exits are never blocked by the governor", {})
-    if facts.intent != "entry":
-        return _decision(False, "risk_missing", "The order intent is unavailable", {})
-    if facts.mode not in {"live", "sandbox"}:
-        return _decision(False, "risk_missing", "The order mode is unavailable", {})
-    if not facts.entry_exchanges:
-        return _decision(False, "risk_missing", "The entry exchange is unavailable", {})
-
+def entry_window_refusal(facts: EntryFacts, now: datetime) -> GovernorDecision | None:
+    """Shared session gate for entry admission and signal-monitoring status."""
     now_ist = _ist(now)
     if facts.intraday or facts.has_option_entry:
         from database.market_calendar_db import get_effective_session_window
@@ -776,12 +763,39 @@ def evaluate_entry(
                 option_margin = 45 if exchange in {"NSE", "BSE"} else 55
                 if now_ist > end - timedelta(minutes=option_margin):
                     return _decision(
-                        False, "option_window_closed", "The option entry window has closed", {}
+                        False,
+                        "option_window_closed",
+                        f"New option entries closed at {(end - timedelta(minutes=option_margin)):%H:%M} IST; "
+                        "waiting for the next trading session",
+                        {},
                     )
             elif facts.intraday and now_ist > end - timedelta(minutes=30):
                 return _decision(
                     False, "outside_entry_window", "The exchange entry window has closed", {}
                 )
+
+    return None
+
+
+def evaluate_entry(
+    facts: EntryFacts,
+    policy: GovernorPolicy,
+    now: datetime,
+) -> GovernorDecision:
+    """Apply the live-entry policy in stable, fail-closed order."""
+
+    if facts.intent == "exit":
+        return _decision(True, "exit_allowed", "Exits are never blocked by the governor", {})
+    if facts.intent != "entry":
+        return _decision(False, "risk_missing", "The order intent is unavailable", {})
+    if facts.mode not in {"live", "sandbox"}:
+        return _decision(False, "risk_missing", "The order mode is unavailable", {})
+    if not facts.entry_exchanges:
+        return _decision(False, "risk_missing", "The entry exchange is unavailable", {})
+
+    window_refusal = entry_window_refusal(facts, now)
+    if window_refusal is not None:
+        return window_refusal
 
     required = (
         facts.available_cash,
@@ -807,12 +821,21 @@ def evaluate_entry(
             "Funds, positions, quotes, and configured protective risk are required",
             {},
         )
-    if facts.available_cash <= 0 or facts.minimum_reward_risk < policy.minimum_reward_risk:
+    if facts.available_cash <= 0:
+        return _decision(
+            False, "risk_missing", "A positive available cash balance is required",
+            {"available_cash": facts.available_cash},
+        )
+    if facts.minimum_reward_risk < policy.minimum_reward_risk:
         return _decision(
             False,
             "risk_missing",
-            "A positive cash balance, protective stop, and target of at least 1.5R are required",
-            {"minimum_reward_risk": facts.minimum_reward_risk},
+            f"Trade blocked: planned reward-to-risk is {facts.minimum_reward_risk:.2f}R; "
+            f"at least {policy.minimum_reward_risk:.2f}R is required",
+            {
+                "minimum_reward_risk": facts.minimum_reward_risk,
+                "required_reward_risk": policy.minimum_reward_risk,
+            },
         )
 
     cash_risk_limit = facts.available_cash * policy.cash_risk_pct
@@ -891,7 +914,7 @@ def evaluate_entry(
         last_stopped_at = _ist(facts.last_stopped_at)
         cooldown_until = last_stopped_at + timedelta(minutes=policy.cooldown_minutes)
         metrics["cooldown_until"] = cooldown_until
-        if now_ist < cooldown_until:
+        if _ist(now) < cooldown_until:
             return _decision(False, "cooldown", "The stopped-run cooldown is active", metrics)
 
     if (
@@ -1286,13 +1309,17 @@ def _reconstruct_recovered_entry_reservations(
         if stop_distance is None or stop_distance <= 0:
             return False
 
+        try:
+            multiplier = Decimal(str(price_multiplier(leg)))
+        except ValueError:
+            return False
         components.append(
             ReservationComponent(
                 leg_id=leg.get("leg_id") or leg.get("id"),
                 cash_positions=int(_is_cash(leg)),
                 nifty_option_positions=int(_is_nifty_option(leg)),
-                configured_risk=stop_distance * quantity,
-                estimated_debit=(price * quantity if action == "BUY" else Decimal("0")),
+                configured_risk=stop_distance * quantity * multiplier,
+                estimated_debit=(price * quantity * multiplier if action == "BUY" else Decimal("0")),
                 exchange=exchange,
                 symbol=symbol,
                 quantity_delta=quantity if action == "BUY" else -quantity,
@@ -1381,7 +1408,10 @@ def _open_configured_risk(user_id: str, scope: str | None = None) -> Decimal | N
             distance = _risk_distance(leg, price, "sl_pts")
             if quantity is None or quantity <= 0 or distance is None:
                 return None
-            total += distance * quantity
+            try:
+                total += distance * quantity * Decimal(str(price_multiplier(leg)))
+            except ValueError:
+                return None
     return total
 
 
@@ -1631,6 +1661,10 @@ def build_entry_facts(
         quantity = _decimal(leg.get("quantity") or leg.get("qty"))
         if quantity is None or quantity <= 0:
             return _unavailable_facts(mode)
+        try:
+            multiplier = Decimal(str(price_multiplier(leg)))
+        except ValueError:
+            return _unavailable_facts(mode)
         is_cash = _is_cash(leg)
         is_option = _is_option(leg)
         is_nifty_option = _is_nifty_option(leg)
@@ -1657,7 +1691,7 @@ def build_entry_facts(
             reward_risks = []
             break
         elif position == "B" and estimated_debit is not None:
-            leg_debit = price * quantity
+            leg_debit = price * quantity * multiplier
             estimated_debit += leg_debit
 
         stop_distance = _risk_distance(leg, price, "sl_pts")
@@ -1694,7 +1728,7 @@ def build_entry_facts(
         # order. Re-quoting here or sending MARKET would invalidate its budget.
         raw_leg["admission_entry_price"] = str(price)
         reward_risks.append(reward_ratio)
-        leg_risk = stop_distance * quantity
+        leg_risk = stop_distance * quantity * multiplier
         entry_risk += leg_risk
         if is_cash:
             cash_risk += leg_risk
@@ -1703,7 +1737,7 @@ def build_entry_facts(
             if lot_size is None or lot_size <= 0:
                 entry_risk = None
                 break
-            maximum_option_lot_risk = max(maximum_option_lot_risk, stop_distance * lot_size)
+            maximum_option_lot_risk = max(maximum_option_lot_risk, stop_distance * lot_size * multiplier)
         exchange = str(leg.get("exchange") or "").upper()
         if exchange:
             entry_exchanges.add(exchange)

@@ -35,6 +35,7 @@ from services.risk import (
     target_from_points,
     trail_stops_to_entry,
 )
+from services.risk.contract_units import price_multiplier
 from services.risk.profit_exit import evaluate_profit
 
 # A leg's configured stop and target are points from entry; the core works in
@@ -130,7 +131,9 @@ def leg_to_position_risk(leg: dict[str, Any]) -> PositionRisk:
         identifier=str(leg.get("leg_id")),
         side=side,
         entry_price=entry,
-        quantity=float(leg.get("qty") or 0.0),
+        # Risk core quantity is monetary exposure per price point. Broker order
+        # quantities remain unchanged in state and in execution adapters.
+        quantity=float(leg.get("qty") or 0.0) * price_multiplier(leg),
         stop_price=(max(initial_stop, float(leg["effective_sl"]))
                     if leg.get("initial_stop_price") is not None and leg.get("effective_sl") is not None and side == "BUY"
                     else leg.get("effective_sl") if leg.get("effective_sl") is not None else initial_stop),
@@ -180,6 +183,26 @@ def evaluate_leg(leg: dict[str, Any], last_price: Any) -> PositionDecision:
     """Evaluate one leg against a tick and write the outcome back."""
     risk = leg_to_position_risk(leg)
     protection = leg.get("profit_protection")
+    if (
+        protection is not None
+        and leg.get("entry_status") in ("pending", "open")
+        and risk.entry_price == 0
+        and float(leg.get("entry_filled_qty") or 0) == 0
+    ):
+        # Accepted orders already have status=open and a requested qty, but
+        # they do not carry a position until a fill supplies an entry price.
+        # Do not seed a profit peak from prices observed before that fill.
+        # Partial fills retain entry_status=open; their positive entry_avg and
+        # reconciled qty must still receive the ordinary protection evaluation.
+        return PositionDecision(
+            identifier=risk.identifier,
+            evaluated=False,
+            stop_price=risk.effective_stop,
+            target_price=risk.target_price,
+            highest_price=risk.highest_price,
+            lowest_price=risk.lowest_price,
+            detail="tick ignored: waiting for the entry fill",
+        )
     decision = (evaluate_profit(risk, last_price, protection) if protection is not None
                 else evaluate_position(risk, last_price))
     if decision.evaluated:
@@ -201,7 +224,7 @@ def run_pnl(state: dict[str, Any]) -> tuple[float, float]:
                 "identifier": str(leg.get("leg_id")),
                 "side": leg.get("position"),
                 "entry_price": leg.get("entry_avg") or 0.0,
-                "quantity": leg.get("qty") or 0.0,
+                "quantity": (leg.get("qty") or 0.0) * price_multiplier(leg),
                 "last_price": leg.get("ltp"),
                 # Anything not currently open contributes its realized figure
                 # rather than a mark. This is not the same as "status is

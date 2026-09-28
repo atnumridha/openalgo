@@ -881,6 +881,8 @@ class TestListing:
         row = client.get("/strategy/api/strategies").get_json()["data"][0]
 
         assert row["last_finalized_run"]["id"] == run.id
+        assert row["last_finalized_run"]["mode"] == "sandbox"
+        assert row["current_run_mode"] is None
         assert row["last_finalized_run"]["pnl_realized"] == -52.0
         assert row["last_finalized_run"]["stopped_at"] is not None
 

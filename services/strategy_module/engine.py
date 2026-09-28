@@ -32,6 +32,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from database import strategy_module_db as store
+from services.risk.contract_units import price_multiplier
 from services.strategy_module import (
     live_authorization,
     order_dispatch,
@@ -791,6 +792,7 @@ def _resolve_all_legs(
                 "exchange": outcome.exchange,
                 "segment": outcome.segment,
                 "lot_size": outcome.lotsize,
+                "price_multiplier": outcome.price_multiplier,
                 "tick_size": outcome.tick_size,
                 "underlying": outcome.underlying,
                 "lots": outcome.lots,
@@ -1383,7 +1385,7 @@ def _apply_fill(
             sign = 1.0 if superseded.get("position") == "B" else -1.0
             if entry > 0.0 and avg_price is not None:
                 leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
-                    (float(avg_price) - entry) * applied_qty * sign
+                    (float(avg_price) - entry) * applied_qty * sign * price_multiplier(superseded)
                 )
             owns_current_order = (
                 order_row_id is None or superseded.get("exit_order_id") == order_row_id
@@ -1477,7 +1479,7 @@ def _apply_fill(
                 sign = 1.0 if leg.get("position") == "B" else -1.0
                 if applied_qty > 0 and entry > 0.0 and avg_price is not None:
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
-                        (float(avg_price) - entry) * applied_qty * sign
+                        (float(avg_price) - entry) * applied_qty * sign * price_multiplier(leg)
                     )
                 elif applied_qty > 0:
                     # An entry price of zero means this incarnation contributes

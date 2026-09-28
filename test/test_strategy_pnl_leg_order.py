@@ -82,3 +82,14 @@ def test_unknown_strategy_returns_a_flat_shape():
 
     assert result["open_quantity"] == 0.0
     assert result["legs"] == []
+
+
+def test_goldm_open_pnl_converts_price_per_ten_grams(monkeypatch):
+    from types import SimpleNamespace
+    from utils import contract_value
+    monkeypatch.setattr(contract_value,'get_symbol_info',lambda *a:SimpleNamespace(contract_value=.1))
+    symbol='GOLDM05OCT261000CE'
+    legs=[_leg(symbol,100,100,exchange='MCX')]
+    result=pnl_from_book(legs,[{'symbol':symbol,'exchange':'MCX','product':'NRML','ltp':130}],strategy='S')
+    assert result['unrealized']==300
+    assert result['open_quantity']==100

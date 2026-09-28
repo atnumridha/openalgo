@@ -106,6 +106,53 @@ beforeEach(() => {
 })
 
 describe('strategy list P&L', () => {
+  it('keeps the last sandbox result identified after live monitoring is enabled', async () => {
+    mockStrategyList([{
+      ...stoppedStrategy, live_enabled: true, automation_state: 'armed',
+      last_finalized_run: { ...stoppedStrategy.last_finalized_run, mode: 'sandbox', pnl_realized: 656.5 },
+    }])
+    renderList()
+
+    const row = (await screen.findByRole('link', { name: 'test stat' })).closest('tr')
+    expect(row).toHaveTextContent('Last sandbox run #6')
+    expect(row).toHaveTextContent('+656.50')
+    expect(row).toHaveTextContent('LIVE-enabled')
+  })
+
+  it('does not infer an unavailable historical mode from live permission', async () => {
+    mockStrategyList([{ ...stoppedStrategy, live_enabled: true }])
+    renderList()
+
+    const row = (await screen.findByRole('link', { name: 'test stat' })).closest('tr')
+    expect(row).toHaveTextContent('Last run #6 · mode unavailable')
+    expect(row).not.toHaveTextContent('Last live run')
+  })
+
+  it.each([6, 7])('labels active P&L from its own run and checks checkpoint run %s', async (checkpointRunId) => {
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/automation/live-authorization') {
+        return Promise.resolve({ data: { live_authorization: { active: false } } })
+      }
+      return Promise.resolve({ data: { data:
+        url === '/strategy/api/strategies'
+          ? [{ ...stoppedStrategy, status: 'running', current_run_id: 7, current_run_mode: 'live', live_enabled: false }]
+          : url === '/strategy/api/strategies/3/checkpoints'
+            ? [{ ...staleCheckpoint, run_id: checkpointRunId, pnl_total: 999 }]
+            : [],
+        run_id: checkpointRunId,
+      } })
+    })
+    const { queryClient } = renderList()
+
+    const row = (await screen.findByRole('link', { name: 'test stat' })).closest('tr')
+    await waitFor(() => expect(
+      queryClient.getQueryState(strategyQueryKeys.checkpoints(3))?.status
+    ).toBe('success'))
+    expect(row).toHaveTextContent('Active live run #7')
+    if (checkpointRunId === 7) expect(row).toHaveTextContent('+999.00')
+    else expect(row).not.toHaveTextContent('+999.00')
+  })
+
   it('places automation safety controls above saved strategies', async () => {
     rest.get.mockImplementation((url: string) => {
       if (url === '/strategy/api/automation/critical-alerts') {

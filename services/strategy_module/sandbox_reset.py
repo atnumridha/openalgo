@@ -64,8 +64,25 @@ def _money(value: object) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"))
 
 
+def _trade_contract_values(trades) -> dict[tuple[str, str], Decimal]:
+    from database.token_db import get_symbol_info
+    from sandbox.fund_manager import contract_value_multiplier
+
+    values = {}
+    for instrument in {(row.symbol, row.exchange) for row in trades}:
+        try:
+            symbol = get_symbol_info(*instrument)
+        except Exception:
+            if instrument[1] == "MCX":
+                raise ValueError("MCX contract units are unavailable for sandbox reset") from None
+            symbol = None
+        values[instrument] = contract_value_multiplier(*instrument, symbol)
+    return values
+
+
 def _replay_position_realised_pnl(
     trades: list[sandbox_db.SandboxTrades],
+    contract_values: dict[tuple[str, str], Decimal] | None = None,
 ) -> dict[tuple[str, str, str], Decimal]:
     """Replay the sandbox's average-cost accounting from attributable fills.
 
@@ -75,10 +92,9 @@ def _replay_position_realised_pnl(
     back at cent precision between fills.  Replaying that boundary is the only
     safe way to distinguish expected average-cost rounding from ledger drift.
     """
-    from database.token_db import get_symbol_info
-
     state: dict[tuple[str, str, str], tuple[int, Decimal, Decimal]] = {}
-    contract_values: dict[tuple[str, str], Decimal] = {}
+    if contract_values is None:
+        contract_values = _trade_contract_values(trades)
     ordered = sorted(trades, key=lambda row: (row.trade_timestamp, row.id))
     for trade in ordered:
         key = (trade.symbol, trade.exchange, trade.product)
@@ -107,14 +123,6 @@ def _replay_position_realised_pnl(
         else:
             reduced_quantity = min(abs(old_quantity), abs(signed_quantity))
             instrument = (trade.symbol, trade.exchange)
-            if instrument not in contract_values:
-                try:
-                    symbol = get_symbol_info(*instrument)
-                    contract_values[instrument] = Decimal(
-                        str(symbol.contract_value if symbol and symbol.contract_value else 1)
-                    )
-                except Exception:
-                    contract_values[instrument] = Decimal("1")
             multiplier = contract_values[instrument]
             price_difference = price - average if old_quantity > 0 else average - price
             realised += price_difference * Decimal(reduced_quantity) * multiplier
@@ -319,6 +327,7 @@ def preview(user_id: str, now: datetime | None = None) -> ResetPreview:
     position_adjustments: list[tuple[int, Decimal]] = []
     replayed_position_pnl: dict[tuple[str, str, str], Decimal] = {}
     position_pnl: dict[tuple[str, str, str], Decimal] = {}
+    contract_values: dict[tuple[str, str], Decimal] = {}
     if instruments:
         positions = (
             sandbox_db.db_session.query(sandbox_db.SandboxPositions)
@@ -327,14 +336,11 @@ def preview(user_id: str, now: datetime | None = None) -> ResetPreview:
         )
         if any(row.quantity and (row.symbol, row.exchange) in instruments for row in positions):
             blockers.append("A selected sandbox instrument has an open position")
-        trade_cashflow: dict[tuple[str, str, str], Decimal] = {}
-        for trade in trades:
-            key = (trade.symbol, trade.exchange, trade.product)
-            direction = Decimal(1) if trade.action == "SELL" else Decimal(-1)
-            trade_cashflow[key] = trade_cashflow.get(key, Decimal(0)) + (
-                _money(trade.price) * trade.quantity * direction
-            )
-        replayed_position_pnl = _replay_position_realised_pnl(trades)
+        try:
+            contract_values = _trade_contract_values(trades)
+            replayed_position_pnl = _replay_position_realised_pnl(trades, contract_values)
+        except ValueError:
+            blockers.append("Sandbox contract units are missing, invalid or unverified")
         for row in positions:
             key = (row.symbol, row.exchange, row.product)
             if key[:2] in instruments:
@@ -425,6 +431,10 @@ def preview(user_id: str, now: datetime | None = None) -> ResetPreview:
             for row in runs
         ],
         "reservations": [(row.id, row.order_key, row.components) for row in reservations],
+        "contract_values": [
+            (symbol, exchange, str(value))
+            for (symbol, exchange), value in sorted(contract_values.items())
+        ],
         "orders": [
             (
                 row.id,

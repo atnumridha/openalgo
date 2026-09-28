@@ -174,6 +174,7 @@ export interface SchedulerConfig {
 /** The durable P&L authority for a strategy whose latest run has ended. */
 export interface FinalizedRunSummary {
   id: number
+  mode?: RunMode | null
   pnl_realized: number
   stopped_at: string
 }
@@ -216,6 +217,8 @@ export interface StrategySummary {
   automation_state_reason: string | null
   automation_state_updated_at: string | null
   current_run_id: number | null
+  /** Actual current run mode; distinct from permission to start live orders. */
+  current_run_mode?: RunMode | null
   created_at: string
   updated_at: string
   /** Present on list rows; never use a checkpoint after this run has ended. */
@@ -462,6 +465,8 @@ export interface LegState {
   exchange: string
   lots: number
   qty: number
+  /** Monetary value of one price point per quantity unit; required for MCX. */
+  price_multiplier?: number | null
   entry_order_id: number | null
   entry_status: string
   entry_avg: number
