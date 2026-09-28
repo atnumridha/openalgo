@@ -142,6 +142,16 @@ def status(user_id: str) -> LiveAuthorization:
     return _inactive(session_day)
 
 
+def peek_status(user_id: str) -> LiveAuthorization:
+    """Read effective authorization without expiry writes or lifecycle delivery."""
+    session_day = get_trading_session_date()
+    with _lock:
+        authorization = _authorizations.get(str(user_id))
+        if authorization is not None and authorization.session_day == session_day:
+            return authorization
+    return _inactive(session_day)
+
+
 def require_live_entry(user_id: str) -> tuple[bool, str | None]:
     """Say whether a new automated live entry may be claimed."""
     current = status(user_id)

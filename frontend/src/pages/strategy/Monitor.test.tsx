@@ -1,0 +1,163 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const api = vi.hoisted(() => ({ overview: vi.fn(), logs: vi.fn(), stop: vi.fn(), one: vi.fn() }))
+vi.mock('@/api/automation_monitor', () => ({
+  getAutomationMonitor: api.overview,
+  getAutomationLogs: api.logs,
+  emergencyStopAutomation: api.stop,
+}))
+vi.mock('@/api/strategy_module', () => ({ disableStrategyAutomation: api.one }))
+import Monitor from './Monitor'
+const strategy = {
+  id: 13,
+  name: 'NIFTY EMA 9/15',
+  mode: 'sandbox',
+  automation_state: 'armed',
+  run_status: 'stopped',
+  monitor_status: 'watching',
+  reason: 'Waiting for a fresh qualifying signal',
+  last_check_at: new Date().toISOString(),
+  next_check_at: new Date(Date.now() + 60000).toISOString(),
+  check_age_seconds: 10,
+  interval_seconds: 60,
+  workflow_id: 13,
+  workflow_active: true,
+  open_run_count: 0,
+  open_runs: [],
+  live_enabled: false,
+  entry_time: '09:35',
+  exit_time: '15:20',
+  configuration: { profile: 'ema915' },
+  rules: ['Both EMA slopes must meet 0.10 ATR'],
+  evaluation: {
+    recorded_at: new Date().toISOString(),
+    stage: 'waiting',
+    reason: 'No setup',
+    technical: {
+      metrics: { ema9: 25001 },
+      checks: [{ side: 'CE', label: 'Trend slope', passed: false }],
+      data_ready: true,
+      direction: '',
+      bar_at: new Date().toISOString(),
+    },
+    history: [],
+  },
+}
+function setup(data = strategy) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+  })
+  api.overview.mockResolvedValue({
+    server_time: new Date().toISOString(),
+    scheduler: { status: 'running' },
+    live_authorization: { active: false },
+    strategies: [data],
+    risk: { sandbox: { available: false } },
+  })
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <Monitor />
+        </MemoryRouter>
+      </QueryClientProvider>
+    ),
+  }
+}
+beforeEach(() => {
+  vi.clearAllMocks()
+  api.logs.mockResolvedValue({ items: [], next_cursor: null })
+  api.stop.mockResolvedValue({
+    all_stopped: false,
+    items: [
+      {
+        strategy_id: 13,
+        name: strategy.name,
+        state: 'closing',
+        close_pending: true,
+        ok: true,
+        reason: null,
+      },
+    ],
+  })
+})
+describe('Automation review', () => {
+  it('separates enabled automation, no trade and real-money eligibility', async () => {
+    setup()
+    await screen.findByText('Automation review')
+    await screen.findByText('Waiting for a fresh qualifying signal')
+    expect(screen.getByText(/Real-money orders will not trigger/)).toBeInTheDocument()
+    expect(screen.getByText('Trend slope')).toBeInTheDocument()
+    expect(screen.getByText('25001')).toBeInTheDocument()
+    expect(api.stop).not.toHaveBeenCalled()
+  })
+  it('requires explicit STOP ALL, allows cancellation and reports pending closures truthfully', async () => {
+    setup()
+    const user = userEvent.setup()
+    await screen.findByRole('button', { name: /Inspect NIFTY/ })
+    await user.click(screen.getByRole('button', { name: 'Emergency stop' }))
+    expect(screen.getByRole('button', { name: 'Block entries & request closure' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(api.stop).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Emergency stop' }))
+    await user.type(screen.getByLabelText('Type STOP ALL'), 'STOP ALL')
+    await user.click(screen.getByRole('button', { name: 'Block entries & request closure' }))
+    await screen.findByText('Closure needs attention')
+    expect(screen.queryByText('All targeted automation stopped')).not.toBeInTheDocument()
+    expect(api.stop).toHaveBeenCalledTimes(1)
+  })
+  it('surfaces lost monitoring instead of treating old values as healthy', async () => {
+    const { client } = setup()
+    await screen.findByRole('button', { name: /Inspect NIFTY/ })
+    api.overview.mockRejectedValue(new Error('unreachable'))
+    await client.invalidateQueries({ queryKey: ['automation-monitor'] })
+    await screen.findByText(/Monitoring unavailable/)
+    expect(screen.getByRole('button', { name: 'Emergency stop' })).toBeEnabled()
+  })
+  it('loads older retained logs', async () => {
+    api.logs
+      .mockResolvedValueOnce({
+        items: [{ id: 2, at: null, status: 'completed', message: 'Recent check', details: [] }],
+        next_cursor: 2,
+      })
+      .mockResolvedValue({
+        items: [
+          { id: 1, at: null, status: 'failed', message: 'Old error', details: { why: 'timeout' } },
+        ],
+        next_cursor: null,
+      })
+    setup()
+    const user = userEvent.setup()
+    await screen.findByRole('button', { name: /Inspect NIFTY/ })
+    await user.click(screen.getByRole('button', { name: 'Activity & logs' }))
+    await screen.findByText('Recent check')
+    await user.click(screen.getByRole('button', { name: 'Load older records' }))
+    await screen.findByText('Old error')
+    expect(api.logs).toHaveBeenLastCalledWith(13, 'executions', 2)
+  })
+})
+
+it('keeps risk rejection metrics visible after later successful signal checks', async () => {
+  const row = {
+    ...strategy,
+    last_risk_rejection: {
+      at: new Date().toISOString(),
+      message: 'Minimum reward-to-risk refused',
+      details: { metrics: { minimum_reward_risk: '1.126' } },
+    },
+  }
+  setup(row)
+  const user = userEvent.setup()
+  await user.click(await screen.findByText(/Latest risk rejection/))
+  expect(screen.getByText('Minimum reward-to-risk refused')).toBeInTheDocument()
+  expect(screen.getByText(/1.126/)).toBeInTheDocument()
+})
+it('does not offer the monitor stop control for unsupported drafts', async () => {
+  setup({ ...strategy, automation_state: 'disabled', configuration: { profile: '' } })
+  await screen.findByRole('button', { name: /Inspect NIFTY/ })
+  expect(screen.getByRole('button', { name: 'Stop automation & close' })).toBeDisabled()
+})

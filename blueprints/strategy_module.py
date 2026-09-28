@@ -2633,6 +2633,60 @@ def list_strategy_templates():
     return _ok({'data': catalog(username)})
 
 
+@strategy_module_bp.route('/api/automation/monitor', methods=['GET'])
+@check_session_validity
+@_api_limit
+def automation_monitor():
+    from services.strategy_module.monitor import overview
+    username = _current_user()
+    if not username:
+        return _error('Not authenticated', 401)
+    try:
+        return _ok({'data': overview(username)})
+    except Exception:
+        logger.exception('Automation monitoring is unavailable')
+        return _error('Monitoring data is unavailable; status is not confirmed', 503)
+
+
+@strategy_module_bp.route('/api/automation/strategies/<int:sid>/logs', methods=['GET'])
+@check_session_validity
+@_api_limit
+def automation_monitor_logs(sid):
+    from services.strategy_module.monitor import log_page
+    username, _row, error = _resolve(sid)
+    if error:
+        return error
+    try:
+        return _ok({'data': log_page(username, sid, stream=request.args.get('stream', 'executions'),
+            limit=int(request.args.get('limit', '25')),
+            before_id=int(request.args['before_id']) if 'before_id' in request.args else None)})
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except LookupError:
+        return _error('Strategy not found', 404)
+    except Exception:
+        logger.exception('Automation log history is unavailable')
+        return _error('Log history is unavailable; retry after refreshing', 503)
+
+
+@strategy_module_bp.route('/api/automation/emergency-stop', methods=['POST'])
+@check_session_validity
+@_api_limit
+def automation_emergency_stop():
+    from services.strategy_module.monitor import emergency_stop
+    username = _current_user()
+    if not username:
+        return _error('Not authenticated', 401)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or body != {'confirmation': 'STOP ALL'}:
+        return _error('Confirm STOP ALL to block automation and request position closure', 400)
+    try:
+        return _ok({'data': emergency_stop(username)})
+    except Exception:
+        logger.exception('Emergency stop could not be confirmed')
+        return _error('Emergency stop is not confirmed. Refresh and inspect every strategy before retrying.', 503)
+
+
 @strategy_module_bp.route('/api/templates/<template_id>/install', methods=['POST'])
 @check_session_validity
 @_api_limit

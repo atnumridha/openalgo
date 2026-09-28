@@ -340,6 +340,7 @@ export default function StrategyList() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button asChild><Link to="/strategy/monitor">Automation review</Link></Button>
           <Button variant="outline" asChild>
             <Link to="/strategy/research">Research</Link>
           </Button>

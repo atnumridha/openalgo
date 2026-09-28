@@ -507,6 +507,11 @@ def react_strategy_new():
     return serve_react_app()
 
 
+@react_bp.route("/strategy/monitor", strict_slashes=False)
+def react_strategy_monitor():
+    return serve_react_app()
+
+
 @react_bp.route("/strategy/research", strict_slashes=False)
 def react_strategy_research():
     return serve_react_app()

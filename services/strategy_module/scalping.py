@@ -109,7 +109,7 @@ def signals_for_profile(profile, *, five=None, minute=None, bank=None, daily=Non
     raise ValueError("Unknown scalping profile")
 
 
-def latest_signal(profile, client, now):
+def latest_signal(profile, client, now, *, audit=None):
     from services.indicator_service import current_completed_bar_start, fetch_history_cached
 
     if profile not in PROFILES:
@@ -119,6 +119,10 @@ def latest_signal(profile, client, now):
     if expected is None:
         raise WaitingForSignal("Waiting for the next completed market candle")
     expected = pd.Timestamp(expected) + pd.Timedelta(minutes=1 if interval == "1m" else 5)
+
+    inputs = {}
+    if audit is not None:
+        audit.update(expected_bar_at=expected.isoformat(), history=[], signal_age_seconds=(now-expected.to_pydatetime()).total_seconds())
 
     def history(symbol, size, days):
         response = fetch_history_cached(
@@ -135,10 +139,13 @@ def latest_signal(profile, client, now):
         frame = (closed_daily_frame if size == "D" else lambda r, t: closed_frame(r, size, t))(
             response.get("data") or [], now
         )
+        if audit is not None:
+            audit["history"].append({"symbol": symbol, "interval": size, "candles": len(frame), "last_bar_at": frame.index[-1].isoformat()})
         return frame
 
     if profile == "box15":
-        result = signals_for_profile(profile, minute=history("NIFTY", "1m", 2))
+        inputs["minute"] = history("NIFTY", "1m", 2)
+        result = signals_for_profile(profile, **inputs)
     else:
         five = history("NIFTY", "5m", 30)
         extra = {}
@@ -148,7 +155,14 @@ def latest_signal(profile, client, now):
             extra["daily"] = history("NIFTY", "D", 600)
         elif profile == "ema5":
             extra["minute"] = history("NIFTY", "1m", 2)
-        result = signals_for_profile(profile, five=five, **extra)
+        inputs = {"five": five, **extra}
+        result = signals_for_profile(profile, **inputs)
+    if audit is not None:
+        try:
+            from services.strategy_module.signal_review import explain
+            audit["technical"] = explain(profile, inputs, result, expected)
+        except Exception:
+            audit["technical_error"] = "Technical detail unavailable for this evaluation"
     if expected not in result.index or result.loc[expected, "direction"] not in {"CE", "PE"}:
         raise WaitingForSignal("Waiting for a fresh qualifying signal")
     signal = result.loc[expected].to_dict()
@@ -265,7 +279,24 @@ def prepare(strategy, owner, api_key, mode):
     client = FlowOpenAlgoClient(api_key)
     client.broker_connection_id = strategy["broker_connection_id"]
     now = datetime.now(IST)
-    signal = latest_signal(strategy["scalp_profile"], client, now)
+    audit = {"evaluated_at": now.isoformat(), "profile": strategy["scalp_profile"], "mode": mode}
+    try:
+        signal = latest_signal(strategy["scalp_profile"], client, now, audit=audit)
+        audit.update(stage="signal_found", reason="Fresh signal found; contract, costs, risk and execution checks still required")
+    except WaitingForSignal as exc:
+        audit.update(stage="waiting", reason=str(exc))
+        raise
+    except Exception:
+        audit.update(stage="evaluation_failed", reason="Signal evaluation failed; inspect execution log")
+        raise
+    finally:
+        try:
+            from database.strategy_module_db import record_event
+            record_event(strategy["id"], owner, "signal_evaluation", audit.get("reason", "Signal evaluated"), payload=audit)
+        except Exception:
+            # Telemetry is never an alternative trading or risk decision path.
+            from utils.logging import get_logger
+            get_logger(__name__).exception("Could not record signal evaluation")
     profile = strategy["scalp_profile"]
     context = trade_context(
         profile, signal, None if profile == "box15" else quote_price(client, "NIFTY", "NSE_INDEX")
