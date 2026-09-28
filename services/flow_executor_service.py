@@ -5115,6 +5115,8 @@ def execute_workflow(
 
         execution_nodes = deepcopy(workflow.nodes or [])
         execution_edges = deepcopy(workflow.edges or [])
+        workflow_name = workflow.name
+        broker_connection_id = getattr(workflow, "broker_connection_id", None)
         # Every trigger converges here - schedules, price alerts, order updates,
         # webhooks and Run Now - so this is the only place that can guarantee an
         # incomplete graph never reaches the broker. Guarding the HTTP routes
@@ -5125,7 +5127,7 @@ def execute_workflow(
 
         validation_errors = validate_workflow(
             {
-                "name": workflow.name,
+                "name": workflow_name,
                 "nodes": execution_nodes or [],
                 "edges": execution_edges or [],
             },
@@ -5134,7 +5136,7 @@ def execute_workflow(
         if validation_errors:
             message = validation_errors[0]["message"]
             logger.error(
-                f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
+                f"Workflow {workflow_id} ({workflow_name}) is not runnable: {message}"
             )
             return {
                 "status": "error",
@@ -5145,16 +5147,20 @@ def execute_workflow(
         graph_hash = workflow_digest([
             SimpleNamespace(
                 id=workflow.id, nodes=execution_nodes, edges=execution_edges,
-                broker_connection_id=getattr(workflow, "broker_connection_id", None),
+                broker_connection_id=broker_connection_id,
             )
         ])
         execution = create_execution(workflow_id, status="running")
         if not execution:
             return {"status": "error", "message": "Failed to create execution record"}
+        # Client/node calls may commit and remove the shared scoped session.
+        # Keep scalars so both completion and failure reporting still work when
+        # the original ORM rows (including their primary keys) are detached.
+        execution_id = execution.id
 
         logs = []
         context = WorkflowContext(workflow_id=workflow_id)
-        context.execution_id = execution.id
+        context.execution_id = execution_id
         context.qualification_graph_hash = graph_hash
 
         if webhook_data:
@@ -5166,11 +5172,11 @@ def execute_workflow(
                 raise Exception("API key required for workflow execution")
 
             client = get_flow_client(api_key)
-            context.broker_connection_id = getattr(workflow, "broker_connection_id", None)
+            context.broker_connection_id = broker_connection_id
             client.broker_connection_id = context.broker_connection_id
-            executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
-            logger.info(f"Starting workflow: {workflow.name}")
-            executor.log(f"Starting workflow: {workflow.name}")
+            executor = NodeExecutor(client, context, logs, default_strategy=workflow_name)
+            logger.info(f"Starting workflow: {workflow_name}")
+            executor.log(f"Starting workflow: {workflow_name}")
 
             nodes = execution_nodes or []
             edges = execution_edges or []
@@ -5210,33 +5216,33 @@ def execute_workflow(
 
             if executor.errors:
                 summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
-                update_execution_status(execution.id, "failed", error=summary, logs=logs)
+                update_execution_status(execution_id, "failed", error=summary, logs=logs)
                 return {
                     "status": "error",
                     "message": (
                         f"{len(executor.errors)} node(s) failed: {summary}"
                     ),
-                    "execution_id": execution.id,
+                    "execution_id": execution_id,
                     "errors": executor.errors,
                     "logs": logs,
                 }
 
             if executor.readiness_status:
-                update_execution_status(execution.id, executor.readiness_status, logs=logs)
+                update_execution_status(execution_id, executor.readiness_status, logs=logs)
                 return {
                     "status": executor.readiness_status,
                     "readiness": executor.readiness_label,
                     "message": executor.readiness_message,
-                    "execution_id": execution.id,
+                    "execution_id": execution_id,
                     "logs": logs,
                 }
 
-            update_execution_status(execution.id, "completed", logs=logs)
+            update_execution_status(execution_id, "completed", logs=logs)
             return {
                 "status": "success",
                 "readiness": executor.readiness_label,
                 "message": "Workflow executed successfully",
-                "execution_id": execution.id,
+                "execution_id": execution_id,
                 "logs": logs,
             }
 
@@ -5249,11 +5255,11 @@ def execute_workflow(
                     "level": "error",
                 }
             )
-            update_execution_status(execution.id, "failed", error=str(e), logs=logs)
+            update_execution_status(execution_id, "failed", error=str(e), logs=logs)
             return {
                 "status": "error",
                 "message": str(e),
-                "execution_id": execution.id,
+                "execution_id": execution_id,
                 "logs": logs,
             }
 

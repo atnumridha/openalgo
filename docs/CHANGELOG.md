@@ -8,6 +8,8 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Preserve Flow execution IDs and workflow metadata across downstream database-session cleanup. Completed or failed evaluations now save their final status even after nested services detach their ORM records, preventing this failure from leaving a phantom running execution that blocks sandbox reset.
+
 - Fix LIVE starts for linked strategies: Start now validates and enables their Flow for signal monitoring, including generic signal receivers. Inactive, flat Flows can change mode with all entry and exit nodes together; active Flows must be stopped first. Live session approval, per-strategy approval and entry risk checks remain required. Strategy detail now separates automation status from trade status, exposes Stop automation and blocks mode changes until closure is confirmed. The list also permits stopping LIVE automation.
 - Recheck generic Flow entries under account admission against the current strategy, mode, active linked graph and automation epoch. Evaluations left over from a stop or restart cannot submit new entries, including after rearming. Protective exits remain available. A same-second execution whose start time cannot prove it followed arming is skipped until a fresh signal.
 
