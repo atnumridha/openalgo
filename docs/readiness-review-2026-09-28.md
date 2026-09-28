@@ -218,3 +218,37 @@ review found no remaining blockers. The running backend was not restarted.
 Loading both the option-pair retention and reconnect fixes still needs the
 previously requested restart decision; fresh candle warm-up is required after
 the actual outage. No stale bars, fabricated candles or relaxed guards were used.
+
+## Overnight broker-session failure, 29 September
+
+The next verified audit at 00:15 IST found no managed Live runs or orders.
+All four MCX configurations remain Live and armed; their entry window closed
+at 22:45. Last usable-assessment attempts at 22:40 still reported unavailable
+five-minute history, and stored stream arrivals remain frozen near 19:06:40.
+Neither the application nor the collector was restarted.
+
+Broker visibility deteriorated separately from the known market-feed outage.
+After the 22:44 successful order-update socket connection, reconnects and
+order/position reads encountered timeouts and DNS errors. At 00:13 the reads
+began failing with `KeyError: 'data'`; at 00:14 the order-update socket received
+`session message format incorrect`. Read-only broker GETs then confirmed HTTP
+401 for both orders and positions, with `stCode: 100010` and
+`errMsg: invalid session token`. The persisted authenticated flag is therefore
+not proof of a currently valid broker session. Broker reconnection is needed
+before the next trading session; no credentials or live approval were renewed.
+The failed reads cannot establish that the entire broker account is flat.
+
+An isolated mapper correction reports the invalid broker session explicitly
+instead of indexing a missing data field. Rejected and malformed order/position
+responses remain failures, never successful empty books; successful empty books
+and symbol conversion are preserved. Fourteen regressions failed before the
+fix. All 119 focused mapper, service, position and MCX accounting tests passed
+afterward, and independent review found no blockers. The backend correction has
+not been loaded into the running process.
+
+This patch only fixes the orderbook/positionbook mapping and its service error
+reporting. It does not change credential refresh, tradebook/holdings mapping, or
+raw trading callers. Review noted that `get_open_position()` can still interpret
+a raw response without data as zero quantity; that separate execution-path issue
+is not repaired or certified by these mapper tests. The primary checkout also
+contains separate in-progress order API and square-off edits, preserved here.

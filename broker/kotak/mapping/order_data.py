@@ -45,22 +45,27 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-    # Check if 'data' is None
-    # if order_data has key 'data' and its value is None
-
-    if order_data["stat"] == "Not_Ok":
-        logger.debug("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-        return order_data
-
-    if order_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.debug("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
-    else:
-        order_data = order_data["data"]
+    # A failed read cannot establish an empty book. In particular, Kotak's
+    # HTTP 401 body has stat/errMsg/stCode but no data field.
+    if not isinstance(order_data, dict):
+        raise ValueError("Kotak order/position book response is not an object")
+    status = str(order_data.get("stat") or "").strip().lower()
+    if str(order_data.get("stCode")) == "100010" or status == "invalid session token":
+        raise ValueError("Kotak session is invalid or expired; reconnect the broker")
+    if not status:
+        raise ValueError("Kotak order/position book response is missing status")
+    if status != "ok":
+        # Do not echo an arbitrary broker error body or any credentials.
+        raise ValueError("Kotak rejected the order/position book request")
+    if "data" not in order_data:
+        raise ValueError("Kotak order/position book response is missing data")
+    order_data = order_data["data"]
+    if order_data is None:
+        return []
+    if not isinstance(order_data, list):
+        raise ValueError("Kotak order/position book data is not a list")
+    if any(not isinstance(row, dict) or not row.get("exSeg") for row in order_data):
+        raise ValueError("Kotak order/position book contains invalid rows")
 
     if order_data:
         for order in order_data:
