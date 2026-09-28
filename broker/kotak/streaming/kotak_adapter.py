@@ -180,6 +180,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _setup_internal_callbacks(self):
         """Setup internal callbacks - following AliceBlue's _on_data_received pattern."""
+        client = self._ws_client
 
         def on_quote_internal(quote):
             """Internal callback - mirrors AliceBlue's _on_data_received method."""
@@ -199,30 +200,36 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         def on_open_internal():
             """Internal callback when WebSocket transport opens."""
-            logger.info("Kotak WebSocket transport opened")
             # Reset reconnection state only when connection actually succeeds
             with self._lock:
+                if client is not self._ws_client or not self._running:
+                    return
+                logger.info("Kotak WebSocket transport opened")
                 self._connected = True
                 self._reconnect_attempts = 0
                 self._reconnecting = False
 
         def on_close_internal():
             """Internal callback when WebSocket connection closes."""
-            logger.info("Kotak WebSocket connection closed")
-
             with self._lock:
+                if client is not self._ws_client:
+                    return
+                logger.info("Kotak WebSocket connection closed")
                 self._connected = False
                 if not self._running:
                     logger.debug("Not reconnecting - adapter stopped")
                     return
 
-                if self._reconnecting:
-                    logger.debug("Reconnection already in progress, skipping")
+                # connect() starts an asynchronous handshake. A retry that
+                # closes before on_open must schedule the next attempt even
+                # though _reconnecting remains true throughout that handshake.
+                if self._reconnect_timer is not None:
+                    logger.debug("Reconnection already scheduled, skipping")
                     return
 
                 self._reconnecting = True
 
-            self._schedule_reconnection()
+                self._schedule_reconnection()
 
         def on_error_internal(error):
             """Internal callback for WebSocket errors."""
@@ -787,24 +794,45 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
 
             self._reconnect_attempts += 1
+            # Retire this client's callbacks atomically with consuming the
+            # timer, before another close can schedule a duplicate retry.
+            saved_subs = dict(self.subscriptions)
+            old_client = self._ws_client
+            self._ws_client = None
 
         try:
-            # Save current subscriptions before cleanup
-            with self._lock:
-                saved_subs = dict(self.subscriptions)
-
             # Clean up old WebSocket client
-            if self._ws_client:
+            if old_client:
                 logger.debug("Cleaning up old WebSocket client before reconnection")
                 try:
-                    self._ws_client.close()
-                    # Verify old thread actually stopped
-                    self._ws_client.wait_until_closed(timeout=5)
+                    old_client.close()
+                    # SFeed joins its thread in close(); legacy HSM also
+                    # exposes an explicit completion wait.
+                    wait_closed = getattr(old_client, "wait_until_closed", None)
+                    if callable(wait_closed):
+                        wait_closed(timeout=5)
                 except Exception as cleanup_err:
                     logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
 
             # Recreate WebSocket client with fresh credentials
+            with self._lock:
+                if not self._running:
+                    self._reconnecting = False
+                    return
             self._recreate_ws_client()
+
+            # Feed/credential lookup runs outside the lock. An explicit stop
+            # during that lookup must also retire the replacement it returns.
+            with self._lock:
+                stopped = not self._running
+                replacement = self._ws_client
+                if stopped:
+                    self._ws_client = None
+                    self._reconnecting = False
+            if stopped:
+                if replacement:
+                    replacement.close()
+                return
 
             if self._ws_client:
                 # Clear stale state from old session before reconnecting

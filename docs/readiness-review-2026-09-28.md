@@ -188,3 +188,33 @@ no collector restart or trading action was performed.
 Validation: regressions reproduced the skipped-assessment cases before the fix;
 all 2,835 frontend tests, the production build and independent focused review
 passed. The change is frontend-only and does not load the pending collector fix.
+
+## New streaming outage and reconnect fix, 19:06–19:22 IST
+
+All four futures' stored stream arrivals stopped at approximately 19:06:40.
+At 19:07 the market-data and order-update sockets reported ping/pong timeouts;
+subsequent connection and REST requests reported DNS resolution errors. REST
+quotes later recovered, but the market-data stream did not. The application and
+research worker remained running. At 19:15 all four MCX receivers reported
+unavailable five-minute market history. This is a new shared feed failure,
+superseding CRUDEOILM's earlier healthy-data/no-setup status. No managed Live
+runs or orders were recorded when checked at 19:15.
+
+The market-data adapter scheduled one reconnect at 19:07:23. That asynchronous
+attempt failed DNS before opening at 19:07:46. Its close callback returned early
+because the reconnect-in-progress flag was still true, leaving no retry timer.
+An isolated regression reproduced this failure. The fix deduplicates pending
+timers while allowing a failed asynchronous handshake to schedule the next
+bounded, backed-off attempt. Old-client callbacks cannot alter a replacement's
+connection state; retiring the old client and consuming its retry timer are one
+locked transition. Explicit stops during retirement or credential lookup still
+prevent a replacement connection. SFeed's close already joins its thread, so
+the legacy-only completion wait is now conditional.
+
+Validation: four initial reconnect regressions failed before the correction;
+the additional stop-during-recreation regression also reproduced before its fix.
+All 124 related feed, collector and subscription tests passed, and independent
+review found no remaining blockers. The running backend was not restarted.
+Loading both the option-pair retention and reconnect fixes still needs the
+previously requested restart decision; fresh candle warm-up is required after
+the actual outage. No stale bars, fabricated candles or relaxed guards were used.
