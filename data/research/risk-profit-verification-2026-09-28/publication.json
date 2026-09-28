@@ -1,0 +1,38 @@
+{
+  "commit": "1d3d8b6ad",
+  "source_hash": "9494de1aa42864e47fdfb4bef14eec189487dbfd3e01e94c27a8e880e4eccbc3",
+  "served_assets_verified": 494,
+  "accounts_upgraded": [
+    {
+      "policy_version": "equity-1pct-v2",
+      "capital": "10000.0000",
+      "per_trade_limit": "100.000000",
+      "daily_limit": "300.000000",
+      "day_start_equity": "10000.0000",
+      "paused": "False",
+      "mode": "live"
+    },
+    {
+      "policy_version": "equity-1pct-v2",
+      "capital": "10000.0000",
+      "per_trade_limit": "100.000000",
+      "daily_limit": "300.000000",
+      "day_start_equity": "10000.0000",
+      "paused": "False",
+      "mode": "sandbox"
+    }
+  ],
+  "preserved_fields": [
+    "strategies",
+    "flows",
+    "cost_hashes",
+    "capital",
+    "order_count",
+    "risk_trade_count",
+    "final_use_count"
+  ],
+  "managed_orders": 0,
+  "risk_trades": 0,
+  "consumed_final_sessions": 60,
+  "actual_browser": "login required; isolated UI tested with same build"
+}
