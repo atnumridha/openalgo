@@ -150,3 +150,29 @@ managers and unconditional engine disposal. No new unbounded cache or worker
 registry was introduced. Generic strategy accounting uses the existing cached
 symbol lookup; missing metadata preserves legacy external-fill bookkeeping,
 while managed MCX entry admission still requires verified units.
+
+The same 961 backend tests passed on merged `main`, with one SQLAlchemy warning
+in an existing recovery fixture. The main checkout shares the SDK package name;
+preloading the installed `openalgo` SDK before `pytest.main` avoids pytest
+mistaking the repository root for that SDK. All 105 selected frontend tests and
+the production TypeScript/Vite build passed.
+
+## Deployment verification at 15:25 IST
+
+There were no open managed runs before the service restart. All 34 startup
+migrations completed successfully. The MCX migration populated 5,422 contract
+rows with the expected factors: GOLDM 0.1, CRUDEOILM 1, SILVERM 1 and
+NATGASMINI 1. A local metadata backup was retained before the change.
+
+The browser confirmed **Last sandbox run P&L — Run #2 — +₹656.50**, separately
+from **Live monitoring is on; no active run**, and the **Stop price (₹)** column.
+At 15:25:21 the automation review showed 16 enabled monitors, zero open managed
+runs and zero needing attention. CRUDEOILM's latest result had changed from the
+old conversion rejection to **Feed restarted; collecting fresh contract
+history**. Earlier rejection records remain preserved as historical evidence.
+
+Bollinger remained the only live-enabled strategy; all other 15 strategies,
+including the four MCX receivers, remained sandbox-only. The monitoring screen
+showed NIFTY strategies outside their configured entry hours. No mode switch or
+manual order was submitted during verification. Live MCX fills and profitability
+are not established by these software tests or the successful migration.
