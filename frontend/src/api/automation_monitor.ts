@@ -28,6 +28,21 @@ export interface MonitorStrategy {
   last_check_status: string | null
   last_check_error: string | null
   last_risk_rejection?: { at: string; message: string; details: unknown } | null
+  entry_plan?: {
+    at: string
+    details: {
+      context?: {
+        structure?: {
+          symbol: string
+          entry_price: string
+          stop_price: string
+          planned_gross_loss: string
+          objective_r: number
+          hard_target: boolean
+        }
+      }
+    }
+  } | null
   last_failure: { at: string; message: string } | null
   entry_time: string | null
   exit_time: string | null
@@ -62,7 +77,7 @@ export interface RiskEvidence {
   costs_configured?: boolean
   pause_reason?: string | null
   daily_stop_reason?: string | null
-  exit_recipe?: string
+  managed_scalp_recipe?: string
   ledger?: Record<string, unknown>
 }
 export interface AutomationMonitor {

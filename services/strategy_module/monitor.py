@@ -301,7 +301,7 @@ def overview(owner, *, now=None):
                 .where(
                     store.SmStrategyEvent.strategy_id == row.id,
                     store.SmStrategyEvent.user_id == owner,
-                    store.SmStrategyEvent.kind == "portfolio_governor_rejected",
+                    store.SmStrategyEvent.kind.in_(("portfolio_governor_rejected", "entry_setup_rejected")),
                 )
                 .order_by(store.SmStrategyEvent.id.desc())
                 .limit(1)
@@ -315,6 +315,13 @@ def overview(owner, *, now=None):
                 )
                 .order_by(store.SmStrategyCheckpoint.id.desc())
                 .limit(1)
+            )
+            plan = db.scalar(
+                select(store.SmStrategyEvent)
+                .where(store.SmStrategyEvent.strategy_id == row.id,
+                       store.SmStrategyEvent.user_id == owner,
+                       store.SmStrategyEvent.kind == "entry_plan")
+                .order_by(store.SmStrategyEvent.id.desc()).limit(1)
             )
         from services.strategy_module.signal_review import RULES
 
@@ -341,6 +348,7 @@ def overview(owner, *, now=None):
             if rejection
             else None
         )
+        data["entry_plan"] = {"at": iso(plan.ts), "details": plan.payload} if plan else None
         data["checkpoint"] = store.checkpoint_to_dict(checkpoint) if checkpoint else None
         data["monitor_status"], data["reason"] = _status(row, data, now, health)
         result.append(clean(data))
@@ -619,7 +627,7 @@ def risk_evidence(owner, mode, day):
                 daily_stopped=stopped is not None or account.daily_stop_day == day,
                 day_start_equity=baseline.opening_equity if baseline else None,
             )
-            from services.risk.cash_exit import CASH_RISK_RECIPE
+            from services.risk.option_structure import STRUCTURE_RECIPE
 
             return {
                 "available": True,
@@ -628,7 +636,7 @@ def risk_evidence(owner, mode, day):
                 "costs_configured": bool(settings and settings.costs),
                 "pause_reason": account.pause_reason,
                 "daily_stop_reason": stopped.reason if stopped else account.daily_stop_reason,
-                "exit_recipe": CASH_RISK_RECIPE,
+                "managed_scalp_recipe": STRUCTURE_RECIPE,
                 "ledger": {
                     k: float(v) if isinstance(v, Decimal) else v for k, v in snapshot.items()
                 },

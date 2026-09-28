@@ -14,9 +14,9 @@ from services.research.scalp_strategies import ema_reversal_signals, macd_featur
 from services.research.tradejini_scalping import tradejini_signals
 from services.risk import PositionRisk, evaluate_position
 from services.risk.budget import current_policy
+from services.risk.option_structure import STRUCTURE_RECIPE, structure_plan
 from services.risk.cash_exit import (
     CASH_RECIPES,
-    CASH_RISK_RECIPE,
     TECHNICAL_PROFIT_RECIPES,
     pacing_config,
     recipe_exit,
@@ -203,7 +203,7 @@ def trade_context(profile, signal, entry):
         "deadline": (at + timedelta(minutes=15)).isoformat(),
         "exit_basis": "option_premium",
         "profile": profile,
-        "risk_recipe": CASH_RISK_RECIPE,
+        "risk_recipe": STRUCTURE_RECIPE,
         "risk_policy_version": current_policy().version,
         "pacing": pacing_config(),
     }
@@ -384,14 +384,16 @@ def require_option_liquidity(leg, context, client):
         raise WaitingForSignal("Option liquidity needs at least 10 lots in the completed candle")
 
 
-def protect_leg(leg, context, client):
+def protect_leg(leg, context, client, *, now=None):
     """New contexts preserve technical stops; recorded contexts retain their recipe."""
     from services.strategy_module.symbol_resolver import _parse_expiry
 
     expiry = _parse_expiry(leg["expiry"])
     if expiry is None:
         raise ValueError("Option expiry is unavailable")
-    days = (expiry - datetime.now(IST).date()).days
+    clock = (lambda: now) if now is not None else (lambda: datetime.now(IST))
+    now = clock()
+    days = (expiry - now.date()).days
     profile = context.get("profile", "ema915")
     minimum_days = 1 if profile in ITM_PROFILES else 0
     if not minimum_days <= days <= 7 or leg.get("expiry_fallback"):
@@ -399,6 +401,8 @@ def protect_leg(leg, context, client):
     quantity = int(leg["quantity"])
     if quantity <= 0 or quantity != int(leg["lot_size"]):
         raise ValueError("Scalping requires exactly one option lot")
+    if context.get("risk_recipe") == STRUCTURE_RECIPE:
+        return _protect_structure_leg(leg, context, client, now, clock)
     if context.get("risk_recipe") in TECHNICAL_PROFIT_RECIPES:
         from services.strategy_module.executable_price import executable_quote
         premium = float(executable_quote(leg, client.get_quotes(leg["symbol"], leg["exchange"])).ask)
@@ -440,6 +444,41 @@ def protect_leg(leg, context, client):
     return leg
 
 
+def _protect_structure_leg(leg, context, client, now, clock):
+    from services.indicator_service import fetch_history_cached
+    from services.strategy_module.executable_price import executable_quote
+
+    signal = datetime.fromisoformat(context["signal_at"])
+    if signal.tzinfo is None or not 0 <= (now-signal).total_seconds() <= 55:
+        raise ValueError("Signal expired before option stop evaluation")
+    response = fetch_history_cached(client, leg["symbol"], leg["exchange"], "1m",
+                                    signal.date().isoformat(), now.date().isoformat(), now=now)
+    if not response or response.get("status") != "success":
+        raise ValueError("Completed option history unavailable; cannot establish a protective stop")
+    frame = closed_frame(response.get("data") or [], "1m", now)
+    # Never let a forming or later option candle alter this signal's structure.
+    frame = frame.loc[frame.index <= signal].tail(3)
+    candles = [{"closed_at": at.isoformat(), **row.to_dict()} for at, row in frame.iterrows()]
+    if context.get("profile") in {"box15", "regime50200"}:
+        require_option_liquidity(leg, context, client)
+    response = client.get_quotes(leg["symbol"], leg["exchange"])
+    checked_at = clock()
+    if not 0 <= (checked_at-signal).total_seconds() <= 55:
+        raise ValueError("Signal expired during option stop evaluation")
+    quote = executable_quote(leg, response, now=checked_at)
+    plan = structure_plan(leg, candles, context["signal_at"], quote.ask, quote.bid)
+    distance = quote.ask - Decimal(plan["stop_price"])
+    leg.update(sl_pts=float(distance), target_pts=None, initial_stop_price=float(plan["stop_price"]),
+               trail={}, risk_unit="points")
+    context.update(structure=plan, gross_planned_risk=float(plan["planned_gross_loss"]),
+                   premium_stop_points=float(distance), premium_target_points=None,
+                   option_symbol=leg["symbol"],
+                   structure_contract={k: leg[k] for k in ("symbol", "exchange", "position", "quantity",
+                                                          "lot_size", "tick_size", "initial_stop_price")})
+    leg["scalp_context"] = dict(context)
+    return leg
+
+
 def exit_reason(context, now, price):
     if now >= datetime.fromisoformat(context["deadline"]):
         return "scheduler"
@@ -456,6 +495,19 @@ def exit_reason(context, now, price):
     if decision.breached:
         return "overall_sl" if decision.reason.value == "sl" else "overall_target"
     return None
+
+
+def pending_structure_expired(context, orders, now):
+    """Expire unfilled remainders; the stop reconciler owns cancellation/fill races."""
+    from services.strategy_module.recovery import order_is_working
+
+    if context.get("risk_recipe") != STRUCTURE_RECIPE:
+        return False
+    stamp = datetime.fromisoformat(context["signal_at"])
+    return (now-stamp).total_seconds() > 55 and any(
+        order.get("kind") == "entry" and order_is_working(order.get("status"))
+        for order in orders
+    )
 
 
 def monitor(*, deadlines_only=False):
@@ -489,7 +541,10 @@ def monitor(*, deadlines_only=False):
     # for every due run; the existing stop reconciler owns all order I/O.
     for run_id, context, connection_id, owner in rows:
         try:
-            reason = exit_reason(context, datetime.now(IST), None) if context else "error"
+            now = datetime.now(IST)
+            reason = exit_reason(context, now, None) if context else "error"
+            if not reason and pending_structure_expired(context, store.list_orders(run_id), now):
+                reason = "scheduler"
             if not deadlines_only and not reason and context.get("exit_basis") != "option_premium":
                 client = FlowOpenAlgoClient(engine._api_key_for(owner))
                 client.broker_connection_id = connection_id

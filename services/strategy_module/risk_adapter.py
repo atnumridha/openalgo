@@ -119,6 +119,8 @@ def leg_to_position_risk(leg: dict[str, Any]) -> PositionRisk:
     sl_pts = _in_points(leg.get("sl_pts"), scale)
     target_pts = _in_points(leg.get("target_pts"), scale)
     initial_stop = stop_from_points(side, entry, sl_pts) if sl_pts else None
+    if leg.get("initial_stop_price") is not None:
+        initial_stop = float(leg["initial_stop_price"])
     configured_target = target_from_points(side, entry, target_pts) if target_pts else None
 
     trail_x = _in_points(leg.get("trail_x"), scale) or 0.0
@@ -129,7 +131,9 @@ def leg_to_position_risk(leg: dict[str, Any]) -> PositionRisk:
         side=side,
         entry_price=entry,
         quantity=float(leg.get("qty") or 0.0),
-        stop_price=leg.get("effective_sl") if leg.get("effective_sl") is not None else initial_stop,
+        stop_price=(max(initial_stop, float(leg["effective_sl"]))
+                    if leg.get("initial_stop_price") is not None and leg.get("effective_sl") is not None and side == "BUY"
+                    else leg.get("effective_sl") if leg.get("effective_sl") is not None else initial_stop),
         initial_stop_price=initial_stop,
         target_price=(
             leg.get("effective_target")

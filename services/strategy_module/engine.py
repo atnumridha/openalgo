@@ -410,7 +410,11 @@ def start_run(
         try:
             scalping.protect_leg(resolved[0], scalp_context, client)
         except (ValueError, KeyError, TypeError) as exc:
+            _emit(strategy_id, user_id, "entry_setup_rejected", str(exc), severity="warn", mode=mode,
+                  payload={"profile": strategy.get("scalp_profile"), "signal_at": scalp_context.get("signal_at")})
             return StartResult(ok=False, error=str(exc))
+        _emit(strategy_id, user_id, "entry_plan", "Option stop plan prepared; funding and risk checks still required",
+              mode=mode, payload={"profile": strategy.get("scalp_profile"), "context": scalp_context})
 
     if mode == "live":
         allowed, error = live_authorization.require_live_entry(user_id)
@@ -1009,17 +1013,7 @@ def _place_entries(
             )
 
         action = _position_to_action(leg["position"])
-        order = order_dispatch.build_order(
-            symbol=leg["symbol"],
-            exchange=leg["exchange"],
-            action=action,
-            quantity=leg["quantity"],
-            product=strategy.get("product", "NRML"),
-            strategy_name=strategy.get("name", ""),
-            pricetype=strategy.get("pricetype", "MARKET"),
-            protective_stop_required=mode == "live",
-            protective_stop_loss_points=leg.get("sl_pts"),
-        )
+        order = order_dispatch.managed_entry_order(strategy, leg, mode)
         if mode == "live":
             order["_strategy_broker"] = "kotak"
             order["_strategy_connection_id"] = str(strategy.get("broker_connection_id") or "")
@@ -1041,7 +1035,8 @@ def _place_entries(
                 # From the order, not from the strategy: build_order
                 # translates the product to the venue, so these can differ.
                 "product": order.get("product"),
-                "pricetype": strategy.get("pricetype", "MARKET"),
+                "pricetype": order["pricetype"],
+                "price": float(order["price"]),
                 "status": "pending",
                 "position_ref": leg.get("position_ref"),
             },

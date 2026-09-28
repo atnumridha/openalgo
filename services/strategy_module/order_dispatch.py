@@ -166,6 +166,32 @@ def build_order(
     }
 
 
+def managed_entry_order(strategy: dict, leg: dict, mode: str) -> dict:
+    """Build a funded entry without exceeding its governor-reserved price."""
+    from services.risk.option_structure import STRUCTURE_RECIPE, positive
+
+    bounded = mode == "live" or (leg.get("scalp_context") or {}).get("risk_recipe") == STRUCTURE_RECIPE
+    price = 0
+    if bounded:
+        try:
+            price = positive(leg.get("admission_entry_price"))
+        except ValueError as exc:
+            raise ValueError("Entry requires its reserved price before dispatch") from exc
+    position = str(leg.get("position", "")).upper()
+    if position not in {"B", "S"}:
+        raise ValueError("Entry position must be B or S")
+    order = build_order(
+        symbol=leg["symbol"], exchange=leg["exchange"],
+        action="BUY" if position == "B" else "SELL", quantity=leg["quantity"],
+        product=strategy.get("product", "NRML"), strategy_name=strategy.get("name", ""),
+        pricetype="LIMIT" if bounded else strategy.get("pricetype", "MARKET"), price=price,
+        protective_stop_required=mode == "live", protective_stop_loss_points=leg.get("sl_pts"),
+    )
+    if (leg.get("scalp_context") or {}).get("risk_recipe") == STRUCTURE_RECIPE:
+        order["_strategy_initial_stop"] = str(positive(leg.get("initial_stop_price")))
+    return order
+
+
 def exit_action(position: str) -> str:
     """The action that closes a leg.
 
@@ -245,13 +271,7 @@ def dispatch_order(
         if refusal:
             return DispatchResult(ok=False, error=refusal)
     if mode == "sandbox":
-        if intent == "entry" and scalp_metadata:
-            from services.strategy_module.scalping import dispatch_reason
-
-            refusal = dispatch_reason(scalp_metadata, mode)
-            if refusal:
-                return DispatchResult(ok=False, error=refusal)
-        return _dispatch_sandbox(api_key, order)
+        return _dispatch_sandbox(api_key, order, scalp_metadata=scalp_metadata if intent == "entry" else None)
     if mode == "live":
         expected_broker = str(order.get("_strategy_broker") or "").lower()
         expected_connection_id = str(order.get("_strategy_connection_id") or "")
@@ -313,6 +333,28 @@ def _limit_price_from_quote(
         return None
 
 
+def _structure_quote_reason(order, auth_token, broker):
+    """Revalidate an immutable option stop against the latest executable bid."""
+    if "_strategy_initial_stop" not in order:
+        return None
+    from services.risk.option_structure import positive
+    from services.strategy_module import portfolio_governor
+
+    try:
+        stop = positive(order["_strategy_initial_stop"])
+        if order.get("action") != "BUY":
+            return "Option structure requires a long entry"
+        bid = portfolio_governor._quote_price(
+            {"symbol": order["symbol"], "exchange": order["exchange"],
+             "quantity": order["quantity"], "position": "S"}, auth_token, broker,
+        )
+        if bid is None or bid <= stop:
+            return "Option structure stop is crossed or its executable quote is unavailable"
+    except (ValueError, TypeError, KeyError):
+        return "Option structure stop evidence is invalid"
+    return None
+
+
 def bounded_live_entry_order(
     order: dict[str, Any], auth_token: str, broker: str
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -344,6 +386,9 @@ def bounded_live_entry_order(
     )
     if cap is None:
         return None, "No marketable contract tick fits the bounded entry price"
+    refusal = _structure_quote_reason(order, auth_token, broker)
+    if refusal:
+        return None, refusal
     bounded = dict(order)
     bounded.update(pricetype="LIMIT", price=format(cap, "f"), trigger_price="0")
     return bounded, None
@@ -640,9 +685,21 @@ def fetch_account_snapshot(*, mode: str, api_key: str) -> AccountSnapshotResult:
     )
 
 
-def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
+def _dispatch_sandbox(api_key: str, order: dict[str, Any], *, scalp_metadata=None) -> DispatchResult:
     from services.sandbox_service import sandbox_place_order
 
+    if "_strategy_initial_stop" in order:
+        auth_token, broker, error = resolve_live_auth(api_key)
+        refusal = error or _structure_quote_reason(order, auth_token, broker)
+        if refusal:
+            return DispatchResult(ok=False, error=refusal)
+    if scalp_metadata:
+        from services.strategy_module.scalping import dispatch_reason
+
+        refusal = dispatch_reason(scalp_metadata, "sandbox")
+        if refusal:
+            return DispatchResult(ok=False, error=refusal)
+    order = {key: value for key, value in order.items() if not key.startswith("_strategy_")}
     original = dict(order)
     original["apikey"] = api_key
     try:

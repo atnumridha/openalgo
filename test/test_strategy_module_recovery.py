@@ -2839,6 +2839,40 @@ def test_scalp_recovery_without_checkpoint_preserves_premium_exit(profile, targe
         assert decision.reason.value == "target"
 
 
+@pytest.mark.parametrize("with_checkpoint", [False, True])
+def test_structure_runner_recovery_keeps_absolute_stop_and_earned_floor(with_checkpoint):
+    from services.risk.option_structure import structure_plan, STRUCTURE_RECIPE
+    from services.risk.profit_exit import profit_config
+    from services.strategy_module.risk_adapter import evaluate_leg
+    from test_scalp_execution_contract import contract, bars, SIGNAL
+    from test_trading_research import fees
+
+    instrument = contract(symbol=CE, quantity=75, lot_size=75)
+    plan = structure_plan(instrument, bars(), SIGNAL.isoformat(), "40", "39.95")
+    instrument["initial_stop_price"] = float(plan["stop_price"])
+    sid = _strategy(legs=[_leg(position="B")], scalp_profile="ema915")
+    run_id = _run(sid)
+    store.get_run(run_id).scalp_context = {
+        "profile": "ema915", "risk_recipe": STRUCTURE_RECIPE,
+        "premium_stop_points": 0.55, "premium_target_points": None,
+        "structure": plan, "structure_contract": instrument,
+        "profit_protection": profit_config(instrument, fees(), recipe=STRUCTURE_RECIPE),
+    }
+    store.db_session.commit()
+    _order(run_id, action="BUY", avg=40.2, qty=75, filled_qty=75, position_ref="structure-position")
+    if with_checkpoint:
+        _checkpoint(run_id, {"1": _cp_leg(position="B", qty=75, sl_pts=0.55,
+                     target_pts=None, effective_sl=41, effective_target=None,
+                     position_ref="structure-position")})
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok, recovered.error
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["initial_stop_price"] == 39.45
+    decision = evaluate_leg(leg, 41.1)
+    assert decision.stop_price == (41 if with_checkpoint else 39.45)
+    assert decision.target_price is None
+
+
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('with_checkpoint', [False, True])
 def test_ml_recovery_keeps_persisted_exit_geometry_and_deadline(legacy, with_checkpoint):

@@ -773,8 +773,24 @@ def _recover_run(run_id: int) -> RecoveredRun:
                 protection = validate_profit_config(protection)
             except ValueError as exc:
                 raise _ManagedRecoveryError("Persisted profit protection is unavailable") from exc
+        from services.risk.option_structure import STRUCTURE_RECIPE, validate_structure
+        structure_stop = None
+        if scalp_context.get("risk_recipe") == STRUCTURE_RECIPE:
+            try:
+                instrument = scalp_context.get("structure_contract")
+                plan = validate_structure(instrument, scalp_context.get("structure"))
+                if protection["version"] != STRUCTURE_RECIPE or target is not None:
+                    raise ValueError("Structure runner protection changed")
+                for order in orders:
+                    if order.get("kind") == "entry" and (order.get("symbol") != plan["symbol"] or order.get("exchange") != plan["exchange"]):
+                        raise ValueError("Structure stop belongs to a different contract")
+                structure_stop = float(plan["stop_price"])
+            except (ValueError, TypeError, KeyError) as exc:
+                raise _ManagedRecoveryError("Persisted option structure is unavailable or inconsistent") from exc
         for leg in config_legs.values():
             leg.update(sl_pts=stop, target_pts=target, trail={}, risk_unit="points", profit_protection=protection)
+            if structure_stop is not None:
+                leg["initial_stop_price"] = structure_stop
 
     rebuilt = _rebuild_state(
         run_id,
@@ -1508,6 +1524,7 @@ def _rebuild_legacy_leg(
         # Risk levels
         "profit_protection": config_leg.get("profit_protection", cp_leg.get("profit_protection")),
         "sl_pts": sl_pts,
+        "initial_stop_price": config_leg.get("initial_stop_price", cp_leg.get("initial_stop_price")),
         "target_pts": target_pts,
         "trail_x": trail_x,
         "trail_y": trail_y,

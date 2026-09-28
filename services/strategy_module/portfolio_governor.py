@@ -1015,6 +1015,11 @@ def _entry_price(
     policy: GovernorPolicy | None = None,
 ) -> Decimal | None:
     executable = _quote_price(leg, auth_token, broker, policy=policy)
+    if leg.get("initial_stop_price") is not None:
+        stop = _decimal(leg["initial_stop_price"])
+        bid = _quote_price({**leg, "position": "S"}, auth_token, broker, policy=policy)
+        if stop is None or stop <= 0 or bid is None or bid <= stop:
+            return None
     if executable is None or mode != "live":
         return executable
     from services.strategy_module.order_dispatch import _limit_price_from_quote
@@ -1108,6 +1113,12 @@ def _quote_price(
 
 
 def _risk_distance(leg: dict[str, Any], price: Decimal | None, field: str) -> Decimal | None:
+    if field == "sl_pts" and leg.get("initial_stop_price") is not None:
+        stop = _decimal(leg.get("initial_stop_price"))
+        if price is None or stop is None or stop <= 0:
+            return None
+        distance = price - stop if str(leg.get("position") or "").upper() == "B" else stop - price
+        return distance if distance > 0 else None
     configured = _decimal(leg.get(field))
     if configured is None or configured <= 0:
         return None
@@ -1447,6 +1458,9 @@ def _session_history(
             run_row = store.get_run(run_id)
             if run_row is None:
                 continue
+            strategy = store.get_strategy_unscoped(run_row.strategy_id)
+            if strategy is None or str(strategy.user_id) != str(user_id):
+                continue
             if _row_value(run_row, "mode") != mode:
                 continue
             if broker and not _row_value(run_row, "broker"):
@@ -1456,9 +1470,6 @@ def _session_history(
             started = _parse_datetime(_row_value(run_row, "started_at"))
             if started is None or session.session_day(started) != session_day:
                 return None, None, None
-            strategy = store.get_strategy_unscoped(run_row.strategy_id)
-            if strategy is None or str(strategy.user_id) != str(user_id):
-                continue
             history_run_ids.append(int(run_id))
             snapshot = state.get_run_state(run_id)
             if snapshot is None:
@@ -1615,6 +1626,7 @@ def build_entry_facts(
     entry_exchanges: set[str] = set()
 
     for raw_leg in resolved_legs:
+        raw_leg.pop("admission_entry_price", None)
         leg = dict(raw_leg)
         quantity = _decimal(leg.get("quantity") or leg.get("qty"))
         if quantity is None or quantity <= 0:
@@ -1653,7 +1665,16 @@ def build_entry_facts(
         reward_ratio = target_distance / stop_distance if target_distance is not None and stop_distance else None
         profile = _strategy_value(strategy, "scalp_profile", None)
         index = leg.get("scalp_context")
-        if profile in {"ema915", "macd200", "ema5", "regime50200"} and isinstance(index, dict) and index.get("profile") == profile:
+        from services.risk.option_structure import STRUCTURE_RECIPE, objective_ratio
+        if isinstance(index, dict) and index.get("risk_recipe") == STRUCTURE_RECIPE:
+            try:
+                if profile not in {"ema915", "macd200", "ema5", "regime50200", "box15", "sma_macd", "bollinger"} or index.get("profile") != profile or len(resolved_legs) != 1 or not is_nifty_option or position != "B":
+                    raise ValueError("Invalid managed option runner")
+                reward_ratio = objective_ratio(leg, price)
+                reward_risk_basis = "option_premium_objective"
+            except (ValueError, TypeError):
+                reward_ratio = None
+        elif profile in {"ema915", "macd200", "ema5", "regime50200"} and isinstance(index, dict) and index.get("profile") == profile:
             values = [_decimal(index.get(key)) for key in ("entry", "stop", "target")]
             direction = index.get("direction")
             if (all(value is not None and value > 0 for value in values)
@@ -1669,6 +1690,9 @@ def build_entry_facts(
             entry_risk = None
             reward_risks = []
             break
+        # Carry the exact adverse price used for this reservation into the
+        # order. Re-quoting here or sending MARKET would invalidate its budget.
+        raw_leg["admission_entry_price"] = str(price)
         reward_risks.append(reward_ratio)
         leg_risk = stop_distance * quantity
         entry_risk += leg_risk

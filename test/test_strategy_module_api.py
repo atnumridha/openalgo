@@ -613,6 +613,26 @@ class TestUpdate:
 # ------------------------------------------------------------------------ delete
 
 
+@pytest.fixture
+def isolated_delete_flows(tmp_path, monkeypatch):
+    """Deletion reads Flow too; never depend on another module's saved test DB."""
+    from database import flow_db
+
+    original_bind = flow_db.db_session().get_bind()
+    engine = create_db_engine(f"sqlite:///{tmp_path}/delete-flows.db")
+    flow_db.db_session.remove()
+    flow_db.db_session.configure(bind=engine)
+    monkeypatch.setattr(flow_db, "engine", engine)
+    flow_db.Base.metadata.create_all(engine)
+    try:
+        yield
+    finally:
+        flow_db.db_session.remove()
+        flow_db.db_session.configure(bind=original_bind)
+        engine.dispose()
+
+
+@pytest.mark.usefixtures("isolated_delete_flows")
 class TestDelete:
     def test_trigger_teardown_failure_preserves_strategy(self, client, monkeypatch):
         from database import flow_db

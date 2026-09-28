@@ -191,6 +191,7 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "risk_unit": leg.get("risk_unit") or "points",
         "profit_protection": leg.get("profit_protection"),
         "sl_pts": leg.get("sl_pts"),
+        "initial_stop_price": leg.get("initial_stop_price"),
         "target_pts": leg.get("target_pts"),
         "trail_x": (leg.get("trail") or {}).get("x") or 0,
         "trail_y": (leg.get("trail") or {}).get("y") or 0,

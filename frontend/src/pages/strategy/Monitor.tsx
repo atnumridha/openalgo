@@ -14,10 +14,10 @@ import {
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import {
+  type AutomationMonitor,
   emergencyStopAutomation,
   getAutomationLogs,
   getAutomationMonitor,
-  type AutomationMonitor,
   type LogStream,
   type MonitorStrategy,
   type StopResult,
@@ -227,10 +227,9 @@ export default function Monitor() {
         </div>
       )}
       {result && (
-        <div
-          role="status"
+        <output
           className={cn(
-            'rounded-lg border p-4 text-sm',
+            'block rounded-lg border p-4 text-sm',
             result.all_stopped ? 'border-emerald-500/30' : 'border-amber-500/50 bg-amber-500/5'
           )}
         >
@@ -251,7 +250,7 @@ export default function Monitor() {
               </li>
             ))}
           </ul>
-        </div>
+        </output>
       )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {[
@@ -406,7 +405,7 @@ export default function Monitor() {
               {current.last_risk_rejection && (
                 <details className="rounded-lg border border-amber-500/30 p-3 text-sm">
                   <summary className="cursor-pointer font-medium">
-                    Latest risk rejection · {stamp(current.last_risk_rejection.at)}
+                    Latest entry rejection · {stamp(current.last_risk_rejection.at)}
                   </summary>
                   <p className="mt-2">{current.last_risk_rejection.message}</p>
                   <Json value={current.last_risk_rejection.details} />
@@ -514,6 +513,7 @@ function Decision({
     !recorded ||
     clock - recorded > Math.max(95000, (row.interval_seconds ?? 60) * 2000 + 15000)
   const risk = data.risk?.[row.mode]
+  const plan = row.entry_plan?.details?.context?.structure
   return (
     <div className="space-y-4">
       <div className="rounded-xl border bg-card p-5">
@@ -661,6 +661,30 @@ function Decision({
           </>
         )}
       </div>
+      {plan && (
+        <div className="rounded-xl border bg-card p-5">
+          <h3 className="font-semibold">Recorded option entry plan</h3>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Recorded {stamp(row.entry_plan?.at ?? null)}. Not an admission or a fill. Funding,
+            costs, quote freshness and risk checks must still pass. This may describe an older
+            signal.
+          </p>
+          <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+            <Fact label="Option contract">{plan.symbol}</Fact>
+            <Fact label="Quoted entry premium">₹{plan.entry_price}</Fact>
+            <Fact label="Absolute initial stop">₹{plan.stop_price}</Fact>
+            <Fact label="Planned loss before fees and slippage">₹{plan.planned_gross_loss}</Fact>
+          </dl>
+          <p className="mt-4 text-sm">
+            {plan.objective_r}R planning objective · no hard profit ceiling. The governor reserves
+            against the executable entry cap and original stop; actual fills and returns may differ.
+          </p>
+          <details className="mt-3 text-sm">
+            <summary className="cursor-pointer">Option candles and complete plan</summary>
+            <Json value={row.entry_plan?.details} />
+          </details>
+        </div>
+      )}
       <details className="rounded-xl border bg-card p-5" open>
         <summary className="cursor-pointer font-semibold">Exact implemented entry rules</summary>
         <ol className="mt-4 list-decimal space-y-3 pl-5 text-sm leading-relaxed">
@@ -709,10 +733,12 @@ function Decision({
           </p>
         )}
         <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
-          Current managed scalp recipe preserves the technical stop and rejects a whole lot that
-          does not fit the account risk limit. Profit protection starts at ₹300 gross profit, locks
-          at least ₹100, then trails with up to ₹300 planned giveback. Costs and slippage affect the
-          realised result; the order and fill logs are authoritative.
+          New managed scalp entries place the stop one tick below the lowest low of three completed
+          one-minute option candles. The stop stays fixed through a fill and only moves upward as
+          profit protection is earned. The system rejects a whole lot that does not fit the account
+          risk limit. Profit protection starts at ₹300 gross profit, locks at least ₹100, then
+          trails with up to ₹300 planned giveback. Costs and slippage affect the realised result;
+          the order and fill logs are authoritative.
         </p>
         {row.checkpoint ? (
           <details className="mt-4" open>

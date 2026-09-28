@@ -124,7 +124,8 @@ def test_expired_signal_is_rejected_after_dispatch_quote_work(monkeypatch):
     monkeypatch.setattr(
         qualification_execution, "before_dispatch", lambda *a: calls.append("quote") or None
     )
-    monkeypatch.setattr(order_dispatch, "_dispatch_sandbox", lambda *a: calls.append("order"))
+    from services import sandbox_service
+    monkeypatch.setattr(sandbox_service, "sandbox_place_order", lambda *a: calls.append("order"))
     result = order_dispatch.dispatch_order(
         mode="sandbox",
         api_key="key",
@@ -308,3 +309,21 @@ def test_live_signal_expiry_checked_after_final_quote(monkeypatch):
     )
     assert not result.ok and "expired" in result.error
     assert calls == ["quote"]
+
+
+def test_deadline_monitor_cancels_expired_structure_entry_remainder(saved_scalp, monkeypatch):
+    from database import strategy_module_db as store
+    from services.strategy_module import engine
+    from services.risk.option_structure import STRUCTURE_RECIPE
+    owner, strategy, _, _ = saved_scalp
+    now = datetime.now(IST)
+    context = {"risk_recipe": STRUCTURE_RECIPE,
+               "signal_at": (now-timedelta(seconds=60)).isoformat(),
+               "deadline": (now+timedelta(minutes=14)).isoformat()}
+    run = store.create_run(strategy["id"], "sandbox", "sandbox", scalp_context=context)
+    run_id = run.id
+    monkeypatch.setattr(store, "list_orders", lambda _: [{"kind": "entry", "status": "open", "filled_qty": 20}])
+    monkeypatch.setattr(engine, "_api_key_for", lambda *a: pytest.fail("Deadline check must not wait for broker IO"))
+    scalping.monitor_deadlines()
+    store.db_session.remove()
+    assert store.get_run(run_id).stop_requested_reason == "scheduler"

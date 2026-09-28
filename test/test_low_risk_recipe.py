@@ -211,7 +211,7 @@ def test_new_scalp_context_uses_option_target_and_keeps_deadline():
         100,
     )
     assert context["exit_basis"] == "option_premium"
-    assert context["risk_recipe"] == CASH_RISK_RECIPE
+    assert context["risk_recipe"] == "one-lot-option-structure-runner-v5"
     assert exit_reason(context, datetime.fromisoformat("2026-01-01T10:01:00+05:30"), 110) is None
     assert (
         exit_reason(context, datetime.fromisoformat("2026-01-01T10:15:00+05:30"), 110)

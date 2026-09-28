@@ -1,5 +1,9 @@
 # Strategy and rule review — 28 September 2026
 
+## Resolution
+
+The execution findings below are corrected by the subsequent [risk consistency implementation](2026-09-28-risk-consistency-fixes.md). The observations and original recommendations remain here as historical evidence. Entry indicators and their signal-frequency restrictions are unchanged.
+
 ## What was verified
 
 The running account has seven armed **Sandbox** strategies, all with live opt-in off. Every strategy completed scheduled checks at 09:38 and 09:47 IST. There were no managed runs when inspected. Bollinger reached entry admission at **09:35 and 09:40**, and the saved governor rejection reported `minimum_reward_risk = 1.126016260162601626016260163`. Thus “nothing started” includes both legitimate no-signal checks and concrete rejected entry attempts.

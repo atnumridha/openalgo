@@ -14,7 +14,9 @@ from services.risk.profit_exit import (
 
 FIXED_CASH_RECIPE = "one-lot-cash300-3r-v1"
 CASH_RISK_RECIPE = PROFIT_LOCK_RECIPE
-CASH_RECIPES = (FIXED_CASH_RECIPE, *PROFIT_RECIPES)
+# v5 needs broker option-candle structure. Generic historical/ML recipes do not
+# reproduce that entry plan and must not silently relabel their old geometry.
+CASH_RECIPES = (FIXED_CASH_RECIPE, PROFIT_RECIPE, TECHNICAL_PROFIT_RECIPE, PROFIT_LOCK_RECIPE)
 _RECIPE_POLICIES = {
     FIXED_CASH_RECIPE: "shared-300-3r-v1",
     PROFIT_RECIPE: "shared-300-3r-v1",

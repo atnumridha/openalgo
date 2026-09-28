@@ -349,6 +349,20 @@ def test_previous_rejection_remains_visible_after_no_signal_success(db, monkeypa
     assert row["last_failure"]["message"] == "Risk budget exhausted"
 
 
+def test_option_stop_plan_and_setup_rejection_remain_visible(db, monkeypatch):
+    from services.strategy_module import monitor
+    sid, wid = seed()
+    store.record_event(sid, "alice", "entry_plan", "Stop prepared",
+                       payload={"context": {"structure": {"stop_price": "39.45"}}, "token": "hidden"})
+    store.record_event(sid, "alice", "entry_setup_rejected", "Option candles missing")
+    execution(wid)
+    scheduler(monkeypatch)
+    row = monitor.overview("alice", now=NOW)["strategies"][0]
+    assert row["entry_plan"]["details"]["context"]["structure"]["stop_price"] == "39.45"
+    assert row["entry_plan"]["details"]["token"] == "[redacted]"
+    assert row["last_risk_rejection"]["message"] == "Option candles missing"
+
+
 def test_signal_snapshot_and_events_are_owner_scoped_and_redacted(client, monkeypatch):
     from services.strategy_module import monitor
 

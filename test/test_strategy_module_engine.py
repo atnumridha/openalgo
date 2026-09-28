@@ -2146,15 +2146,18 @@ def test_live_batch_holds_portfolio_admission_until_exposure_is_visible(api_key)
         assert admission.released is False
         return DispatchResult(ok=True, broker_order_id="LIVE-ADMITTED", response={})
 
+    def admitted(*args, **kwargs):
+        # The admission fixture must supply the cap a real governor reserves.
+        for leg in args[2]:
+            leg["admission_entry_price"] = "101.00"
+        return GovernorDecision(True, "entry_allowed", "allowed"), admission
+
     try:
         with (
             patch.object(
                 portfolio_governor,
                 "acquire_entry_admission",
-                return_value=(
-                    GovernorDecision(True, "entry_allowed", "allowed"),
-                    admission,
-                ),
+                side_effect=admitted,
             ) as acquire,
             patch.object(
                 portfolio_governor,
