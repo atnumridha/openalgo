@@ -1200,6 +1200,26 @@ def test_execution_records_its_start_time(flow_database):
     assert execution.started_at is not None
 
 
+def test_empty_retention_releases_write_lock_before_workflow_runs(flow_database):
+    """A zero-row DELETE must not lock research/other flows during broker calls."""
+    import sqlite3
+
+    workflow = flow_database.create_workflow("empty retention lock", nodes=[], edges=[])
+    execution = flow_database.create_execution(workflow.id, status="running")
+    assert execution is not None
+    # A distinct raw connection models another process. Bypass the cooperative
+    # retry wrapper so a leaked writer fails promptly instead of waiting 15s.
+    peer = sqlite3.connect(
+        flow_database.engine.url.database, timeout=0.1, factory=sqlite3.Connection
+    )
+    try:
+        peer.execute("BEGIN IMMEDIATE")
+        peer.rollback()
+    finally:
+        peer.close()
+        flow_database.db_session.rollback()
+
+
 def test_execution_history_is_newest_first(flow_database):
     workflow = flow_database.create_workflow("ordering test", nodes=[], edges=[])
     for _ in range(5):

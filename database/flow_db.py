@@ -731,8 +731,10 @@ def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
                     or 0
                 )
 
+        # Even a DELETE matching zero rows acquires SQLite's writer lock.
+        # Release it before the workflow makes potentially slow broker calls.
+        db_session.commit()
         if deleted:
-            db_session.commit()
             logger.info(
                 f"Pruned {deleted} execution(s) for workflow {workflow_id} "
                 f"(keep newest {max_count}, max age {max_age_days}d)"

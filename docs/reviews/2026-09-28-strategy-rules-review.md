@@ -10,6 +10,22 @@ This is a code and current-evidence review, not a new profitability or accuracy 
 
 ## Findings
 
+### P1 — Empty history cleanup retained a database write lock (fixed)
+
+`database/flow_db.py::prune_workflow_executions` executed an age-based DELETE
+but committed only when rows were deleted. SQLite acquires a writer lock even
+when DELETE matches zero rows. The transaction therefore stayed open while
+the workflow fetched market history, blocking concurrent strategy executions,
+signal-audit writes and the research worker lease. This reproduced the runtime
+`database is locked` failures without any external MCP process involved.
+
+**Correction implemented:** always finish the successful retention transaction,
+including zero-row cleanup. A regression through the actual `create_execution`
+path failed before the change and passed afterward: an independent connection
+can acquire the write lock immediately. Retention rules and trading rules are
+unchanged. The expanded backend suite passed 438 tests, with one optional test
+skipped; independent code review found no blocking issues with the correction.
+
 ### P1 — Current stop geometry is generally incompatible with the newer budget
 
 `services/strategy_module/scalping.py::protect_leg` uses 10 option-premium points for Opening Box and `min(₹800 / quantity, 20% of premium)` for the other profiles. The technical profit recipe preserves that distance; it deliberately does not shrink a technical stop to fit the account.
