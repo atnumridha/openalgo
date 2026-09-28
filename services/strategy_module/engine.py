@@ -2696,14 +2696,14 @@ def _daily_loss_breached(
 def _executable_tick_quote(run_id, run_row, user_id, symbol, exchange):
     """Fetch outside the state lock; old recipes retain their recorded tick semantics."""
     from services.flow_openalgo_client import FlowOpenAlgoClient
-    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPE
+    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPES
     from services.strategy_module.executable_price import fetch_executable_quote
 
     snapshot = state.get_run_state(run_id)
     legs = [leg for leg in (snapshot or {}).get("legs", {}).values()
             if leg.get("status") == "open" and leg.get("symbol") == symbol
             and leg.get("exchange") == exchange
-            and (leg.get("profit_protection") or {}).get("version") == TECHNICAL_PROFIT_RECIPE]
+            and (leg.get("profit_protection") or {}).get("version") in TECHNICAL_PROFIT_RECIPES]
     if not legs:
         return None
     key = _api_key_for(user_id)
@@ -2735,7 +2735,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     stop_reason: str | None = None
     events: list[tuple[str, str, dict]] = []
 
-    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPE
+    from services.risk.profit_exit import TECHNICAL_PROFIT_RECIPES
     broker_trails = []
     try:
         executable = _executable_tick_quote(run_id, run_row, user_id, symbol, exchange)
@@ -2760,7 +2760,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
             return
 
         for leg in state.legs_for_symbol(run, symbol, exchange):
-            requires_bid = (leg.get("profit_protection") or {}).get("version") == TECHNICAL_PROFIT_RECIPE
+            requires_bid = (leg.get("profit_protection") or {}).get("version") in TECHNICAL_PROFIT_RECIPES
             if requires_bid and executable is None:
                 continue
             price = float(executable.bid) if requires_bid else ltp

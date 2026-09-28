@@ -9,7 +9,9 @@ from services.risk.position import evaluate_position
 
 PROFIT_RECIPE = "one-lot-cash300-profit-trail-v2"
 TECHNICAL_PROFIT_RECIPE = "one-lot-technical-profit-trail-v3"
-PROFIT_RECIPES = (PROFIT_RECIPE, TECHNICAL_PROFIT_RECIPE)
+PROFIT_LOCK_RECIPE = "one-lot-technical-profit-lock-v4"
+TECHNICAL_PROFIT_RECIPES = (TECHNICAL_PROFIT_RECIPE, PROFIT_LOCK_RECIPE)
+PROFIT_RECIPES = (PROFIT_RECIPE, *TECHNICAL_PROFIT_RECIPES)
 
 
 def profit_config(contract, costs, *, recipe=PROFIT_RECIPE):
@@ -55,7 +57,7 @@ def _break_even(entry, quantity, peak, tick, costs):
 
 
 def evaluate_profit(risk, last_price, config):
-    """Ratchet after INR300 gross, trail from INR600; v3 locks INR900 at INR1000."""
+    """Versioned gross floors; v4 locks INR100 at INR300, then limits giveback to INR300."""
     config = validate_profit_config(config)
     if not risk.is_long or not is_price(risk.entry_price) or not is_price(risk.quantity):
         raise ValueError("Profit protection requires a filled long option position")
@@ -77,6 +79,14 @@ def evaluate_profit(risk, last_price, config):
         gross_floor = max(entry + Decimal(900) / units, peak - Decimal(300) / units)
         milestone = (gross_floor / tick).to_integral_value(rounding=ROUND_CEILING) * tick
         candidate = max(candidate or entry, min(peak, milestone))
+    if config["version"] == PROFIT_LOCK_RECIPE and gross_peak >= 300:
+        # Gross floors are independent of the entry's smaller all-in risk cap.
+        # Rounding up protects at least the floor; the observed peak bounds it.
+        gross_floor = max(Decimal(100), gross_peak - Decimal(300))
+        floor_price = ((entry + gross_floor / units) / tick).to_integral_value(
+            rounding=ROUND_CEILING
+        ) * tick
+        candidate = max(candidate or entry, min(peak, floor_price))
     old = risk.effective_stop
     stop = old if candidate is None else max(old or 0, float(candidate))
     decision = evaluate_position(

@@ -161,12 +161,19 @@ def tick_engine(monkeypatch):
     return engine, leg
 
 
-def test_engine_raises_profit_floor_from_bid_instead_of_ltp(tick_engine, monkeypatch):
+@pytest.mark.parametrize(
+    "recipe,floor",
+    [("one-lot-technical-profit-trail-v3", 100), ("one-lot-technical-profit-lock-v4", 101.35)],
+)
+def test_engine_raises_profit_floor_from_bid_instead_of_ltp(
+    tick_engine, monkeypatch, recipe, floor
+):
     from types import SimpleNamespace
 
     from services.strategy_module import live_protection
 
     engine, leg = tick_engine
+    leg["profit_protection"]["version"] = recipe
     # LTP would report INR1500; full-lot bid reports only INR300.
     monkeypatch.setattr(
         engine,
@@ -181,9 +188,9 @@ def test_engine_raises_profit_floor_from_bid_instead_of_ltp(tick_engine, monkeyp
     )
     engine._process_tick_for_run(1, "NIFTYCE", "NFO", 120)
     assert leg["mtm"] == 300
-    assert leg["effective_sl"] == 100
+    assert leg["effective_sl"] == floor
     assert leg["highest_price"] == 104
-    assert ratchets[0]["effective_sl"] == 100
+    assert ratchets[0]["effective_sl"] == floor
 
 
 def test_engine_cannot_raise_stop_from_missing_executable_quote(tick_engine, monkeypatch):

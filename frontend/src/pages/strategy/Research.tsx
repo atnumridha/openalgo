@@ -1197,8 +1197,10 @@ export default function Research() {
                       15-minute maximum holding time. Three consecutive net losses stop new entries for the day.
                       Requires one-minute option bars and contract tick sizes. Technical stops are rounded away
                       from entry; entries that exceed the all-in risk budget are skipped. Profit protection starts
-                      at ₹300 gross. At ₹1,000 gross, protect ₹900; at ₹1,500, protect ₹1,200, then follow the peak
-                      by ₹300. Strong moves can continue beyond ₹1,500 before charges within the holding deadline.
+                      at ₹300 gross by protecting ₹100. At ₹600, protect ₹300; at ₹900, protect ₹600.
+                      The stop rises continuously with at most ₹300 giveback from peak executable profit.
+                      At ₹1,500, protect ₹1,200. Profit can keep growing without a fixed cap, before charges,
+                      within the holding deadline. Stop fills can slip past these levels.
                     </p>
                   )}
                 </div>

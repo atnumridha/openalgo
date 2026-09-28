@@ -17,7 +17,7 @@ from services.risk.budget import current_policy
 from services.risk.cash_exit import (
     CASH_RECIPES,
     CASH_RISK_RECIPE,
-    TECHNICAL_PROFIT_RECIPE,
+    TECHNICAL_PROFIT_RECIPES,
     pacing_config,
     recipe_exit,
 )
@@ -368,7 +368,7 @@ def protect_leg(leg, context, client):
     quantity = int(leg["quantity"])
     if quantity <= 0 or quantity != int(leg["lot_size"]):
         raise ValueError("Scalping requires exactly one option lot")
-    if context.get("risk_recipe") == TECHNICAL_PROFIT_RECIPE:
+    if context.get("risk_recipe") in TECHNICAL_PROFIT_RECIPES:
         from services.strategy_module.executable_price import executable_quote
         premium = float(executable_quote(leg, client.get_quotes(leg["symbol"], leg["exchange"])).ask)
     else:

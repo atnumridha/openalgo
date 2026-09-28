@@ -4,15 +4,22 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
 
 from services.risk.admission import ML_RISK_RECIPE
 from services.risk.budget import SHARED_POLICY_VERSIONS, policy_for_version
-from services.risk.profit_exit import PROFIT_RECIPE, PROFIT_RECIPES, TECHNICAL_PROFIT_RECIPE
+from services.risk.profit_exit import (
+    PROFIT_LOCK_RECIPE,
+    PROFIT_RECIPE,
+    PROFIT_RECIPES,
+    TECHNICAL_PROFIT_RECIPE,
+    TECHNICAL_PROFIT_RECIPES,
+)
 
 FIXED_CASH_RECIPE = "one-lot-cash300-3r-v1"
-CASH_RISK_RECIPE = TECHNICAL_PROFIT_RECIPE
+CASH_RISK_RECIPE = PROFIT_LOCK_RECIPE
 CASH_RECIPES = (FIXED_CASH_RECIPE, *PROFIT_RECIPES)
 _RECIPE_POLICIES = {
     FIXED_CASH_RECIPE: "shared-300-3r-v1",
     PROFIT_RECIPE: "shared-300-3r-v1",
     TECHNICAL_PROFIT_RECIPE: "equity-1pct-v2",
+    PROFIT_LOCK_RECIPE: "equity-1pct-v2",
 }
 
 
@@ -64,7 +71,7 @@ def recipe_exit(entry, technical_distance, contract, recipe):
         entry,
         technical_distance,
         contract,
-        technical=recipe == TECHNICAL_PROFIT_RECIPE,
+        technical=recipe in TECHNICAL_PROFIT_RECIPES,
         runner=recipe in PROFIT_RECIPES,
     )
 

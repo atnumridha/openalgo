@@ -67,7 +67,7 @@ CANDIDATES = [
         "defaults": DEFAULTS,
     },
 ]
-ENGINE_VERSION = "closed-bar-technical-profit-trail-v5"
+ENGINE_VERSION = "closed-bar-profit-lock-v6"
 FILTER_RULES = {
     "fast_bars": 8,
     "slow_bars": 21,

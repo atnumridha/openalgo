@@ -87,4 +87,7 @@ it('shows current cash exits on every card and qualifies the earlier-rule rankin
     expect(card).toHaveTextContent(`Earlier-rule wins: ${winRate} · ${counts} trades`)
   })
   expect(shortlist).toHaveTextContent('before charges')
+  expect(shortlist).toHaveTextContent('At ₹300 gross profit, protect ₹100; at ₹600, protect ₹300; at ₹900, protect ₹600.')
+  expect(shortlist).toHaveTextContent('maximum ₹300 giveback from peak executable profit')
+  expect(shortlist).toHaveTextContent('there is no hard profit cap')
 })

@@ -120,11 +120,15 @@ def test_versioned_profit_ratchets_keep_baseline_and_no_hard_target(recipe):
 def test_default_configuration_binds_new_recipe():
     data, _ = scheduled_data([True])
     config = replay.validate_configuration(data, "trend_breakout_filtered", {}, fees())
-    assert (config["risk_recipe"], config["risk_policy_version"]) == (NEW, NEW_POLICY)
+    assert (config["risk_recipe"], config["risk_policy_version"]) == (
+        exits.CASH_RISK_RECIPE,
+        NEW_POLICY,
+    )
 
 
 @pytest.mark.parametrize("stress", [False, True])
-def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress):
+@pytest.mark.parametrize("recipe", [NEW, exits.CASH_RISK_RECIPE])
+def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress, recipe):
     data, signals = scheduled_data([True])
     data = deepcopy(data)
     for row in data["rows"]:
@@ -134,7 +138,13 @@ def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress):
     data = dataset.validate_dataset(data)
     costs = fees(slippage_bps=0, brokerage_per_order=0)
     config = replay.validate_configuration(
-        data, "trend_breakout_filtered", {}, costs, capital=25000, cooldown_minutes=0
+        data,
+        "trend_breakout_filtered",
+        {},
+        costs,
+        capital=25000,
+        cooldown_minutes=0,
+        risk_recipe=recipe,
     )
     config["research_signal_hash"] = dataset.digest(signals)
     report = replay.run_replay(data, config, stress=stress, research_signals=signals)
@@ -153,7 +163,7 @@ def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress):
         "13:00",
         max_hold_minutes=15,
         capital=25000,
-        risk_recipe=NEW,
+        risk_recipe=recipe,
     )
     live = entry_plan(
         contract,
@@ -161,7 +171,7 @@ def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress):
         atr=0.5,
         costs=effective,
         capital=25000,
-        risk_recipe=NEW,
+        risk_recipe=recipe,
     )
     assert label is not None
     assert (label["net_pnl"], label["exit_at"]) == (trade["net_pnl"], trade["exit_at"])

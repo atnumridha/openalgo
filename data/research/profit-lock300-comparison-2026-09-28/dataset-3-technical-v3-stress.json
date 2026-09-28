@@ -1,0 +1,146 @@
+{
+  "configuration": {
+    "candidate": "trend_breakout_filtered",
+    "capital": 25000,
+    "costs": {
+      "broker": "kotak",
+      "brokerage_per_order": 0.0,
+      "effective_from": "2025-01-01",
+      "effective_to": "2026-07-21",
+      "exchange": "NFO",
+      "exchange_rate": 0.0003553,
+      "gst_rate": 0.18,
+      "schedule_id": "RESEARCH ASSUMPTION: current Kotak charges",
+      "sebi_rate": 1e-06,
+      "slippage_bps": 10.0,
+      "source": "User-approved current Kotak charges applied retrospectively; not historical verified rates. Original saved schedule retained in manifest.",
+      "stamp_buy_rate": 3e-05,
+      "stt_sell_rate": 0.0015
+    },
+    "dataset_hash": "749fd29a6d78f55c0ea52cb1f9dc33a81f549ed300259c40ef0dcbf68f3c715a",
+    "engine_version": "closed-bar-profit-lock-v6",
+    "filters": {
+      "atr_bars": 10,
+      "atr_multiple": 1.5,
+      "fast_bars": 8,
+      "max_expiry_days": 7,
+      "max_premium": 120,
+      "max_stop_pct": 0.25,
+      "max_strike_distance": 500,
+      "min_expiry_days": 1,
+      "min_premium": 20,
+      "min_volume_lots": 10,
+      "slope_bars": 5,
+      "slow_bars": 21
+    },
+    "implementation_hash": "1b0b1207272c462e2c6bf24379c86206051d2a4a0bf27a2b039c689101f7f10a",
+    "max_hold_minutes": 15,
+    "ml_settings": {
+      "estimators": 100,
+      "folds": 3,
+      "max_hold_minutes": 15,
+      "min_train_sessions": 10,
+      "threshold": 0.5
+    },
+    "pacing": {
+      "cooldown_minutes": 5,
+      "daily_trade_cap": null
+    },
+    "parameters": {
+      "lookback": 20,
+      "pullback_tolerance": 0.002,
+      "stop_pct": 0.1,
+      "target_pct": 0.3,
+      "volume_ratio": 1.2
+    },
+    "research_model_hash": "192ceaa57fa20b02645846e5e8310f404994b8881319584cde0c9fb6fbe3778a",
+    "research_signal_hash": "bd6fcced555376d82b95bef756534d07afcdfc4e3c504605f58fcf33cd3e94f3",
+    "risk_policy_version": "equity-1pct-v2",
+    "risk_recipe": "one-lot-technical-profit-trail-v3",
+    "run_kind": "ml",
+    "seed": 42
+  },
+  "observations": {},
+  "report": {
+    "configuration_hash": "6a70bda3c4a06687f39703dd85add8bb52f0f6184de715c62c6e8df2ce507a4d",
+    "incomplete_outcomes": [],
+    "metrics": {
+      "ambiguous_exit_count": 0,
+      "closed_trade_max_drawdown_pct": 0,
+      "daily_stop_count": 0,
+      "drawdown_paused": false,
+      "ending_equity": 25000.0,
+      "equity_mark_convention": "Net liquidation equity at observed opens/closes; adverse lows use the previously observed peak.",
+      "execution_bar_minutes": 1,
+      "expectancy": null,
+      "exposure_bars": 0,
+      "initial_capital": 25000,
+      "max_daily_losing_streak": 0,
+      "max_drawdown_pct": 0.0,
+      "max_losing_streak": 0,
+      "max_observed_open_drawdown_pct": 0.0,
+      "net_pnl": 0,
+      "peak_equity": 25000.0,
+      "profit_factor": null,
+      "profit_factor_unbounded": false,
+      "signal_bar_minutes": 5,
+      "trade_count": 0,
+      "win_rate": null
+    },
+    "pacing": {
+      "cooldown_minutes": 5,
+      "daily_trade_cap": null
+    },
+    "qualification": {
+      "eligible_for_live": false,
+      "reasons": [
+        "Candle screening cannot establish executable bid/ask spreads, market depth, latency or partial fills.",
+        "Verified forward Sandbox evidence and explicit release review are required."
+      ]
+    },
+    "rejections": {
+      "per_trade_risk_exceeded": 322
+    },
+    "risk_policy_version": "equity-1pct-v2",
+    "session_analytics": {
+      "annualization_sessions": 252,
+      "benchmark": null,
+      "convention": "Net closed-trade equity per session, including no-trade sessions; 252-session annualization, zero risk-free rate. Short-window annualization is unstable. No benchmark alpha is inferred.",
+      "metrics": {
+        "cagr": 0.0,
+        "sharpe": null,
+        "sortino": null,
+        "volatility": 0.0
+      },
+      "session_count": 18
+    },
+    "trades": []
+  },
+  "risk_audit": {
+    "all_in_caps_and_nonrefilling_daily_allowance_verified": true,
+    "audited_admissions": 0,
+    "reduced_risk_admissions": 0
+  },
+  "scenario": "stress",
+  "sessions": [
+    "2026-03-25",
+    "2026-03-27",
+    "2026-03-30",
+    "2026-04-01",
+    "2026-04-02",
+    "2026-04-06",
+    "2026-04-07",
+    "2026-04-08",
+    "2026-04-09",
+    "2026-04-10",
+    "2026-04-13",
+    "2026-04-15",
+    "2026-04-16",
+    "2026-04-17",
+    "2026-04-20",
+    "2026-04-21",
+    "2026-04-22",
+    "2026-04-23"
+  ],
+  "variant": "technical-v3"
+}
