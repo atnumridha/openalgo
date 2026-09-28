@@ -41,7 +41,7 @@ Pending exits and failed reconciliation must never be shown as confirmed flat.
   pause log auto-refresh, manual refresh, individual stop and confirmed emergency
   stop with per-strategy outcomes. Test stale data, pagination, cancellation and
   partial/pending results; TypeScript/build and isolated browser verification.
-- [ ] Independent review, integration tests, build, safe publication and verify
+- [x] Independent review, integration tests, build, safe publication and verify
   served assets/API with existing account automation settings unchanged.
 
 ## Progress
@@ -65,3 +65,18 @@ build. Isolated browser QA verified seven-row layout, technical detail, retained
 log expansion/pagination, cancel/typed STOP ALL, and pending/failed closure results.
 No production stop control was invoked. Strategy review findings are in
 `docs/reviews/2026-09-28-strategy-rules-review.md`.
+
+Rollout verification at 10:20 IST: main serves the built bundle, anonymous
+monitor API access redirects to login, and all seven strategies wrote fresh
+technical snapshots with complete histories and no diagnostic errors. The app
+and research worker both report ready. Saved strategy settings, Flow graphs and
+active flags, and capital/policy settings exactly match the pre-rollout snapshot.
+The production browser requires sign-in, so authenticated interaction and stop
+controls were tested only in the isolated fixture, not against the real account.
+
+Rollout also exposed a pre-existing zero-row history-retention transaction leak.
+The reproduced SQLite writer-lock regression failed before the correction;
+438 backend tests passed afterward (one optional test skipped). Independent
+review accepted the minimal transaction cleanup. No lock errors were recorded
+in the first recovered scheduled cycle. Trading-rule findings remain open;
+entry, exit, risk-limit and live-authorization rules were not relaxed.
