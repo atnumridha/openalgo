@@ -16,6 +16,7 @@ import {
 } from '@/api/trading-research'
 import DailyOptionsHistory from '@/components/strategy/DailyOptionsHistory'
 import QualificationPanel from '@/components/strategy/QualificationPanel'
+import LiveEntryRequirements from '@/components/strategy/LiveEntryRequirements'
 import {
   ResearchMLResults,
   ResearchSearchResults,
@@ -686,8 +687,10 @@ export default function Research() {
         <p className="max-w-3xl text-sm text-muted-foreground">
           {risk.data?.enabled
             ? transitionPending
-              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current fixed limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
-              : 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
+              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current fixed limits apply only to upgraded modes. Live trading still requires approvals, session authorization and any required research qualification.`
+              : risk.data.live_entry_policy?.research_required === false
+                ? 'Your managed strategy entries share these limits. Research qualification is optional. Live trading still requires per-strategy approval, session authorization and all execution risk checks.'
+                : 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
             : 'Your existing flows keep their current rules. Complete step 1 to apply these shared limits to managed Strategy Module entries. Saving this setup does not start trading.'}
         </p>
         {risk.error && (
@@ -887,9 +890,10 @@ export default function Research() {
                   {risk.data?.enabled
                     ? 'Updating costs keeps this capital profile enabled.'
                     : `Saving costs enables the shared long-options capital profile. Each mode starts at ${money(risk.data?.policy.capital)} until its allocation is reviewed.`}{' '}
-                  It applies to your managed Strategy Module entries, restricts them to supported
-                  long-option trades, and requires release qualification for new managed live
-                  entries. Running a research test alone does not enable the profile.
+                  It applies to your managed Strategy Module entries and restricts them to supported
+                  long-option trades. For managed live entries, the setting below controls research qualification;
+                  separate live approvals and execution risk checks remain mandatory.
+                  Running a research test alone does not enable the profile.
                 </p>
                 <Button
                   variant="outline"
@@ -1801,6 +1805,7 @@ export default function Research() {
           </Card>
         </TabsContent>
         <TabsContent value="qualification">
+          <LiveEntryRequirements key={risk.data?.live_entry_policy?.revision ?? 'unavailable'} policy={risk.data?.live_entry_policy} />
           <div className="mb-5 rounded-lg border p-4 space-y-3">
             <h3 className="font-medium">Where automated trading runs</h3>
             <p className="text-sm text-muted-foreground">
@@ -1811,7 +1816,8 @@ export default function Research() {
             <p className="text-sm text-muted-foreground">
               Each Flow has an explicit Sandbox or Live mode. The top navigation’s Live Mode label
               does not change a Sandbox Flow into a live one. Live entries also require a connected
-              broker, a qualified release and today’s live authorization.
+              broker, per-strategy LIVE approval, today’s live authorization and any research release
+              required by your account setting.
             </p>
             <Button variant="outline" asChild>
               <Link to="/strategy">Open trading controls</Link>
@@ -1819,8 +1825,9 @@ export default function Research() {
           </div>
           <p className="mb-5 text-sm text-muted-foreground">
             Use a completed final test to begin a Sandbox trial of your saved strategy. Sandbox uses
-            simulated money. Live approval is a separate review after enough evidence has been
-            collected.
+            simulated money. When research qualification is required, live entry also needs a
+            reviewed release after enough evidence has been collected. Making research optional
+            leaves the separate LIVE approval and session authorization controls in place.
           </p>
           <QualificationPanel runs={overview.data?.runs ?? []} />
         </TabsContent>

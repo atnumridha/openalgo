@@ -240,8 +240,16 @@ export interface RiskAccount {
   reserved_risk: number
 }
 
+export interface LiveEntryPolicy {
+  research_required: boolean
+  revision: number
+  updated_at: string | null
+  reason: string | null
+}
+
 export interface TradingRisk {
   enabled: boolean
+  live_entry_policy?: LiveEntryPolicy
   policy: {
     capital: number
     per_trade_limit?: number

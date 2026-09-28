@@ -3,7 +3,9 @@
 from decimal import Decimal
 
 from flask import Blueprint, jsonify, request, session
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from database import trading_risk_db as ledger
 from limiter import limiter
@@ -66,6 +68,7 @@ def status():
                 "enabled": ledger.policy_enabled(user),
                 "costs": ledger.get_costs(user),
                 "costs_by_exchange": ledger.get_cost_schedules(user),
+                "live_entry_policy": ledger.get_live_entry_policy(user),
                 "accounts": accounts,
             }
         ),
@@ -108,6 +111,39 @@ def allocation():
             user, mode, payload["capital"], payload["reason"], trading_budget.trading_day()
         )
     return jsonify(status="success", data=_json(result))
+
+
+@trading_risk_bp.post("/live-entry-policy")
+@_limit
+def live_entry_policy():
+    payload = request.get_json()
+    if (not isinstance(payload, dict)
+            or set(payload) != {"research_required", "expected_revision", "reason", "confirm"}
+            or payload.get("confirm") is not True):
+        raise ValueError("Review the research requirement, record a reason and confirm the change")
+    user = session["user"]
+    from database import strategy_module_db as store
+    from services.strategy_module.automation_control import _control_lease
+
+    try:
+        with _control_lease(user, include_live=True):
+            with Session(store.engine) as db:
+                live_enabled = db.scalar(select(store.SmStrategy.id).where(
+                    store.SmStrategy.user_id == user, store.SmStrategy.live_enabled.is_(True)
+                ).limit(1))
+                open_live_run = db.scalar(select(store.SmStrategyRun.id).join(
+                    store.SmStrategy, store.SmStrategy.id == store.SmStrategyRun.strategy_id
+                ).where(store.SmStrategy.user_id == user, store.SmStrategyRun.mode == "live",
+                        store.SmStrategyRun.stopped_at.is_(None)).limit(1))
+            if live_enabled is not None or open_live_run is not None:
+                raise ValueError("Stop live automation, close its positions and turn off each strategy's LIVE mode before changing this requirement")
+            if store.has_unresolved_order_outcomes(user, "live"):
+                raise ValueError("Reconcile unresolved live orders before changing this requirement")
+            result = ledger.review_live_entry_policy(user, payload["research_required"],
+                payload["expected_revision"], payload["reason"])
+    except RuntimeError:
+        return jsonify(status="error", message="An entry or control is being processed. Refresh and try again."), 503
+    return jsonify(status="success", data=result)
 
 
 @trading_risk_bp.post("/resume")

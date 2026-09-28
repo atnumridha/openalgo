@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Add independent risk and research evidence tables; preserve existing data."""
+"""Add risk/research tables and optional live research preferences; preserve data.
+
+The live entry policy table is additive. No preference rows are inserted, so
+existing accounts continue to require research qualification after migration.
+"""
 
 import argparse
 import os

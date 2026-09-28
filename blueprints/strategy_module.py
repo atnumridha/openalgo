@@ -1639,13 +1639,21 @@ def set_live(sid):
         return _error("enabled is required", 400)
     if not isinstance(payload["enabled"], bool):
         return _error("enabled must be true or false", 400)
-    if row.status == "running":
-        return _error("Stop the strategy before changing its mode", 409)
-    if getattr(row, "scalp_profile", None) and row.automation_state != "disabled":
-        return _error("Disable scalping automation before changing mode", 409)
-
     enabled = payload["enabled"]
-    changed, message = store.set_live_enabled(sid, username, enabled)
+    from services.strategy_module.automation_control import _control_lease
+
+    try:
+        with _control_lease(username, include_live=True):
+            # A mode change and an account entry-policy review must not overlap.
+            # Refresh the pre-lease owner lookup before checking its state.
+            store.db_session.refresh(row)
+            if row.status == "running":
+                return _error("Stop the strategy before changing its mode", 409)
+            if getattr(row, "scalp_profile", None) and row.automation_state != "disabled":
+                return _error("Disable scalping automation before changing mode", 409)
+            changed, message = store.set_live_enabled(sid, username, enabled)
+    except RuntimeError:
+        return _error("An entry or control is being processed. Refresh and try again.", 503)
     if not changed:
         return _store_error(message)
 

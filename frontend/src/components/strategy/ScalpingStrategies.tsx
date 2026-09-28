@@ -136,7 +136,7 @@ export function ScalpingStrategies({
         <Link className="underline" to="/strategy/research">
           Research
         </Link>
-        . Live also requires session authorization, verified protection and an approved release.
+        . Live also requires session authorization, verified protection and any research release required by your account setting.
         Profitability is unproven.
       </p>
       {rows.some((row) => row.scalp_profile === 'macd200' || row.scalp_profile === 'ema5') && (

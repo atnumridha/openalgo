@@ -1,5 +1,6 @@
 import type {
   CostSchedule,
+  LiveEntryPolicy,
   ResearchDataset,
   ResearchOverview,
   ResearchRun,
@@ -57,6 +58,15 @@ export async function getTradingRisk(): Promise<TradingRisk> {
 
 export async function saveRiskCosts(costs: CostSchedule): Promise<unknown> {
   return (await webClient.put('/strategy/api/risk/costs', costs)).data.data
+}
+
+export async function saveLiveEntryPolicy(payload: {
+  research_required: boolean
+  expected_revision: number
+  reason: string
+  confirm: true
+}): Promise<LiveEntryPolicy> {
+  return (await webClient.post<{ data: LiveEntryPolicy }>('/strategy/api/risk/live-entry-policy', payload)).data.data
 }
 
 export async function reviewRiskAllocation(payload: {

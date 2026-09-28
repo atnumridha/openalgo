@@ -23,6 +23,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    true,
 )
 from sqlalchemy.orm import Session, declarative_base
 
@@ -86,6 +87,17 @@ class RiskSettings(Base):
     __tablename__ = "trading_risk_settings"
     user_id = Column(String(80), primary_key=True)
     costs = Column(JSON, nullable=True)
+
+
+class RiskLiveEntryPolicy(Base):
+    """An explicit research preference; absence always retains qualification."""
+
+    __tablename__ = "trading_risk_live_entry_policy"
+    user_id = Column(String(80), primary_key=True)
+    research_required = Column(Boolean, nullable=False, default=True, server_default=true())
+    revision = Column(Integer, nullable=False, default=0)
+    updated_at = Column(String(40), nullable=False)
+    reason = Column(Text, nullable=False)
 
 
 class RiskCostSchedule(Base):
@@ -616,3 +628,51 @@ def policy_payload():
         key: float(value) if isinstance(value, Decimal) else value
         for key, value in asdict(POLICY).items()
     }
+
+
+def _live_entry_policy_payload(row):
+    return {
+        "research_required": row.research_required if row is not None else True,
+        "revision": row.revision if row is not None else 0,
+        "updated_at": row.updated_at if row is not None else None,
+        "reason": row.reason if row is not None else None,
+    }
+
+
+def get_live_entry_policy(user):
+    """Read without mutation. Storage errors propagate and never waive checks."""
+    _scope(user, "live")
+    with Session(engine) as db:
+        return _live_entry_policy_payload(db.get(RiskLiveEntryPolicy, str(user)))
+
+
+def review_live_entry_policy(user, research_required, expected_revision, reason):
+    """Caller holds the admission/control lease; live exposure must stay flat."""
+    if type(research_required) is not bool or type(expected_revision) is not int or expected_revision < 0:
+        raise ValueError("Choose a research requirement and refresh its current settings")
+    if not isinstance(reason, str) or not 3 <= len(reason.strip()) <= 1000:
+        raise ValueError("Record a review reason between 3 and 1000 characters")
+    with _account(user, "live") as (db, account):
+        row = db.get(RiskLiveEntryPolicy, str(user))
+        current = _live_entry_policy_payload(row)
+        if current["revision"] != expected_revision:
+            raise ValueError("Live entry settings changed. Refresh and review them again")
+        if db.scalar(select(RiskTrade.ref).where(
+            RiskTrade.scope == account.scope, RiskTrade.status.in_(["pending", "open"])
+        ).limit(1)):
+            raise ValueError("Close and reconcile live positions before changing entry requirements")
+        if current["research_required"] == research_required:
+            return current
+        now = datetime.now(UTC).isoformat()
+        if row is None:
+            row = RiskLiveEntryPolicy(user_id=str(user))
+            db.add(row)
+        row.research_required = research_required
+        row.revision = current["revision"] + 1
+        row.updated_at = now
+        row.reason = reason.strip()
+        db.add(RiskReview(scope=account.scope, at=now, reason=row.reason, details={
+            "action": "live_entry_policy", "research_required": research_required,
+            "previous_research_required": current["research_required"], "revision": row.revision,
+        }))
+        return _live_entry_policy_payload(row)

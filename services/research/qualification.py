@@ -270,7 +270,11 @@ def record_trade(owner, trade_ref, risk_row):
 
 
 def live_release_reason(owner, strategy_id, strategy_config, risk_policy_version, costs):
-    """Return None only for a current reviewed release; this never activates it."""
+    """Enforce the saved research requirement; never grant live authorization."""
+    from database import trading_risk_db as ledger
+
+    if ledger.get_live_entry_policy(owner)["research_required"] is False:
+        return None
     campaign = get_store().active_campaign(owner, strategy_id)
     if campaign is None:
         return "No forward qualification campaign exists for this strategy."

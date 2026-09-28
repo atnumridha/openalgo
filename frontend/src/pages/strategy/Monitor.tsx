@@ -525,7 +525,7 @@ function Decision({
               ? 'Live entry is blocked: this strategy has no live opt-in.'
               : !data.live_authorization.active
                 ? 'Live entry is blocked: session authorization is missing.'
-                : 'Live mode and session authorization are set. Signal, contract, qualification and risk checks must still pass at submission.'}
+                : 'Live mode and session authorization are set. Signal, contract, risk checks and any required research qualification must still pass at submission.'}
         </p>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
           <Fact label="Saved execution mode">{row.mode}</Fact>
@@ -540,7 +540,7 @@ function Decision({
           There is no guaranteed trigger time. The next scheduler check is not a promised trade. A
           fresh qualifying closed-candle signal must be ≤55 seconds old, fit a complete 15-minute
           hold before 15:20, and pass duplicate-signal, cooldown, contract, liquidity, executable
-          quote, cash, cost, portfolio and live-release checks. These checks are revalidated at
+          quote, cash, cost, portfolio and any required research-release checks. These checks are revalidated at
           entry; a signal alone is not permission to trade.
         </p>
       </div>

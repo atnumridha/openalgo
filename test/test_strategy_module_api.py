@@ -784,6 +784,15 @@ class TestWebhookToken:
 
 
 class TestLiveAndKillSwitch:
+    def test_live_mode_cannot_change_during_entry_requirement_review(self, client):
+        from services.strategy_module.automation_control import _control_lease
+
+        sid = create(client)["data"]["id"]
+        with _control_lease(USER, include_live=True):
+            response = client.post(f"/strategy/api/strategies/{sid}/live", json={"enabled": True})
+        assert response.status_code == 503
+        assert store.get_strategy(sid, USER).live_enabled is False
+
     def test_live_can_be_turned_on(self, client):
         sid = create(client)["data"]["id"]
 

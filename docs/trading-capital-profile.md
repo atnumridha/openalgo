@@ -22,12 +22,17 @@ An operator can resume a drawdown pause only after every managed exposure is fla
 
 ## Qualification and operation
 
-The profile's live admission gate requires a currently qualified and explicitly approved campaign for the exact strategy and Flow. [Strategy Research](trading-research.md#forward-qualification) documents automatic prospective evidence collection, conservative execution/cost valuation, qualification thresholds and reconciliation. Approvals bind the reviewed evidence, rules, source, account and broker authentication; they expire after seven days and can be revoked. Protective exits remain available when qualification fails. Sandbox costs are estimates reviewed by the operator, not broker-charged fees. Implementing this workflow does not demonstrate profitability; real historical and forward observations are still needed for each deployment.
+By default, the profile's live admission gate requires a currently qualified and explicitly approved campaign for the exact strategy and Flow. [Strategy Research](trading-research.md#forward-qualification) documents automatic prospective evidence collection, conservative execution/cost valuation, qualification thresholds and reconciliation. Approvals bind the reviewed evidence, rules, source, account and broker authentication; they expire after seven days and can be revoked. Protective exits remain available when qualification fails. Sandbox costs are estimates reviewed by the operator, not broker-charged fees. Implementing this workflow does not demonstrate profitability; real historical and forward observations are still needed for each deployment.
+
+In **Research → Sandbox & live → Live entry requirements**, the operator can make research qualification optional. This removes the historical/forward campaign and research-release requirement from managed live admission. It does not mark research as passed, grant per-strategy LIVE approval, authorize a live session, or activate a Flow. Broker identity, available funds, contract support, signal rules, protective stops and account risk limits still apply.
+
+Changing the setting requires a review reason, acknowledgement and the latest setting revision. First disable live automation, close and reconcile live positions/orders, and turn off every strategy's LIVE mode. The choice is saved per owner and audited. Missing preferences remain **Required**; unreadable preferences block entries. Both risk reservation and final order submission read the same saved choice. The setting can be returned to **Required** through the same review.
 
 Apply the ordinary application migrations, then restart the application to load the new APIs and UI. The migration is `upgrade/migrate_trading_research.py` and is included as required in `upgrade/migrate_all.py`. Run the separate research worker using the commands in [Strategy Research](trading-research.md). This development task did not restart the application, enable an account profile or send broker orders.
 
 | Authenticated endpoint | Purpose |
 |---|---|
-| `GET /strategy/api/risk` | Enabled status, allocation policy, costs and both mode budgets |
+| `GET /strategy/api/risk` | Enabled status, allocation policy, costs, both mode budgets and live research requirement |
 | `PUT /strategy/api/risk/costs` | Validate/save costs and explicitly enable the account profile |
 | `POST /strategy/api/risk/resume` | Review a flat account with mode, reason and reconciliation acknowledgement |
+| `POST /strategy/api/risk/live-entry-policy` | Review the research requirement with `research_required`, `expected_revision`, `reason` and `confirm: true`; does not activate trading |

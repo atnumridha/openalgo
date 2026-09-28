@@ -7,7 +7,7 @@ Open **Strategies** and use the **Scalping strategies** cards. The highlighted r
 1. Connect your saved Kotak account for current candles, quotes and contracts. Enable the shared capital profile with verified costs in Research.
 2. Choose **Start sandbox** on one strategy. It waits for a qualifying completed-candle signal; starting does not force a trade. Results and logs explain waiting, data failures and admission refusals.
 3. **Stop automation** blocks further entries, requests closure of its managed position, and waits for flatness before reporting disabled.
-4. To use live execution, stop automation, enable live for that strategy, complete the existing live-session authorization and qualification/release checks, then choose **Start live**. Live approval requirements remain enforced at order submission. Turning on the live flag alone does not authorize an entry.
+4. To use live execution, stop automation, enable live for that strategy, complete the existing live-session authorization and any research qualification/release checks required by the account's **Live entry requirements**, then choose **Start live**. Research remains required by default; its explicit optional setting does not replace LIVE approval, session authorization or risk checks. Turning on the live flag alone does not authorize an entry.
 
 The global header mode does not override each strategy's selected execution mode. All saved strategies share account limits; they do not each receive a separate capital allocation. Running them together can cause later signals to be refused because another position has reserved the available funds or risk.
 
