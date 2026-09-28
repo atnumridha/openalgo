@@ -89,6 +89,19 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('shows retained MCX candle progress while the latest poll waits for the next close', async () => {
+    api.logs.mockResolvedValue({ items: [{
+      id: 20, kind: 'signal_evaluation', at: new Date().toISOString(),
+      details: { mode: 'sandbox', profile: 'receiver_momentum', reason: 'Collecting ten contiguous completed five-minute candles',
+        history: [{ symbol: 'CRUDEOILM19OCT26FUT', interval: '5m', candles: 8, last_bar_at: new Date().toISOString() }],
+      },
+    }], next_cursor: null })
+    setup({ ...strategy, configuration: { profile: 'receiver_momentum', exchange: 'MCX' } } as typeof strategy)
+    await screen.findByText(/8 \/ 10 completed candles/)
+    expect(api.logs).toHaveBeenCalledWith(13, 'events')
+    expect(api.one).not.toHaveBeenCalled()
+    expect(api.stop).not.toHaveBeenCalled()
+  })
   it('explains candle warm-up without claiming an observed candle is missing', async () => {
     const warming = {
       ...strategy,

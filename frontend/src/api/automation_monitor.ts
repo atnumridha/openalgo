@@ -128,7 +128,7 @@ export interface StopResult {
   }[]
 }
 export async function getAutomationMonitor(): Promise<AutomationMonitor> {
-  return (await webClient.get('/strategy/api/automation/monitor')).data.data
+  return (await webClient.get('/strategy/api/automation/monitor', { timeout: 10000 })).data.data
 }
 export async function getAutomationLogs(
   id: number,
@@ -138,6 +138,7 @@ export async function getAutomationLogs(
   return (
     await webClient.get(`/strategy/api/automation/strategies/${id}/logs`, {
       params: { stream, limit: 25, before_id: before },
+      timeout: 10000,
     })
   ).data.data
 }

@@ -413,7 +413,8 @@ describe('sandbox automation controls', () => {
     ).toBeVisible()
     expect(screen.getByRole('columnheader', { name: 'Automation' })).toBeInTheDocument()
     expect(within(armed).getByText('Monitoring')).toBeInTheDocument()
-    expect(within(armed).getByText('stopped')).toBeInTheDocument()
+    expect(within(armed).getByText('No open trade')).toBeInTheDocument()
+    expect(within(armed).queryByText('stopped')).not.toBeInTheDocument()
     expect(within(armed).getByRole('button', { name: /disable automation/i })).toBeEnabled()
     expect(
       within(

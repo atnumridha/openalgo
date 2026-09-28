@@ -76,3 +76,33 @@ Green is a time-specific observation. No monitoring process should hide a
 failure, grant live approval, relax risk controls or start orders to keep it
 green. Data warm-up, closed market windows and intentionally selected Sandbox
 mode must be reported separately from operational failures.
+
+## Sandbox follow-up, 17:45–17:55 IST
+
+Forty MCX workflow executions completed in the ten-minute diagnostic window;
+none failed. Crude Oil Mini and Natural Gas Mini progressed from 7 five-minute
+candles at 17:45 to 8 at 17:50, with two fifteen-minute confirmation candles.
+The evaluator requires ten contiguous five-minute candles. Gold Mini and Silver
+Mini had three five-minute candles at 17:50 and no usable fifteen-minute
+confirmation history. Their earlier coverage interruptions remain a limitation.
+
+Two read-only WebSocket samples (35 and 50 seconds) observed 270 packets for the
+Gold/Silver futures and current Gold option pair. All carried native trade time
+and fresh volume fields; the second sample's maximum trade age was 20 seconds.
+This does not establish the cause of earlier gaps. No feed-quality or risk
+requirements were changed. The retained Sandbox run #2 for Bollinger recorded
+realised P&L of ₹656.50; this is a simulation result, not proof of profitability.
+At this inspection Bollinger's monitoring and live permission were disabled.
+
+The UI previously replaced warm-up detail with a between-candle waiting message.
+The review now displays the most recent recorded candle assessment from its
+existing event log, separated by strategy, profile and execution mode, with
+counts, timestamps and an explicit historical-data warning. Counts do not prove
+contiguity or entry eligibility. The list says “No open trade” for an armed,
+stopped run; start notifications identify Sandbox or Live monitoring, and live
+permission notifications no longer claim the execution mode changed. Read-only
+monitor requests time out after ten seconds so a hung request cannot leave
+Refresh disabled indefinitely. These frontend changes need no collector restart.
+
+Validation: 45 focused UI tests passed; production TypeScript/Vite build passed
+with the existing bundle-size warning.

@@ -177,10 +177,12 @@ export default function StrategyList() {
 
   const startMutation = useMutation({
     mutationFn: ({ id, mode }: { id: number; mode: RunMode }) => startRun(id, mode),
-    onSuccess: (result) => {
+    onSuccess: (result, { mode }) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
       if (result.automation_state === 'armed') {
-        showToast.info(result.message || 'Signal monitoring enabled. Entries still require a qualifying signal and all risk checks.')
+        showToast.info(
+          `${mode === 'live' ? 'Live' : 'Sandbox'} monitoring enabled. ${result.message || 'Waiting for a qualifying signal and all risk checks.'}`
+        )
       } else if (result.acknowledged === false) {
         showToast.warning(
           'Run started, but broker acknowledgement is pending. Check Orders and Events.'
@@ -201,7 +203,11 @@ export default function StrategyList() {
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => setLiveEnabled(id, enabled),
     onSuccess: (enabled) => {
       setLiveEnableTarget(null)
-      showToast.success(enabled ? 'Live mode enabled' : 'Live mode disabled')
+      showToast.success(
+        enabled
+          ? 'Live permission enabled. Use Start live to select live execution.'
+          : 'Live permission disabled'
+      )
       void queryClient.invalidateQueries({ queryKey: strategyQueryKeys.strategies() })
     },
     onError: (error: Error) => {
@@ -1000,7 +1006,9 @@ export default function StrategyList() {
                         )}
                       </TableCell>
                       <TableCell className="min-w-20">
-                        <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>
+                        <Badge variant={statusBadgeVariant(row.status)}>
+                          {row.status === 'stopped' && state === 'armed' ? 'No open trade' : row.status}
+                        </Badge>
                       </TableCell>
                       <TableCell className="min-w-36">
                         <Badge variant={automationVariant(displayState)}>

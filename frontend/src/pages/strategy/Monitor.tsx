@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import CandleProgress from './CandleProgress'
 
 const labels: Record<string, string> = {
   watching: 'Checking signals',
@@ -442,6 +443,10 @@ export default function Monitor() {
                   </div>
                 )}
               </div>
+              {current.configuration.exchange === 'MCX' &&
+                String(current.configuration.profile ?? '').startsWith('receiver_') && (
+                  <CandleProgress key={`${current.id}-${current.mode}`} row={current} clock={clock} />
+                )}
               {current.last_risk_rejection && (
                 <details className="rounded-lg border border-amber-500/30 p-3 text-sm">
                   <summary className="cursor-pointer font-medium">
