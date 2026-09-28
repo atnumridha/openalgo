@@ -41,3 +41,11 @@ Baseline-confirmed failures/errors (unchanged files):
 - `ERROR test/test_openscript_runner.py::test_settings_missing_one_field_say_which_one`
 - `ERROR test/test_openscript_runner.py::test_a_product_that_is_not_one_this_platform_sends_never_reaches_a_command_line`
 - `ERROR test/test_openscript_runner.py::test_removing_the_settings_removes_the_run`
+
+## Local rollout and browser verification
+
+The focused backend set passed **168 tests** in the isolated worktree and again on merged main. Main-checkout pytest initially shadowed the installed `openalgo` SDK with the repository package; preloading the SDK before invoking pytest resolved those eight import failures without a source change.
+
+Restarted the app and research worker after verifying zero open managed runs, zero pending risk positions and zero live opt-ins. Both services returned ready. Through the actual UI, saved BFO and MCX planning schedules for 28 September–10 October 2026 and switched back to confirm NSE fees remained intact. Read-only before/after snapshots match for the existing default NSE costs, allocations/policy/revisions, sixteen strategy activation/live flags and all Flow activation flags.
+
+Retried the exact SENSEX 5/15-minute Sandbox start in the browser. It passed fee selection and now correctly returns `per_trade_risk_exceeded`: its one-lot, 20-point stop does not fit the effective INR100 all-in per-trade allowance at INR10,000 allocated equity. No open run or order was created. The risk limit was not bypassed, and no strategy was live-enabled. This verifies the reported cost defect is fixed; it does not claim every template is affordable or profitable.
