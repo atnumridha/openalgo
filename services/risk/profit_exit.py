@@ -11,7 +11,8 @@ from services.risk.option_structure import STRUCTURE_RECIPE
 PROFIT_RECIPE = "one-lot-cash300-profit-trail-v2"
 TECHNICAL_PROFIT_RECIPE = "one-lot-technical-profit-trail-v3"
 PROFIT_LOCK_RECIPE = "one-lot-technical-profit-lock-v4"
-TECHNICAL_PROFIT_RECIPES = (TECHNICAL_PROFIT_RECIPE, PROFIT_LOCK_RECIPE, STRUCTURE_RECIPE)
+FIXED_PROFIT_LOCK_RECIPE = "one-lot-fixed300-profit-lock-v6"
+TECHNICAL_PROFIT_RECIPES = (TECHNICAL_PROFIT_RECIPE, PROFIT_LOCK_RECIPE, STRUCTURE_RECIPE, FIXED_PROFIT_LOCK_RECIPE)
 PROFIT_RECIPES = (PROFIT_RECIPE, *TECHNICAL_PROFIT_RECIPES)
 
 
@@ -80,7 +81,7 @@ def evaluate_profit(risk, last_price, config):
         gross_floor = max(entry + Decimal(900) / units, peak - Decimal(300) / units)
         milestone = (gross_floor / tick).to_integral_value(rounding=ROUND_CEILING) * tick
         candidate = max(candidate or entry, min(peak, milestone))
-    if config["version"] in (PROFIT_LOCK_RECIPE, STRUCTURE_RECIPE) and gross_peak >= 300:
+    if config["version"] in (PROFIT_LOCK_RECIPE, STRUCTURE_RECIPE, FIXED_PROFIT_LOCK_RECIPE) and gross_peak >= 300:
         # Gross floors are independent of the entry's smaller all-in risk cap.
         # Rounding up protects at least the floor; the observed peak bounds it.
         gross_floor = max(Decimal(100), gross_peak - Decimal(300))

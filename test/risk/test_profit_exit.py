@@ -87,3 +87,15 @@ def test_break_even_includes_tick_rounded_sell_slippage():
         rounding="ROUND_FLOOR"
     ) * Decimal(".05")
     assert (fill - 100) * 75 - 20 >= 0
+
+
+@pytest.mark.parametrize("recipe", ["one-lot-option-structure-runner-v5", "one-lot-fixed300-profit-lock-v6"])
+def test_fixed_risk_profit_ratchet_keeps_user_floors_and_unlimited_runner(recipe):
+    config = profit_config({"tick_size": .05}, COSTS, recipe=recipe)
+    current = PositionRisk(entry_price=100, quantity=100, stop_price=97, initial_stop_price=97)
+    for price, floor in [(103, 101), (106, 103), (109, 106), (115, 112), (130, 127), (129, 127)]:
+        decision = evaluate_profit(current, price, config)
+        assert not decision.breached
+        assert decision.stop_price == floor
+        assert decision.target_price is None
+        current = carry(current, decision)

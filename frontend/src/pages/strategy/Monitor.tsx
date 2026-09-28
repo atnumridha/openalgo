@@ -254,7 +254,7 @@ export default function Monitor() {
       )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {[
-          ['Automations armed', rows.filter((r) => r.automation_state === 'armed').length],
+          ['Signal monitors enabled', rows.filter((r) => r.automation_state === 'armed').length],
           ['Managed runs open', rows.reduce((n, r) => n + r.open_run_count, 0)],
           ['Need attention', rows.filter((r) => attention.has(r.monitor_status)).length],
           [
@@ -703,7 +703,7 @@ function Decision({
           <>
             <dl className="mt-4 grid gap-4 sm:grid-cols-3">
               <Fact label="Saved allocation">₹{risk.capital?.toLocaleString('en-IN')}</Fact>
-              <Fact label="Current per-trade risk cap">
+              <Fact label={risk.policy_version === 'fixed-300-v3' ? 'Planned price-stop limit (before charges)' : 'Current per-trade risk cap'}>
                 ₹{String(risk.ledger?.per_trade_limit ?? 'Unknown')}
               </Fact>
               <Fact label="Daily risk remaining">

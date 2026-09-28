@@ -122,7 +122,7 @@ def test_default_configuration_binds_new_recipe():
     config = replay.validate_configuration(data, "trend_breakout_filtered", {}, fees())
     assert (config["risk_recipe"], config["risk_policy_version"]) == (
         exits.CASH_RISK_RECIPE,
-        NEW_POLICY,
+        "fixed-300-v3",
     )
 
 
@@ -180,7 +180,7 @@ def test_new_label_live_replay_use_same_unclamped_stop_and_all_in_risk(stress, r
         assert live[field] == pytest.approx(trade[field])
     assert trade["quantity"] == 75
     assert trade["budget_after_close"]["day_start_equity"] == 25000
-    assert trade["budget_after_close"]["daily_limit"] == 750
+    assert trade["budget_after_close"]["daily_limit"] == (750 if recipe == NEW else 2000)
 
 
 @pytest.mark.parametrize(

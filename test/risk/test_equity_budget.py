@@ -12,7 +12,7 @@ def closed(ref, pnl, sequence, day=DAY):
 
 
 def decide(*, equity="25000", peak="25000", risk="200", gross="180", trades=(), **kwargs):
-    return budget.evaluate_budget(budget.current_policy(), trades, DAY, D(equity), D(peak),
+    return budget.evaluate_budget(budget.policy_for_version(budget.EQUITY_POLICY_VERSION), trades, DAY, D(equity), D(peak),
                                   D(risk), proposed_gross_risk=D(gross), **kwargs)
 
 
@@ -35,7 +35,7 @@ def test_caps_total_planned_loss_including_costs(equity, risk, allowed):
     ("23000", "115", True, True),
 ])
 def test_drawdown_thresholds_use_peak_equity(equity, limit, reduced, paused):
-    snapshot = budget.budget_snapshot(budget.current_policy(), [], DAY, D(equity), D("25000"))
+    snapshot = budget.budget_snapshot(budget.policy_for_version(budget.EQUITY_POLICY_VERSION), [], DAY, D(equity), D("25000"))
     assert snapshot["per_trade_limit"] == D(limit)
     assert snapshot["risk_reduced"] is reduced
     assert snapshot["paused"] is paused
@@ -55,14 +55,14 @@ def test_explicit_day_opening_equity_and_wins_do_not_refill_loss_allowance():
 def test_pure_reconstruction_removes_current_day_net_but_keeps_previous_days():
     trades = [closed("prior", "1000", 1, "2026-09-25"), closed("loss", "-100", 2),
               closed("win", "600", 3)]
-    snapshot = budget.budget_snapshot(budget.current_policy(), trades, DAY, D("26500"), D("26500"))
+    snapshot = budget.budget_snapshot(budget.policy_for_version(budget.EQUITY_POLICY_VERSION), trades, DAY, D("26500"), D("26500"))
     assert snapshot["day_start_equity"] == D("26000")
     assert snapshot["daily_limit"] == D("780")
     assert snapshot["daily_remaining"] == D("680")
 
 
 def test_daily_cap_is_capped_at_2000_for_larger_accounts():
-    snapshot = budget.budget_snapshot(budget.current_policy(D("100000")), [], DAY,
+    snapshot = budget.budget_snapshot(budget.policy_for_version(budget.EQUITY_POLICY_VERSION, D("100000")), [], DAY,
                                       D("100000"), D("100000"))
     assert snapshot["daily_limit"] == D("2000")
 

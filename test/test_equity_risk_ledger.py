@@ -15,7 +15,7 @@ NEXT_DAY = "2026-09-27"
 
 @pytest.fixture(autouse=True)
 def isolated_ledger(tmp_path, monkeypatch):
-    monkeypatch.setattr(ledger, "POLICY", budget.current_policy())
+    monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version(budget.EQUITY_POLICY_VERSION))
     engine = create_db_engine(f"sqlite:///{tmp_path}/equity.db")
     monkeypatch.setattr(ledger, "engine", engine)
     ledger.init_db()
@@ -53,7 +53,7 @@ def test_concurrent_different_brokers_and_segments_share_one_position():
 
 
 def test_day_baseline_survives_profit_restart_funding_change_and_review(monkeypatch):
-    monkeypatch.setattr(ledger, "POLICY", budget.current_policy(D("10000")))
+    monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version(budget.EQUITY_POLICY_VERSION, D("10000")))
     assert reserve("loss").allowed
     close("loss", "-90")
     assert reserve("win", "90").allowed
@@ -76,7 +76,7 @@ def test_day_baseline_survives_profit_restart_funding_change_and_review(monkeypa
 
 
 def test_funding_change_without_prior_status_preserves_original_day_allowance(monkeypatch):
-    monkeypatch.setattr(ledger, "POLICY", budget.current_policy(D("10000")))
+    monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version(budget.EQUITY_POLICY_VERSION, D("10000")))
     changed = ledger.review_allocation("equity", "sandbox", "25000", "Funding review", DAY)
     assert changed["day_start_equity"] == D("10000")
     assert changed["daily_limit"] == D("300")
@@ -99,7 +99,7 @@ def test_idle_migration_preserves_history_and_capital(monkeypatch):
     assert reserve("old", "300").allowed
     close("old", "-150")
     before = ledger.list_trades("equity", "sandbox")
-    monkeypatch.setattr(ledger, "POLICY", budget.current_policy())
+    monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version(budget.EQUITY_POLICY_VERSION))
     ledger.ensure_current_policy("equity", "sandbox", DAY)
     after = ledger.status("equity", "sandbox", DAY)
     assert after["policy_version"] == "equity-1pct-v2"
@@ -114,7 +114,7 @@ def test_migration_with_legacy_exposure_fails_without_rewriting_it(monkeypatch):
     monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version("shared-300-3r-v1", D("25000")))
     assert reserve("old", "300").allowed
     before = ledger.list_trades("equity", "sandbox")
-    monkeypatch.setattr(ledger, "POLICY", budget.current_policy())
+    monkeypatch.setattr(ledger, "POLICY", budget.policy_for_version(budget.EQUITY_POLICY_VERSION))
     with pytest.raises(ValueError, match="exposure"):
         ledger.ensure_current_policy("equity", "sandbox", DAY)
     assert ledger.list_trades("equity", "sandbox") == before

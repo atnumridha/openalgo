@@ -89,7 +89,7 @@ function statusBadgeVariant(
 function automationLabel(state: AutomationState): string {
   switch (state) {
     case 'armed':
-      return 'Armed'
+      return 'Monitoring'
     case 'closing':
       return 'Closing…'
     case 'close_failed':
@@ -180,7 +180,7 @@ export default function StrategyList() {
     onSuccess: (result) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
       if (result.automation_state === 'armed') {
-        showToast.success('Automation enabled — waiting for a qualifying signal')
+        showToast.info(result.message || 'Signal monitoring enabled. Entries still require a qualifying signal and all risk checks.')
       } else if (result.acknowledged === false) {
         showToast.warning(
           'Run started, but broker acknowledgement is pending. Check Orders and Events.'
@@ -273,7 +273,7 @@ export default function StrategyList() {
             : feedbackState === 'disabled' && feedbackAction === 'disable'
               ? `${feedbackRow?.name}: Disabled — confirmed flat.`
               : feedbackState === 'armed' && feedbackAction === 'disable'
-                ? `${feedbackRow?.name}: Armed — disable not confirmed.`
+                ? `${feedbackRow?.name}: Monitoring — disable not confirmed.`
                 : `${feedbackRow?.name}: ${automationLabel(feedbackState ?? 'disabled')}`)
   const latestControlError = !feedbackRow
     ? controlError
@@ -446,7 +446,7 @@ export default function StrategyList() {
                       {item.outcome === 'started'
                         ? 'Started'
                         : item.outcome === 'armed'
-                          ? 'Armed'
+                          ? 'Monitoring'
                           : item.outcome === 'skipped'
                             ? 'Skipped'
                             : 'Failed'}
@@ -567,8 +567,9 @@ export default function StrategyList() {
           <DialogHeader>
             <DialogTitle>Start {startTarget?.name}?</DialogTitle>
             <DialogDescription>
-              {startTarget?.scalp_profile ? 'This enables automatic signal checks. It enters only when the setup and risk checks pass. ' : ''}
-              Sandbox mode is paper-only. Live mode can place real broker orders using real funds.
+              Linked strategies start signal monitoring and enter only after their setup and risk
+              checks pass. Standalone batch strategies request an immediate entry.
+              Sandbox uses simulated funds. Live mode can place real broker orders using real funds.
             </DialogDescription>
           </DialogHeader>
           <div className="flex overflow-hidden rounded-md border">
@@ -826,9 +827,9 @@ export default function StrategyList() {
           <CardDescription>
             P&amp;L columns are live for running strategies and reflect the last-run snapshot for
             stopped strategies. Status shows whether a run is currently active. Automation shows
-            whether the linked sandbox workflow is enabled. Start all starts every eligible batch
-            strategy in sandbox and arms signal-driven workflows. Risk controls may reject
-            individual starts.
+            whether signal monitoring is enabled. Start all enables linked workflows in sandbox;
+            only standalone batch strategies request an immediate entry. Monitoring does not mean a
+            trade is open or eligible: valid signals, contract data and risk limits must all pass.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -935,7 +936,7 @@ export default function StrategyList() {
                               size="sm"
                               variant="secondary"
                               className="mt-2"
-                              aria-label={`Arm signals for ${row.name}`}
+                              aria-label={`Monitor signals for ${row.name}`}
                               disabled={
                                 pending || bulkMutation.isPending || controlMutation.isPending
                               }
@@ -947,7 +948,7 @@ export default function StrategyList() {
                               }}
                             >
                               <Power aria-hidden="true" className="size-4" />
-                              Arm signals
+                              Monitor signals
                             </Button>
                           )}
                       </TableCell>

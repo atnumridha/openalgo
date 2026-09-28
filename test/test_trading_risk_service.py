@@ -85,6 +85,24 @@ def test_fees_can_make_a_nominally_affordable_stop_unaffordable():
     ].allowed
 
 
+def test_risk_refusal_explains_amounts_without_creating_a_reservation(monkeypatch):
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("equity-1pct-v2", D("10000")))
+    ledger.set_costs("u", COSTS)
+    decision, ref = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "sandbox", FACTS, NOW)
+    assert decision.code == "per_trade_risk_exceeded"
+    assert ref is None and ledger.list_trades("u", "sandbox") == []
+    message = service.refusal_message(decision, [LEG])
+    assert "₹940.00" in message and "₹900.00" in message and "₹100.00" in message
+    assert "including modeled charges" in message
+
+
+def test_mcx_missing_value_conversion_is_explicit_and_still_blocks():
+    leg = {**LEG, "exchange": "MCX", "symbol": "GOLDMTESTCE"}
+    decision, ref = service.reserve_entry("u", STRATEGY, [leg], "sandbox", "sandbox", FACTS, NOW)
+    assert decision.code == "contract_metadata_required" and ref is None
+    assert "MCX contract value conversion" in service.refusal_message(decision, [leg])
+
+
 def test_kotak_nse_costs_cannot_be_used_for_bse_or_another_broker():
     ledger.set_costs("u", {**COSTS, "exchange": "NFO", "broker": "kotak"})
     decision, _ = service.reserve_entry(
@@ -461,7 +479,7 @@ def test_profit_protection_binds_admitted_fees_and_missing_tick_refuses(monkeypa
 
 
 def test_equity_admission_caps_total_loss_after_binding_operator_fees(monkeypatch):
-    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("equity-1pct-v2"))
     ledger.set_costs("equity", COSTS)
     # Equity 25,000 permits 250 total: gross 210 plus two 20-rupee fees.
     over = SimpleNamespace(**{**vars(FACTS), "entry_risk": D("210.01")})

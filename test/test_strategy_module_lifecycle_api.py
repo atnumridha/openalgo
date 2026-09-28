@@ -661,6 +661,102 @@ def test_start_all_live_requires_exact_confirmation_and_active_authorization(cli
     assert store.get_strategy(sid, USER).status == "stopped"
 
 
+@pytest.mark.parametrize("bulk", [False, True])
+def test_start_waits_for_linked_batch_signal_instead_of_entering_immediately(client, bulk):
+    sid = _make(name="Linked option strategy")
+    with patch.object(strategy_module, "_api_key_for", return_value="test-key"), patch(
+        "services.strategy_module.automation_control.get_workflows_for_strategy",
+        return_value=[SimpleNamespace(id=17)],
+    ), patch(
+        "services.strategy_module.automation_control.enable_sandbox",
+        return_value=ControlResult(True, "armed", workflow_id=17),
+    ) as enable, patch("services.strategy_module.engine.start_run") as start:
+        response = client.post(
+            "/strategy/api/strategies/start-all-sandbox" if bulk else
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"},
+        )
+    assert response.status_code == 200
+    start.assert_not_called()
+    assert enable.call_count == 1
+    assert enable.call_args.args == (sid, USER, "test-key")
+    data = response.get_json()
+    assert (data["data"]["items"][0]["outcome"] if bulk else data["automation_state"]) == "armed"
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_link_lookup_failure_never_falls_back_to_immediate_entry(client, bulk):
+    sid = _make()
+    with patch(
+        "services.strategy_module.automation_control.get_workflows_for_strategy",
+        side_effect=RuntimeError("unavailable"),
+    ), patch("services.strategy_module.engine.start_run") as start:
+        response = client.post(
+            "/strategy/api/strategies/start-all-sandbox" if bulk else
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"},
+        )
+    start.assert_not_called()
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_invalid_link_does_not_fall_back_to_manual_start(client, bulk):
+    sid = _make()
+    with patch.object(strategy_module, "_api_key_for", return_value="test-key"), patch(
+        "services.strategy_module.automation_control.get_workflows_for_strategy",
+        return_value=[SimpleNamespace(id=17)],
+    ), patch(
+        "services.strategy_module.automation_control.enable_sandbox",
+        return_value=ControlResult(False, "disabled", error="Linked Flow has a different owner"),
+    ), patch("services.strategy_module.engine.start_run") as start:
+        response = client.post(
+            "/strategy/api/strategies/start-all-sandbox" if bulk else
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"},
+        )
+    start.assert_not_called()
+    assert response.status_code == (200 if bulk else 409)
+    if bulk:
+        assert response.get_json()["data"]["items"][0]["outcome"] != "started"
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+def test_linked_batch_live_start_cannot_bypass_its_signal(client, bulk):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    with patch(
+        "services.strategy_module.automation_control.get_workflows_for_strategy",
+        return_value=[SimpleNamespace(id=17)],
+    ), patch("services.strategy_module.engine.start_run") as start:
+        response = client.post(
+            "/strategy/api/strategies/start-all-live" if bulk else
+            f"/strategy/api/strategies/{sid}/start",
+            json={"mode": "live", "confirmation": "START LIVE"},
+        )
+    start.assert_not_called()
+    assert response.status_code == (200 if bulk else 409)
+    if bulk:
+        assert response.get_json()["data"]["items"][0]["outcome"] == "skipped"
+
+
+@pytest.mark.parametrize("reference", ["{id}", " {id} ", "{id}.0", 1.0, True])
+def test_malformed_numeric_flow_link_never_allows_manual_fallback(client, monkeypatch, reference):
+    from database import flow_db
+    sid = _make()
+    reference = reference.format(id=sid) if isinstance(reference, str) else (float(sid) if type(reference) is float else reference)
+    assert sid == 1  # The boolean corruption below recognizably references ID 1.
+    workflow = SimpleNamespace(id=17, nodes=[{"type": "strategyModuleRun", "data": {"strategyId": reference}}])
+    query = SimpleNamespace(order_by=lambda *_: SimpleNamespace(all=lambda: [workflow]))
+    monkeypatch.setattr(flow_db, "FlowWorkflow", SimpleNamespace(query=query, updated_at=SimpleNamespace(desc=lambda: None)))
+    with patch("services.strategy_module.engine.start_run", return_value=StartResult(False, error="Must not enter")) as start, patch(
+        "services.strategy_module.automation_control.enable_sandbox",
+        return_value=ControlResult(False, "disabled", error="Malformed linked Flow"),
+    ) as enable:
+        response = client.post(f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"})
+    assert response.status_code == 409
+    start.assert_not_called()
+    enable.assert_called_once()
+
+
 def test_start_all_live_starts_only_live_enabled_batch_strategies(client):
     live = _make(name="Live batch")
     ok, message = store.set_live_enabled(live, USER, True)

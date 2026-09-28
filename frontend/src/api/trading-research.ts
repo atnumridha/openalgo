@@ -61,7 +61,7 @@ export async function saveRiskCosts(costs: CostSchedule): Promise<unknown> {
 
 export async function reviewRiskAllocation(payload: {
   mode: 'sandbox' | 'live'
-  capital: 25000
+  capital: 25000 | 50000
   reason: string
 }): Promise<unknown> {
   return (await webClient.post('/strategy/api/risk/allocation', payload)).data.data

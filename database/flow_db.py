@@ -6,6 +6,7 @@ import os
 import secrets
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 from pathlib import Path
 from threading import RLock, local
@@ -369,8 +370,18 @@ def get_workflows_for_strategy(strategy_id: int, *, strict=False):
                     or node["type"] not in STRATEGY_EXECUTION_NODE_TYPES):
                 continue
             data = node.get("data")
-            if isinstance(data, dict) and type(data.get("strategyId")) is int:
-                if data["strategyId"] == strategy_id:
+            if isinstance(data, dict):
+                reference = data.get("strategyId")
+                matches_id = type(reference) is int and reference == strategy_id
+                if strict and not matches_id and isinstance(reference, (str, float, bool)):
+                    # Keep recognizably matching corrupt references visible so
+                    # the admission validator rejects them. A malformed link
+                    # must not turn a UI start into an immediate manual entry.
+                    try:
+                        matches_id = Decimal(str(int(reference) if isinstance(reference, bool) else reference)) == strategy_id
+                    except (InvalidOperation, ValueError):
+                        matches_id = False
+                if matches_id:
                     matches.append(workflow)
                     break
     return matches

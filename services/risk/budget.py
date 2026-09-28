@@ -7,7 +7,8 @@ from typing import Any
 
 ZERO = Decimal("0")
 EQUITY_POLICY_VERSION = "equity-1pct-v2"
-SHARED_POLICY_VERSIONS = frozenset({"shared-300-3r-v1", EQUITY_POLICY_VERSION})
+FIXED_POLICY_VERSION = "fixed-300-v3"
+SHARED_POLICY_VERSIONS = frozenset({"shared-300-3r-v1", EQUITY_POLICY_VERSION, FIXED_POLICY_VERSION})
 
 
 @dataclass(frozen=True)
@@ -46,11 +47,15 @@ def policy_for_version(version, capital=Decimal("25000")):
                             reduced_risk_drawdown_pct=Decimal("0.05"),
                             risk_reduction_factor=Decimal("0.5"), max_positions=1,
                             version=version)
+    if version == FIXED_POLICY_VERSION:
+        return BudgetPolicy(capital=capital, first_trade_limit=ZERO, later_trades_limit=ZERO,
+                            per_trade_limit=Decimal("300"), daily_limit=Decimal("2000"),
+                            drawdown_pct=Decimal("0.08"), max_positions=1, version=version)
     raise ValueError("Unknown risk policy version")
 
 
 def current_policy(capital=Decimal("25000")):
-    return policy_for_version(EQUITY_POLICY_VERSION, capital)
+    return policy_for_version(FIXED_POLICY_VERSION, capital)
 
 
 @dataclass(frozen=True)
@@ -243,7 +248,7 @@ def evaluate_budget(policy, trades, session_day, equity, peak_equity, proposed_r
             code = "portfolio_drawdown"
         elif metrics["prior_session_exposure"]:
             code = "prior_session_exposure"
-        elif equity_policy and metrics["position_count"] >= policy.max_positions:
+        elif policy.version in {EQUITY_POLICY_VERSION, FIXED_POLICY_VERSION} and metrics["position_count"] >= policy.max_positions:
             code = "position_limit"
         elif metrics["daily_stopped"]:
             code = "consecutive_losses_stop"

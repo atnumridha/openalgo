@@ -254,17 +254,25 @@ function Budget({
           ? `Session ${account.session_day} · Peak equity ${money(account.peak_equity)}`
           : 'No risk ledger evidence is available for this mode yet.'}
       </p>
-      {enabled && account && account.capital !== 25000 && (
+      {enabled && account && (account.capital !== 25000 || mode === 'sandbox') && (
         <div className="space-y-3 border-t pt-4">
-          <p className="text-sm">Frozen ML research uses a ₹25,000 allocation. Review any additional funding before enabling its Flow.</p>
+          <p className="text-sm">Change this mode’s capital only while its positions are closed. Loss history and daily stops are preserved. Fixed loss limits do not increase with capital.</p>
+          <p className="text-xs text-muted-foreground">Frozen ML deployment and qualification currently require ₹25,000. A ₹50,000 sandbox allocation is available for the rule-based strategies; it does not qualify those ML models for trading.</p>
           <Label htmlFor={`allocation-reason-${mode}`}>Allocation review reason</Label>
           <Textarea id={`allocation-reason-${mode}`} value={allocationReason}
             onChange={(event) => setAllocationReason(event.target.value)} />
           <Button variant="outline" size="sm"
-            disabled={allocationReason.trim().length < 3 || allocation.isPending}
+            disabled={account.capital === 25000 || allocationReason.trim().length < 3 || allocation.isPending}
             onClick={() => allocation.mutate({ mode, capital: 25000, reason: allocationReason.trim() })}>
             {allocation.isPending ? 'Recording allocation…' : 'Review ₹25,000 allocation'}
           </Button>
+          {mode === 'sandbox' && (
+            <Button type="button" variant="outline" size="sm"
+              disabled={account.capital === 50000 || allocationReason.trim().length < 3 || allocation.isPending}
+              onClick={() => allocation.mutate({ mode, capital: 50000, reason: allocationReason.trim() })}>
+              {allocation.isPending ? 'Recording allocation…' : 'Set sandbox capital to ₹50,000'}
+            </Button>
+          )}
           {allocation.error && <p role="alert" className="text-sm text-destructive">{allocation.error.message}</p>}
         </div>
       )}
@@ -703,10 +711,11 @@ export default function Research() {
           </dl>
         )}
         <p className="text-xs text-muted-foreground">
-          Actual limits follow each mode’s allocated equity: 1% per trade including estimated costs,
-          and 3% of session-opening equity per day, up to the ceilings above. One open position across
-          managed strategies. Profits do not refill the allowance. At 5% drawdown, trade risk halves;
-          at 8%, entries pause. New entries keep the technical stop or are skipped.
+          Fixed ₹300 planned price-stop loss per trade, with charges and slippage accounted for
+          separately. The ₹2,000 daily loss limit includes costs and does not depend on capital.
+          One open position across managed strategies. Profits do not refill the allowance.
+          Three consecutive net losses stop entries for the day; the 8% portfolio drawdown pause remains.
+          New entries keep the technical stop or are skipped.
           Kotak stop advances are verified against broker evidence. Market gaps can exceed a planned stop.
         </p>
         {risk.data && (risk.data.accounts.sandbox?.paused || risk.data.accounts.live?.paused) && (
@@ -926,9 +935,9 @@ export default function Research() {
                 A {number(risk.data.policy.drawdown_pct * 100, '%')} fall from peak allocated equity
                 pauses new entries across days. A{' '}
                 {number(risk.data.policy.cash_buffer_pct * 100, '%')} cash buffer stays uncommitted.
-                Planned loss including estimated charges and slippage is capped at 1% of equity or ₹300,
-                whichever is lower; risk halves at 5% drawdown. Completed losses after charges consume
-                3% of session-opening equity, up to ₹2,000 per day; wins do not refill it.
+                The fixed price-stop loss limit is ₹300 per trade, independent of capital.
+                Charges and slippage are reserved separately and count toward the fixed ₹2,000
+                daily loss limit; wins do not refill it.
                 Three consecutive completed net losses block entries for the rest of the trading day.
                 Protective exits continue. These limits cover managed Strategy Module entries only.
               </p>
@@ -1125,9 +1134,9 @@ export default function Research() {
                   />
                   <p className="text-sm text-muted-foreground">
                     New experiments start at ₹25,000. This amount sets whole-lot affordability and
-                    an 8% portfolio drawdown pause. One option lot must fit 1% of equity including estimated
-                    charges and slippage, up to ₹300. Daily loss allowance is 3% of session-opening equity,
-                    capped at ₹2,000, with a 20% cash buffer. Profit has no fixed ceiling. Planned risk is not
+                    an 8% portfolio drawdown pause. One option lot must fit a ₹300 price-stop loss.
+                    Charges and slippage are separate and count toward the fixed ₹2,000 daily loss
+                    limit, with a 20% cash buffer. Profit has no fixed ceiling. Planned risk is not
                     a guarantee of realized loss.
                   </p>
                 </div>

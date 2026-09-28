@@ -4,6 +4,7 @@ Fees are modeled using the operator's explicit dated schedule. They are never
 presented as broker-reconciled charges. All exits stay in the existing engine.
 """
 
+from dataclasses import replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -15,7 +16,7 @@ from services.research.costs import (
     validate_cost_schedule,
 )
 from services.risk.admission import planned_entry_risk
-from services.risk.budget import BudgetDecision
+from services.risk.budget import BudgetDecision, EQUITY_POLICY_VERSION
 from services.strategy_module import session
 from utils.logging import get_logger
 
@@ -53,6 +54,32 @@ def trading_day(now=None):
 
 def _refusal(code):
     return BudgetDecision(False, code, "first", ZERO), None
+
+
+def refusal_message(decision, legs):
+    """Explain an admission refusal without changing its risk decision."""
+    if decision.code == "per_trade_risk_exceeded":
+        metrics = decision.metrics
+        planned, gross, limit = (metrics.get(key) for key in
+                                  ("planned_risk", "gross_risk", "per_trade_limit"))
+        if all(isinstance(v, Decimal) and v.is_finite() for v in (planned, gross, limit)):
+            basis = "including modeled charges" if metrics.get("risk_limit_includes_costs") else "before charges"
+            return (
+                f"Trade blocked: planned stop loss ₹{gross:,.2f}; "
+                f"₹{planned:,.2f} including modeled charges and slippage. "
+                f"Your current per-trade limit is ₹{limit:,.2f} ({basis}). "
+                "Wait for a setup whose valid stop and whole-lot size fit this limit."
+            )
+    if decision.code == "contract_metadata_required":
+        if len(legs) == 1 and legs[0].get("exchange") == "MCX" and legs[0].get("price_multiplier") is None:
+            return (
+                "MCX entry blocked: MCX contract value conversion is not yet supported "
+                "by the capital risk checks. Signal monitoring can run, but no trade will be placed."
+            )
+        return "Trade blocked: verified contract lot size, quantity and value conversion are required. Refresh contract data and retry."
+    if decision.code == "unsupported_contract_multiplier":
+        return "Trade blocked: this contract's price-to-value conversion is not supported by the capital risk checks."
+    return f"Capital policy refused entry: {decision.code.replace('_', ' ')}"
 
 
 def reserve_entry(user, strategy, legs, mode, broker, facts, now):
@@ -179,6 +206,10 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
         broker_cash=facts.available_cash,
         gross_risk=facts.entry_risk,
     )
+    result = replace(result, metrics={
+        **result.metrics, "planned_risk": risk, "gross_risk": facts.entry_risk,
+        "risk_limit_includes_costs": ledger.POLICY.version == EQUITY_POLICY_VERSION,
+    })
     if result.allowed and mode == "sandbox":
         try:
             from services.research import qualification

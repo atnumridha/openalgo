@@ -152,12 +152,13 @@ def test_protect_leg_fetches_only_completed_option_history(monkeypatch, profile)
     assert context["structure"]["stop_price"] == "39.45"
 
 
-def test_managed_context_uses_new_recipe_but_generic_research_keeps_old_version():
+def test_managed_context_and_research_keep_distinct_geometry_with_fixed_risk():
     from services.strategy_module.scalping import trade_context
     from services.risk.cash_exit import CASH_RISK_RECIPE, CASH_RECIPES
     context = trade_context("ema915", {"direction": "CE", "timestamp": SIGNAL.isoformat(), "low": 99, "high": 101}, 100)
     assert context["risk_recipe"] == RECIPE
-    assert CASH_RISK_RECIPE == "one-lot-technical-profit-lock-v4"
+    assert context["risk_policy_version"] == "fixed-300-v3"
+    assert CASH_RISK_RECIPE == "one-lot-fixed300-profit-lock-v6"
     assert RECIPE not in CASH_RECIPES
 
 

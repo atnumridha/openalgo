@@ -20,7 +20,6 @@ from services.risk.budget import (
     BudgetPolicy,
     BudgetTrade,
     budget_snapshot,
-    current_policy,
     evaluate_budget,
 )
 from services.risk.cash_exit import (
@@ -121,9 +120,10 @@ def validate_configuration(
     selected_recipe = (
         risk_recipe
         if risk_recipe is not None
-        else (PROFIT_RECIPE if policy_version == "shared-300-3r-v1" else CASH_RISK_RECIPE)
+        else (PROFIT_RECIPE if policy_version == "shared-300-3r-v1" else
+              "one-lot-technical-profit-lock-v4" if policy_version == "equity-1pct-v2" else CASH_RISK_RECIPE)
     )
-    selected_policy = policy_version or current_policy().version
+    selected_policy = policy_version or recipe_policy(selected_recipe).version
     if legacy and risk_recipe is not None:
         raise ValueError("Legacy policy cannot bind a whole-lot risk recipe")
     if not legacy and recipe_policy(selected_recipe).version != selected_policy:
@@ -415,7 +415,7 @@ def _drawdown_exit_price(active, bar, equity, peak, policy, day, costs, slippage
 
 def _report_budget_snapshot(policy, ledger, day, equity, peak, day_start_equity):
     snapshot = budget_snapshot(policy, ledger, day, equity, peak, day_start_equity=day_start_equity)
-    if policy.version != "equity-1pct-v2":
+    if policy.version not in {"equity-1pct-v2", "fixed-300-v3"}:
         # Additive live-account diagnostics must not rewrite sealed old reports.
         for key in (
             "daily_limit",

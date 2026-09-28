@@ -28,6 +28,8 @@ from sqlalchemy.orm import Session, declarative_base
 
 from database.engine_factory import create_db_engine
 from services.risk.budget import (
+    EQUITY_POLICY_VERSION,
+    FIXED_POLICY_VERSION,
     SHARED_POLICY_VERSIONS,
     BudgetDecision,
     BudgetTrade,
@@ -294,7 +296,10 @@ def ensure_current_policy(user, mode, day):
     with _account(user, mode) as (db, account):
         if account.policy_version == POLICY.version:
             return
-        if account.policy_version not in {"two-bucket-v1", "shared-300-3r-v1"}:
+        previous_versions = {"two-bucket-v1", "shared-300-3r-v1"}
+        if POLICY.version == FIXED_POLICY_VERSION:
+            previous_versions.add(EQUITY_POLICY_VERSION)
+        if account.policy_version not in previous_versions:
             raise ValueError("Unknown risk policy version or unsupported policy downgrade")
         if db.scalar(select(RiskTrade.ref).where(
             RiskTrade.scope == account.scope,
@@ -311,7 +316,12 @@ def ensure_current_policy(user, mode, day):
         # Establish the allowance from original funding before switching math;
         # migration changes neither capital nor any trade/history evidence.
         _snapshot(db, account, day)
+        old_version = account.policy_version
         account.policy_version = POLICY.version
+        db.add(RiskReview(scope=account.scope, at=datetime.now(UTC).isoformat(),
+                          reason="Updated managed trading risk policy",
+                          details={"action": "policy_transition", "old_policy": old_version,
+                                   "new_policy": POLICY.version}))
 
 
 def review_allocation(user, mode, capital, reason, day):
@@ -319,9 +329,12 @@ def review_allocation(user, mode, capital, reason, day):
     try:
         amount = Decimal(str(capital)) if not isinstance(capital, bool) else Decimal("NaN")
     except (InvalidOperation, TypeError, ValueError) as exc:
-        raise ValueError("Capital allocation must be ₹10,000 or ₹25,000") from exc
-    if mode not in {"sandbox", "live"} or amount not in {Decimal("10000"), Decimal("25000")}:
-        raise ValueError("Choose sandbox or live and a supported ₹10,000/₹25,000 allocation")
+        raise ValueError("Choose a supported capital allocation") from exc
+    supported = {Decimal("10000"), Decimal("25000")}
+    if mode == "sandbox":
+        supported.add(Decimal("50000"))
+    if mode not in {"sandbox", "live"} or amount not in supported:
+        raise ValueError("Choose ₹10,000 or ₹25,000; sandbox also supports ₹50,000")
     if not isinstance(reason, str) or not 3 <= len(reason.strip()) <= 1000:
         raise ValueError("Record an allocation review reason between 3 and 1000 characters")
     with _account(user, mode) as (db, account):

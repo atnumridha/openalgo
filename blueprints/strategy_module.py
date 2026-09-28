@@ -1760,15 +1760,21 @@ def start_strategy(sid):
     if mode not in store.RUN_MODES:
         return _error(f"mode must be one of: {', '.join(sorted(store.RUN_MODES))}", 400)
 
-    from services.strategy_module import engine
+    from services.strategy_module import automation_control, engine
 
-    if getattr(_row, "scalp_profile", None):
-        from services.strategy_module import automation_control
-
+    try:
+        signal_start = automation_control.requires_signal_start(_row)
+    except Exception:
+        logger.exception("Could not check start workflow for strategy %s", sid)
+        return _error("Could not verify the linked automation. No trade was started; retry shortly.", 503)
+    if signal_start:
+        if mode == "live" and not getattr(_row, "scalp_profile", None):
+            return _error("This strategy requires a signal from its linked Flow. Configure and verify its live Flow before trading.", 409)
         result = automation_control.enable_sandbox(sid, username, _api_key_for(username), mode=mode)
         if not result.ok:
-            return _error(result.error or "Could not enable scalping automation", 409)
-        return _ok({"run_id": result.run_id, "mode": mode, "legs": [], "automation_state": "armed"})
+            return _error(result.error or "Could not enable signal monitoring", 409)
+        return _ok({"run_id": result.run_id, "mode": mode, "legs": [], "automation_state": "armed",
+                    "message": automation_control.signal_start_message(_row)})
     result = engine.start_run(sid, username, mode, trigger_source="manual")
     if not result.ok:
         # A refusal here is a conflict or a bad configuration, not a server
@@ -1785,10 +1791,10 @@ def start_strategy(sid):
 def start_all_sandbox_strategies():
     """Mirror each strategy's individual sandbox start in one request.
 
-    Batch strategies enter through the normal run engine. Signal strategies
-    cannot be started without a signal, so their linked sandbox workflows are
-    armed instead. One refusal does not prevent the remaining strategies from
-    being processed, and this route never selects live mode.
+    Strategies with linked workflows wait for their signals, including batch
+    option templates. Only standalone batches enter immediately. One refusal
+    does not prevent the remaining strategies from being processed, and this
+    route never selects live mode.
     """
     username = _current_user()
     if not username:
@@ -1816,14 +1822,14 @@ def start_all_sandbox_strategies():
     processed = 0
     for row in rows:
         try:
-            if row.strategy_kind == "signal" or getattr(row, "scalp_profile", None):
+            if automation_control.requires_signal_start(row):
                 previous_state = row.automation_state
                 result = automation_control.enable_sandbox(row.id, username, api_key)
                 _audit_automation_result(row, username, result, enabling=True,
                                          previous_state=previous_state)
                 item = _automation_item(row, result, api_key=api_key)
                 if result.ok:
-                    item["reason"] = "Waiting for a valid signal"
+                    item["reason"] = automation_control.signal_start_message(row)
                 elif _bulk_automation_skipped(result):
                     item["outcome"] = "skipped"
             else:
@@ -1893,7 +1899,7 @@ def start_all_live_strategies():
     if body.get("confirmation") != "START LIVE":
         return _error('Type "START LIVE" to confirm real broker orders', 400)
 
-    from services.strategy_module import engine, live_authorization
+    from services.strategy_module import automation_control, engine, live_authorization
 
     allowed, authorization_error = live_authorization.require_live_entry(username)
     if not allowed:
@@ -1934,7 +1940,7 @@ def start_all_live_strategies():
 
                 result = automation_control.enable_sandbox(row.id, username, _api_key_for(username), mode="live")
                 item = _automation_item(row, result, api_key=_api_key_for(username))
-            elif row.strategy_kind == "signal":
+            elif automation_control.requires_signal_start(row):
                 item = {
                     "strategy_id": row.id,
                     "name": row.name,
@@ -1943,7 +1949,7 @@ def start_all_live_strategies():
                     "workflow_id": None,
                     "run_id": row.current_run_id,
                     "close_pending": False,
-                    "reason": "Signal strategy is waiting for a valid live signal",
+                    "reason": "Strategy requires a valid live signal from its linked Flow; no immediate entry was submitted",
                 }
             else:
                 result = engine.start_run(
@@ -2249,7 +2255,7 @@ def _audit_automation_result(row, username, result, *, enabling, previous_state=
     if enabling and result.ok:
         if (previous_state if previous_state is not None else row.automation_state) == "armed":
             return
-        kind, message = "automation_armed", "Sandbox automation armed"
+        kind, message = "automation_armed", "Sandbox signal monitoring enabled"
     elif not enabling and result.ok and result.close_pending:
         kind, message = "automation_closing", "Sandbox automation close pending"
     elif not enabling and result.ok:

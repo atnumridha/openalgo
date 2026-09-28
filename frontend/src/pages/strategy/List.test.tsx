@@ -362,16 +362,16 @@ describe('sandbox automation controls', () => {
       'tr'
     ) as HTMLElement
     expect(
-      screen.getByText(/Start all starts every eligible batch strategy in sandbox/i)
+      screen.getByText(/Start all enables linked workflows in sandbox/i)
     ).toBeVisible()
     expect(screen.getByRole('columnheader', { name: 'Automation' })).toBeInTheDocument()
-    expect(within(armed).getByText('Armed')).toBeInTheDocument()
+    expect(within(armed).getByText('Monitoring')).toBeInTheDocument()
     expect(within(armed).getByText('stopped')).toBeInTheDocument()
     expect(within(armed).getByRole('button', { name: /disable automation/i })).toBeEnabled()
     expect(
       within(
         screen.getByRole('link', { name: 'Disabled signal' }).closest('tr') as HTMLElement
-      ).getByRole('button', { name: 'Arm signals for Disabled signal' })
+      ).getByRole('button', { name: 'Monitor signals for Disabled signal' })
     ).toBeEnabled()
     const batch = screen.getByRole('link', { name: 'Batch strategy' }).closest('tr') as HTMLElement
     expect(within(batch).getByRole('button', { name: /enable automation/i })).toBeEnabled()
@@ -674,7 +674,7 @@ describe('sandbox automation controls', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Start all (sandbox)' }))
     const result = await screen.findByRole('status', { name: 'Strategy start results' })
     expect(result).toHaveTextContent('First')
-    expect(result).toHaveTextContent('Armed')
+    expect(result).toHaveTextContent('Monitoring')
     expect(result).toHaveTextContent('Batch')
     expect(result).toHaveTextContent('Started')
     expect(result).not.toHaveTextContent('Only signal strategies')
@@ -831,7 +831,7 @@ describe('individual strategy start controls', () => {
     )
     expect(rest.post).not.toHaveBeenCalled()
     const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveTextContent(/sandbox mode is paper-only/i)
+    expect(dialog).toHaveTextContent(/Sandbox uses simulated funds/i)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Start sandbox' }))
     expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/3/start', { mode: 'sandbox' })
   })
@@ -870,7 +870,7 @@ describe('individual strategy start controls', () => {
     renderList()
 
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Arm signals for Signal receiver' })
+      await screen.findByRole('button', { name: 'Monitor signals for Signal receiver' })
     )
     expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/3/automation/enable')
     expect(rest.post).not.toHaveBeenCalledWith(

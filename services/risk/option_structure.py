@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
+from services.risk.budget import EQUITY_POLICY_VERSION, FIXED_POLICY_VERSION
+
 STRUCTURE_RECIPE = "one-lot-option-structure-runner-v5"
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -82,7 +84,7 @@ def objective_ratio(leg, price):
     context = leg.get("scalp_context") or {}
     if context.get("risk_recipe") != STRUCTURE_RECIPE or context.get("exit_basis") != "option_premium":
         raise ValueError("Option runner recipe and exit basis disagree")
-    if context.get("risk_policy_version") != "equity-1pct-v2" or leg.get("target_pts") is not None:
+    if context.get("risk_policy_version") not in {EQUITY_POLICY_VERSION, FIXED_POLICY_VERSION} or leg.get("target_pts") is not None:
         raise ValueError("Option runner policy or hard target is incompatible")
     plan = validate_structure(leg, context.get("structure"))
     # Rebase the planning objective on the same adverse entry price used to

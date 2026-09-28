@@ -147,11 +147,11 @@ def test_frozen_final_all_ineligible_options_reports_rejections(monkeypatch):
     artifact = {
         "test": "frozen",
         "risk_recipe": ML_RISK_RECIPE,
-        "risk_policy_version": "equity-1pct-v2",
+        "risk_policy_version": "fixed-300-v3",
     }
     configuration = {
         "risk_recipe": ML_RISK_RECIPE,
-        "risk_policy_version": "equity-1pct-v2",
+        "risk_policy_version": "fixed-300-v3",
         "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
         "max_hold_minutes": 5,
         "parameters": {"stop_pct": 0.1, "target_pct": 0.3},
@@ -188,7 +188,7 @@ def test_nonadjacent_final_seed_is_rejected_before_holdout_consumption(monkeypat
         "engine_version": jobs.ENGINE_VERSION,
         "implementation_hash": jobs.implementation_hash(),
         "risk_recipe": ML_RISK_RECIPE,
-        "risk_policy_version": "equity-1pct-v2",
+        "risk_policy_version": "fixed-300-v3",
         "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
         "max_hold_minutes": 5,
         "parameters": {"stop_pct": 0.1, "target_pct": 0.3},
@@ -216,7 +216,7 @@ def test_nonadjacent_final_seed_is_rejected_before_holdout_consumption(monkeypat
     artifact = {
         "test": "frozen",
         "risk_recipe": ML_RISK_RECIPE,
-        "risk_policy_version": "equity-1pct-v2",
+        "risk_policy_version": "fixed-300-v3",
     }
     parent = {
         "kind": "ml",
@@ -279,8 +279,8 @@ def test_ml_queue_worker_frozen_final_reuses_exact_json_model(store, monkeypatch
     assert report["split"]["oos_sessions"] == 6
     assert report["ml"]["accuracy"]["labelled_observations"] > 0
     assert report["ml"]["deployment_supported"] is True
-    assert report["ml"]["artifact"]["risk_recipe"] == "one-lot-technical-profit-lock-v4"
-    assert report["ml"]["artifact"]["risk_policy_version"] == "equity-1pct-v2"
+    assert report["ml"]["artifact"]["risk_recipe"] == "one-lot-fixed300-profit-lock-v6"
+    assert report["ml"]["artifact"]["risk_policy_version"] == "fixed-300-v3"
     assert report["configuration_hash"] == run["configuration_hash"]
     assert store.get_run("alice", run["id"])["status"] == "completed"
     frozen = store.freeze_run("alice", run["id"])

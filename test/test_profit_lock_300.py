@@ -50,7 +50,7 @@ def test_gross_floor_starts_at_300_then_limits_giveback(peak, floor):
 
 
 def test_new_version_is_default_without_rewriting_previous_rule():
-    assert CASH_RISK_RECIPE == NEW
+    assert CASH_RISK_RECIPE == "one-lot-fixed300-profit-lock-v6"
     assert recipe_policy(NEW).version == "equity-1pct-v2"
     assert recipe_exit(100, 10, {"tick_size": 0.05, "lot_size": 75}, NEW)[0] == Decimal("90")
     risk = PositionRisk(entry_price=100, quantity=100, stop_price=98)

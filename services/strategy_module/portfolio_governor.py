@@ -1907,7 +1907,7 @@ def acquire_entry_admission(
                 budget, budget_ref = trading_budget.reserve_entry(user_id, strategy, resolved_legs, mode, broker, raw_facts, now)
                 if not budget.allowed:
                     _release_admission_lock(scope, lock)
-                    return GovernorDecision(False, budget.code, f"Capital policy refused entry: {budget.code.replace('_', ' ')}", budget.metrics), None
+                    return GovernorDecision(False, budget.code, trading_budget.refusal_message(budget, resolved_legs), budget.metrics), None
                 decision = GovernorDecision(True, "entry_allowed", "Entry fits the shared capital policy", {**decision.metrics, **budget.metrics})
             reservation = _EntryReservation(
                 user_id=str(user_id),

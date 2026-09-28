@@ -42,11 +42,11 @@ def test_current_api_reports_equity_policy_fields(client, monkeypatch):
         session["user"] = "new-owner"
     data = client.get("/strategy/api/risk").json["data"]
     account = data["accounts"]["sandbox"]
-    assert data["policy"]["version"] == "equity-1pct-v2"
-    assert account["per_trade_limit"] == 250
+    assert data["policy"]["version"] == "fixed-300-v3"
+    assert account["per_trade_limit"] == 300
     assert account["day_start_equity"] == 25000
-    assert account["daily_limit"] == 750
-    assert account["daily_remaining"] == 750
+    assert account["daily_limit"] == 2000
+    assert account["daily_remaining"] == 2000
     assert account["consecutive_losses"] == 0
     assert account["daily_stopped"] is False
     assert account["first_remaining"] is None
@@ -60,11 +60,11 @@ def test_current_api_upgrades_idle_existing_account_without_changing_allocation(
         session["user"] = "owner"
     data = client.get("/strategy/api/risk").json["data"]
     after = data["accounts"]["sandbox"]
-    assert after["policy_version"] == "equity-1pct-v2"
-    assert after["per_trade_limit"] == 250
+    assert after["policy_version"] == "fixed-300-v3"
+    assert after["per_trade_limit"] == 300
     assert after["day_start_equity"] == 25000
-    assert after["daily_limit"] == 750
-    assert after["daily_remaining"] == 750
+    assert after["daily_limit"] == 2000
+    assert after["daily_remaining"] == 2000
     assert after["capital"] == 25000
     assert after["allocation_revision"] == before["allocation_revision"]
 
@@ -102,9 +102,9 @@ def test_current_api_counts_overnight_loss_on_completion_day(client, monkeypatch
     account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
     assert account["daily_loss"] == 150
     assert account["day_start_equity"] == 25000
-    assert account["daily_limit"] == 750
-    assert account["daily_remaining"] == 600
-    assert account["per_trade_limit"] == 248.5
+    assert account["daily_limit"] == 2000
+    assert account["daily_remaining"] == 1850
+    assert account["per_trade_limit"] == 300
     assert account["consecutive_losses"] == 1
 
 
@@ -130,9 +130,9 @@ def test_current_api_uses_session_reset_for_completed_loss(client, monkeypatch, 
     account = client.get("/strategy/api/risk").json["data"]["accounts"]["sandbox"]
     assert account["daily_loss"] == 150
     assert account["day_start_equity"] == 25000
-    assert account["daily_limit"] == 750
-    assert account["daily_remaining"] == 600
-    assert account["per_trade_limit"] == 248.5
+    assert account["daily_limit"] == 2000
+    assert account["daily_remaining"] == 1850
+    assert account["per_trade_limit"] == 300
     assert account["consecutive_losses"] == 1
 
 
@@ -246,6 +246,35 @@ def test_allocation_revision_survives_round_trip_and_restart(client):
     assert restored["capital"] == 10000 and restored["allocation_revision"] == 2
     ledger.init_db()  # additive schema migration is idempotent across application startup
     assert ledger.status("owner", "sandbox", "2026-01-02")["allocation_revision"] == 2
+
+
+def test_fifty_thousand_sandbox_allocation_is_isolated_from_live(client):
+    before = ledger.status("owner", "live", "2026-09-28")
+    result = ledger.review_allocation("owner", "sandbox", 50000, "Sandbox testing capital", "2026-09-28")
+    assert result["capital"] == 50000
+    assert ledger.status("owner", "live", "2026-09-28") == before
+    with pytest.raises(ValueError):
+        ledger.review_allocation("owner", "live", 50000, "Not enabled for live", "2026-09-28")
+
+
+def test_equity_policy_upgrades_to_fixed_without_losing_stop_evidence(client, monkeypatch):
+    from sqlalchemy.orm import Session
+    from services.risk.budget import policy_for_version
+
+    monkeypatch.setattr(ledger, "POLICY", policy_for_version("equity-1pct-v2"))
+    before = ledger.status("owner", "sandbox", "2026-09-28")
+    with Session(ledger.engine) as db:
+        account = db.get(ledger.RiskAccount, "owner|sandbox")
+        account.daily_stop_day = "2026-09-28"
+        account.daily_stop_reason = "three_consecutive_losses"
+        db.commit()
+    monkeypatch.setattr(ledger, "POLICY", current_policy())
+    ledger.ensure_current_policy("owner", "sandbox", "2026-09-28")
+    after = ledger.status("owner", "sandbox", "2026-09-28")
+    assert after["policy_version"] == "fixed-300-v3"
+    assert after["daily_stopped"]
+    assert after["capital"] == before["capital"]
+    assert after["per_trade_limit"] == 300 and after["daily_limit"] == 2000
 
 
 def test_existing_risk_account_schema_adds_allocation_revision(tmp_path, monkeypatch):

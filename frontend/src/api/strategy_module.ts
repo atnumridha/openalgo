@@ -262,6 +262,7 @@ export async function executeSandboxReset(version: string): Promise<SandboxReset
 export interface StartedRun {
   run_id: number | null
   automation_state?: 'armed'
+  message?: string
   mode: RunMode
   /** False means a broker order may exist but its durable acknowledgement is pending repair. */
   acknowledged?: boolean

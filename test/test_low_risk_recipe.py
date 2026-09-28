@@ -253,7 +253,7 @@ def test_new_queued_ml_binds_current_recipe_and_source(monkeypatch):
             "candidate": "trend_breakout_filtered",
             "parameters": deepcopy(replay.DEFAULTS),
             "risk_recipe": CASH_RISK_RECIPE,
-            "risk_policy_version": "equity-1pct-v2",
+            "risk_policy_version": "fixed-300-v3",
             "pacing": {"cooldown_minutes": 5, "daily_trade_cap": None},
         },
     )
@@ -269,7 +269,7 @@ def test_new_queued_ml_binds_current_recipe_and_source(monkeypatch):
     )
     configuration = args[2]
     assert configuration["risk_recipe"] == CASH_RISK_RECIPE
-    assert configuration["risk_policy_version"] == "equity-1pct-v2"
+    assert configuration["risk_policy_version"] == "fixed-300-v3"
 
 
 def test_optimization_rejects_independent_target_grid():

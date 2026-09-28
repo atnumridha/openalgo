@@ -133,6 +133,27 @@ function renderResearch() {
   )
 }
 
+it('sets 50k only for sandbox through the reviewed allocation control', async () => {
+  const current = risk()
+  current.policy.version = 'fixed-300-v3'
+  rest.get.mockImplementation((url: string) => Promise.resolve({
+    data: { status: 'success', data: url === '/strategy/api/risk' ? current : overview() },
+  }))
+  rest.post.mockResolvedValue({ data: { status: 'success', data: { capital: 50000 } } })
+  renderResearch()
+  await userEvent.click(await screen.findByText('View budget details and pause rules'))
+  const sandbox = await screen.findByRole('region', { name: 'Sandbox risk budget' })
+  const button = within(sandbox).getByRole('button', { name: 'Set sandbox capital to ₹50,000' })
+  expect(button).toBeDisabled()
+  await userEvent.type(within(sandbox).getByLabelText('Allocation review reason'), 'User requested sandbox testing capital')
+  await userEvent.click(button)
+  await waitFor(() => expect(rest.post).toHaveBeenCalledWith('/strategy/api/risk/allocation', {
+    mode: 'sandbox', capital: 50000, reason: 'User requested sandbox testing capital',
+  }))
+  expect(screen.getByRole('region', { name: 'Setup status' })).toHaveTextContent('Fixed ₹300')
+  expect(screen.getAllByRole('button', { name: 'Set sandbox capital to ₹50,000' })).toHaveLength(1)
+})
+
 async function enterCosts() {
   await userEvent.click(screen.getByText('Edit fee details'))
   for (const [label, value] of [

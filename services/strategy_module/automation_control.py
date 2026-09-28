@@ -67,6 +67,30 @@ def resolve_workflow_link(
     )
 
 
+def requires_signal_start(strategy) -> bool:
+    """A UI start must not bypass a linked workflow's entry conditions.
+
+    Link presence selects automation; enable_sandbox validates ownership,
+    mode and graph under its control lease. Invalid links and lookup failures
+    must never turn into permission for an immediate manual order.
+    """
+    return bool(
+        strategy.strategy_kind == "signal"
+        or getattr(strategy, "scalp_profile", None)
+        or strategy.automation_state != "disabled"
+        or get_workflows_for_strategy(strategy.id, strict=True)
+    )
+
+
+def signal_start_message(strategy) -> str:
+    if strategy.underlying_exchange == "MCX":
+        return (
+            "Signal monitoring is active, but MCX entries remain blocked: "
+            "contract value conversion is not yet supported by the capital risk checks."
+        )
+    return "Waiting for a valid signal"
+
+
 @dataclass(frozen=True, slots=True)
 class ControlResult:
     ok: bool
