@@ -1,5 +1,6 @@
 # api/funds.py
 import json
+from decimal import Decimal
 
 import httpx
 
@@ -27,7 +28,6 @@ def get_margin_data(auth_token):
         trading_token = access_token_parts[0]
         trading_sid = access_token_parts[1]
         base_url = access_token_parts[2]
-        access_token = access_token_parts[3]
 
         if not base_url:
             logger.error("Base URL not found in auth token")
@@ -56,7 +56,7 @@ def get_margin_data(auth_token):
 
         logger.debug(f"Making POST request to {url}")
 
-        response = client.post(url, headers=headers, content=payload)
+        response = client.post(url, headers=headers, content=payload, timeout=15)
 
         logger.debug(f"Kotak Limits API Response Status: {response.status_code}")
         logger.debug(f"Kotak Limits API Response: {response.text}")
@@ -75,16 +75,18 @@ def get_margin_data(auth_token):
         # so folding it into availablecash double-counts (issue #1582 -- same bug
         # class fixed for other brokers there, never touched here).
         #
-        # Kotak's cash-balance field in /quick/user/limits is "CollateralValue"
-        # -- misleadingly named: it does NOT track pledged collateral. Verified on
-        # a real account before and after pledging two holdings: CollateralValue
-        # stayed on cash (179542.8 both times), "Collateral" carried the
-        # pledged-shares margin (0 -> 222565.5), and "Net" == CollateralValue +
-        # Collateral - MarginUsed (179542.8 + 222565.5 - 0.2 = 402108.1, matching
-        # the Kotak app's "Available margin"). "RmsPayInAmt - RmsPayOutAmt" is
-        # only the current day's fund pay-in/pay-out delta -- 0 unless the account
-        # was funded that same day -- so it is not a cash source either.
-        cash = float(margin_data.get("CollateralValue", 0))
+        # "CollateralValue" is the cash carried into the session, despite its
+        # name. Today's transfers are separate: a verified response reported
+        # 8345.16 here, 1654.84 in RmsPayInAmt and 10000 in Net (no margin used).
+        # Add that delta once; pledged "Collateral", used margin and MTM remain
+        # separate fields. Net alone is not cash because it includes collateral.
+        cash = (
+            Decimal(str(margin_data.get("CollateralValue", 0)))
+            + Decimal(str(margin_data.get("RmsPayInAmt", 0)))
+            - Decimal(str(margin_data.get("RmsPayOutAmt", 0)))
+        )
+        if not cash.is_finite():
+            raise ValueError("Kotak cash balance or fund transfers are not finite")
         collateral = float(margin_data.get("Collateral", 0))
 
         processed_margin_data = {
