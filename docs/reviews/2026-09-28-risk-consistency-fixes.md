@@ -30,3 +30,10 @@ Frozen historical/ML recipes retain v4. The new recipe is forward-only and requi
 A broad verification attempt stalled in native SQLite connection-close mutexes. It was stopped; its isolated test databases were preserved before a clean rerun. Duplicate Flow records left by the interrupted fixture caused two intermediate retry failures. A fully fresh run also exposed that the API deletion tests had never created or isolated their Flow schema; that fixture now owns a throwaway Flow database. This involved only `*-test.db` files in the isolated checkout, never the production account.
 
 Final verification: **2,472 backend tests passed**, one existing expected failure for an unrelated legacy LIMIT-price configuration; three SQLAlchemy identity-map warnings. **49 UI tests passed**; TypeScript/Vite production build and isolated browser inspection passed.
+
+
+## Local rollout
+
+Implementation commit `2a314fbe9` was merged to `main`. Another **228 focused tests passed on merged main**. The app and research worker were restarted only after verifying zero open managed runs and zero live opt-ins. Both report ready. All seven Sandbox workflows completed fresh scheduled checks at **11:20 IST, 28 September 2026** and recorded no qualifying signal; there were still zero open managed runs.
+
+Pre/post snapshots match for saved strategy configuration and activation, all ten Flow definitions/activation flags, capital policy/allocation revisions and cost schedules. Seven scalp strategies remain armed in Sandbox; live opt-ins remain disabled. The updated monitor and its compiled bundle return HTTP200. No trade was forced.

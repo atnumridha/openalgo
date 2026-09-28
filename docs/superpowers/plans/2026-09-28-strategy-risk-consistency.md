@@ -30,7 +30,7 @@
 - [x] Correct admission, account scoping, state/risk adapter/recovery propagation; retain all independent loss/funding gates.
 - [x] Expose stop/objective/entry-rejection evidence on the monitor; distinguish signal waiting from rejected setup.
 - [x] Test all seven profiles through affordable/over-budget scenarios and old-recipe regressions; independent final review, relevant UI checks/build.
-- [ ] Publish to main, verify services/current scheduled checks and unchanged account/activation settings; report evidence and limitations.
+- [x] Publish to main, verify services/current scheduled checks and unchanged account/activation settings; report evidence and limitations.
 
 ## Execution ledger
 
@@ -46,3 +46,5 @@
 - Legacy research/ML retains v4; v5 is forward-only. Source binding invalidates prior live releases on code changes. Portfolio allocations and strategy activation settings are intentionally unchanged.
 
 - Final backend regression: 2,472 passed, one pre-existing expected failure, three SQLAlchemy identity-map warnings (59.84s). UI: 49 tests passed, production TypeScript/Vite build passed. Biome has no errors (one existing informational template-literal suggestion).
+
+- Rollout: implementation 2a314fbe9 fast-forwarded to main; 228 focused tests passed on merged main. Restarted only after confirming zero open managed runs and zero live opt-ins. App/research ready; all seven Sandbox workflows completed 11:20 IST checks with fresh no-signal evidence. Settings snapshots match for strategies, capital policy, workflows and costs; seven armed, zero open managed runs. Built UI and new bundle return HTTP200.
