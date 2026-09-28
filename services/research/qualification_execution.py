@@ -42,7 +42,7 @@ def current_flow_origin():
         return dict(origin) if row is not None else None
 
 
-def entry_release_reason(metadata):
+def entry_release_reason(metadata, exchange=None):
     from database import trading_risk_db as ledger
     from services.research import qualification
 
@@ -53,7 +53,7 @@ def entry_release_reason(metadata):
         int(metadata["strategy_id"]),
         metadata.get("strategy_config"),
         ledger.POLICY.version,
-        ledger.get_costs(metadata["owner"]),
+        ledger.get_costs(metadata["owner"], exchange),
     )
 
 
@@ -136,7 +136,7 @@ def before_dispatch(metadata, mode, intent, api_key, order):
         if intent != "entry":
             return None
         try:
-            return entry_release_reason(metadata)
+            return entry_release_reason(metadata, order.get("exchange"))
         except Exception:
             logger.exception("Live release could not be verified")
             return "Live release evidence is unavailable; new entry is blocked"

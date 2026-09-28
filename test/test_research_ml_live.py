@@ -203,7 +203,7 @@ def test_nonzero_fee_sizing_passes_actual_shared_admission_boundary(monkeypatch)
     ) > Decimal("1000")
 
     observed = []
-    monkeypatch.setattr(ledger, "get_costs", lambda _: costs)
+    monkeypatch.setattr(ledger, "get_costs", lambda _, exchange=None: costs)
     monkeypatch.setattr(ledger, "list_trades", lambda *_a, **_k: [])
     monkeypatch.setattr(trading_budget, "reconcile_account", lambda *_: None)
     monkeypatch.setattr(

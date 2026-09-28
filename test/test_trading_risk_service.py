@@ -105,6 +105,44 @@ def test_kotak_costs_are_modeled_by_virtual_sandbox_but_not_a_live_sandbox_route
     assert decision.allowed
 
 
+@pytest.mark.parametrize(("exchange", "fee", "expected_risk"), [
+    ("NFO", 20, D("940")), ("BFO", 25, D("950")), ("MCX", 30, D("960")),
+])
+def test_entry_selects_its_saved_exchange_costs_without_replacing_nifty(exchange, fee, expected_risk):
+    for market, brokerage in [("NFO", 20), ("BFO", 25), ("MCX", 30)]:
+        ledger.set_costs("u", COSTS | {"exchange": market, "broker": "kotak",
+                                      "brokerage_per_order": brokerage})
+    ledger.init_db()  # schedules survive reload and additive schema initialization
+    assert ledger.get_costs("u")["exchange"] == "NFO"
+    leg = LEG | {"exchange": exchange, "price_multiplier": 1}
+    decision, _ = service.reserve_entry("u", STRATEGY, [leg], "sandbox", "sandbox", FACTS, NOW)
+    assert decision.allowed, decision.code
+    trade = ledger.list_trades("u", "sandbox")[0]
+    assert trade["planned_risk"] == expected_risk
+    assert trade["details"]["costs"]["brokerage_per_order"] == fee
+    assert trade["details"]["costs"]["exchange"] == exchange
+
+
+def test_expired_exchange_costs_do_not_fall_back_to_other_market():
+    ledger.set_costs("u", COSTS | {"exchange": "NFO"})
+    ledger.set_costs("u", COSTS | {"exchange": "BFO", "effective_to": "2026-09-25"})
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG | {"exchange": "BFO"}],
+                                        "sandbox", "sandbox", FACTS, NOW)
+    assert decision.code == "cost_schedule_expired_or_invalid"
+    assert not ledger.list_trades("u", "sandbox")
+
+
+def test_exchange_schedules_are_owner_scoped_and_keep_reserved_fees():
+    ledger.set_costs("u", COSTS | {"exchange": "BFO"})
+    ledger.set_costs("other", COSTS | {"exchange": "NFO", "brokerage_per_order": 0})
+    decision, _ = service.reserve_entry("u", STRATEGY, [LEG], "sandbox", "sandbox", FACTS, NOW)
+    assert decision.code == "cost_schedule_exchange_mismatch"
+    leg = LEG | {"exchange": "BFO"}
+    assert service.reserve_entry("u", STRATEGY, [leg], "sandbox", "sandbox", FACTS, NOW)[0].allowed
+    ledger.set_costs("u", COSTS | {"exchange": "BFO", "brokerage_per_order": 99})
+    assert ledger.list_trades("u", "sandbox")[0]["details"]["costs"]["brokerage_per_order"] == 20
+
+
 def test_unsupported_naked_option_or_incomplete_lot_is_refused():
     ledger.set_costs("u", COSTS)
     for override in ({"position": "S"}, {"quantity": 51}, {"lot_size": None}, {"exchange": "MCX"}):
@@ -437,3 +475,18 @@ def test_equity_admission_caps_total_loss_after_binding_operator_fees(monkeypatc
     assert snapshot["per_trade_limit"] == D("250")
     assert snapshot["reserved_risk"] == D("250")
     assert snapshot["daily_remaining"] == D("500")
+
+
+def test_legacy_schedule_survives_adding_an_exchange_and_qualification_selects_exact_scope(monkeypatch):
+    from sqlalchemy.orm import Session
+    from services.research.qualification_context import _risk_context
+
+    original = COSTS | {"exchange": "NFO", "broker": "kotak"}
+    with Session(ledger.engine) as db, db.begin():
+        db.add(ledger.RiskSettings(user_id="u", costs=original))
+    ledger.set_costs("u", COSTS | {"exchange": "BFO", "brokerage_per_order": 7})
+    ledger.init_db()
+    assert ledger.get_costs("u", "NFO") == original
+    monkeypatch.setattr(service, "trading_day", lambda: "2026-09-26")
+    assert _risk_context("u", "BFO")["costs"]["brokerage_per_order"] == 7
+    assert _risk_context("u", "NFO")["costs"] == original

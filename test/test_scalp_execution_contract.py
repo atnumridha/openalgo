@@ -194,7 +194,7 @@ def test_real_durable_admission_allows_affordable_structure_and_refuses_wide_sto
     monkeypatch.setattr(ledger, "POLICY", budget.current_policy(Decimal("10000")))
     ledger.init_db()
     costs = fees(brokerage_per_order=20)
-    monkeypatch.setattr(ledger, "get_costs", lambda _: costs)
+    monkeypatch.setattr(ledger, "get_costs", lambda _, exchange=None: costs)
     monkeypatch.setattr(trading_budget, "reconcile_account", lambda *a: None)
     monkeypatch.setattr(qualification, "register_entry", lambda *a: None)
     monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _: ("test", "kotak"))

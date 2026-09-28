@@ -65,6 +65,7 @@ def status():
                 "policy": ledger.policy_payload(),
                 "enabled": ledger.policy_enabled(user),
                 "costs": ledger.get_costs(user),
+                "costs_by_exchange": ledger.get_cost_schedules(user),
                 "accounts": accounts,
             }
         ),

@@ -253,5 +253,6 @@ export interface TradingRisk {
     version: string
   }
   costs: CostSchedule | null
+  costs_by_exchange?: Partial<Record<'NFO' | 'BFO' | 'MCX', CostSchedule>>
   accounts: { sandbox: RiskAccount | null; live: RiskAccount | null }
 }

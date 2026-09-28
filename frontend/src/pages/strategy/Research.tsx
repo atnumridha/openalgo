@@ -105,6 +105,21 @@ const kotakNseDraft = {
   slippage_bps: '10',
 }
 
+const marketLabels = { NFO: 'NSE options', BFO: 'BSE SENSEX / BANKEX options', MCX: 'MCX options' }
+const kotakDrafts = {
+  NFO: { ...kotakNseDraft, effective_from: kotakVerifiedOn },
+  BFO: {
+    ...kotakNseDraft, exchange: 'BFO', schedule_id: 'Kotak Neo API - BSE SENSEX / BANKEX options',
+    effective_from: '2026-09-28', exchange_rate: '0.0325',
+    source: 'Checked 2026-09-28: https://www.kotakneo.com/support/what-is-the-brokerage-for-using-neo-trade-api/ ; https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/exchange-transaction-charges ; https://groww.in/pricing/futures-and-options . Indicative SENSEX/BANKEX rates; 0 API brokerage assumes Trade Free plan. Slippage is estimated.',
+  },
+  MCX: {
+    ...kotakNseDraft, exchange: 'MCX', schedule_id: 'Kotak Neo API - MCX options',
+    effective_from: '2026-09-28', exchange_rate: '0.0418', stt_sell_rate: '0.05',
+    source: 'Checked 2026-09-28: https://www.kotakneo.com/support/what-is-the-brokerage-for-using-neo-trade-api/ ; https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/exchange-transaction-charges ; https://groww.in/pricing/futures-and-options . Indicative MCX option rates; sell tax is CTT. 0 API brokerage assumes Trade Free plan. Slippage is estimated.',
+  },
+}
+
 const kindLabels: Record<ResearchRunKind, string> = {
   development: 'Development',
   optimization: 'Parameter search',
@@ -441,9 +456,20 @@ export default function Research() {
     },
   })
 
+  const selectedCostExchange = (costEdits.exchange ?? risk.data?.costs?.exchange ?? '') as keyof typeof marketLabels | ''
+  const savedMarketCosts = selectedCostExchange
+    ? risk.data?.costs_by_exchange?.[selectedCostExchange]
+      ?? (risk.data?.costs?.exchange === selectedCostExchange ? risk.data.costs : undefined)
+    : risk.data?.costs
+  const selectCostMarket = (exchange: string) => {
+    setCostEdits({ exchange })
+    setFormError(null)
+    savedCosts.reset()
+  }
+  const draftMarket = selectedCostExchange || 'NFO'
   const costValue = (key: keyof CostSchedule) => {
     if (costEdits[key] !== undefined) return costEdits[key]
-    const value = risk.data?.costs?.[key]
+    const value = savedMarketCosts?.[key]
     if (value === undefined || value === null) return ''
     return String(percentCosts.has(key) ? Number((Number(value) * 100).toPrecision(12)) : value)
   }
@@ -460,7 +486,7 @@ export default function Research() {
         if (!Number.isFinite(parsed) || parsed < 0)
           throw new Error(`${label} must be a non-negative number.`)
         if (percentCosts.has(key) && parsed > 100) throw new Error(`${label} cannot exceed 100%.`)
-        result[key] = percentCosts.has(key) ? parsed / 100 : parsed
+        result[key] = percentCosts.has(key) ? Number((parsed / 100).toPrecision(12)) : parsed
       } else {
         result[key] = value
       }
@@ -726,10 +752,22 @@ export default function Research() {
                     Entry risk is blocked until a complete, dated cost schedule is saved.
                   </p>
                 )}
+                <div className="space-y-2">
+                  <Label htmlFor="saved-market-schedule">Saved market schedule</Label>
+                  <select id="saved-market-schedule" className={selectClass}
+                    value={selectedCostExchange} onChange={(event) => selectCostMarket(event.target.value)}>
+                    <option value="">Custom / unscoped</option>
+                    {Object.entries(marketLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Each market saves separately. Saving BSE or MCX fees keeps your NSE schedule unchanged.
+                    {selectedCostExchange && !savedMarketCosts && ' No saved schedule for this market. Load its rates or enter verified fees below.'}
+                  </p>
+                </div>
                 <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="font-medium">Kotak Neo API · NSE options</p>
+                      <p className="font-medium">Kotak Neo API · {marketLabels[draftMarket]}</p>
                       <p className="text-sm text-muted-foreground">
                         ₹0 API brokerage on Trade Free plans. Taxes and exchange fees still apply.
                       </p>
@@ -738,10 +776,9 @@ export default function Research() {
                       variant="outline"
                       onClick={() => {
                         setCostEdits({
-                          ...kotakNseDraft,
-                          effective_from: kotakVerifiedOn,
+                          ...kotakDrafts[draftMarket],
                           effective_to:
-                            costValue('effective_to') >= kotakVerifiedOn
+                            costValue('effective_to') >= kotakDrafts[draftMarket].effective_from
                               ? costValue('effective_to')
                               : '',
                         })
@@ -753,7 +790,7 @@ export default function Research() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Checked {kotakVerifiedOn} against Kotak’s{' '}
+                    API brokerage from Kotak’s{' '}
                     <a
                       className="underline"
                       href="https://www.kotakneo.com/support/what-is-the-brokerage-for-using-neo-trade-api/"
@@ -771,8 +808,10 @@ export default function Research() {
                     >
                       charge calculator
                     </a>
-                    . This loads an editable draft for NSE options only. BSE and MCX need separate
-                    verified rates.
+                    . BSE/MCX exchange rates are cross-checked against{' '}
+                    <a className="underline" href="https://support.zerodha.com/category/account-opening/resident-individual/ri-charges/articles/exchange-transaction-charges" target="_blank" rel="noreferrer">published exchange charges</a>{' '}
+                    and <a className="underline" href="https://groww.in/pricing/futures-and-options" target="_blank" rel="noreferrer">statutory rates</a>.
+                    These are editable planning assumptions, not reconciled broker charges. BSE rates cover SENSEX/BANKEX. MCX sell tax is CTT.
                   </p>
                 </div>
                 <p className="text-sm">
@@ -807,7 +846,8 @@ export default function Research() {
                           className={selectClass}
                           value={costValue(key)}
                           onChange={(event) => {
-                            setCostEdits((previous) => ({ ...previous, [key]: event.target.value }))
+                            if (key === 'exchange') selectCostMarket(event.target.value)
+                            else setCostEdits((previous) => ({ ...previous, [key]: event.target.value }))
                             savedCosts.reset()
                           }}
                         >

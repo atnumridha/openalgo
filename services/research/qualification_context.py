@@ -165,14 +165,16 @@ def _broker_identity(owner, connection_id):
     }
 
 
-def _risk_context(owner):
+def _risk_context(owner, exchange=None):
     from database import trading_risk_db as ledger
     from services.research.costs import validate_cost_dates, validate_cost_schedule
     from services.strategy_module.trading_budget import trading_day
 
     if not ledger.policy_enabled(owner):
         raise ValueError("Enable the capital profile with a verified cost schedule first")
-    costs = validate_cost_schedule(ledger.get_costs(owner))
+    costs = validate_cost_schedule(ledger.get_costs(owner, exchange))
+    if exchange and costs.get("exchange") and costs["exchange"] != exchange:
+        raise ValueError(f"Save a cost schedule for {exchange} before qualification")
     validate_cost_dates(costs, [trading_day()])
     sandbox = ledger.status(owner, "sandbox", trading_day())
     live = ledger.status(owner, "live", trading_day())
@@ -235,7 +237,10 @@ def current_binding(owner, strategy_id, strategy_config=None, costs=None):
                 raise ValueError("Strategy configuration changed after admission")
     workflows = _read_workflows(owner, strategy)
     broker = _broker_identity(owner, strategy.get("broker_connection_id"))
-    risk = _risk_context(owner)
+    from services.strategy_module.symbol_resolver import derivatives_exchange
+
+    risk = _risk_context(owner, derivatives_exchange(strategy.get("underlying_exchange"))
+                         if strategy.get("underlying_exchange") else None)
     if costs is not None and digest(costs) != digest(risk["costs"]):
         raise ValueError("Cost schedule changed after admission")
     binding = {

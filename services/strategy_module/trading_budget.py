@@ -90,7 +90,7 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
             return _refusal("unsupported_contract_multiplier")
     except ValueError:
         return _refusal("contract_metadata_required")
-    costs = ledger.get_costs(user)
+    costs = ledger.get_costs(user, exchange)
     if costs is None:
         return _refusal("cost_schedule_required")
     try:

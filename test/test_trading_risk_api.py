@@ -142,12 +142,36 @@ def test_missing_cost_fields_and_unreviewed_resume_are_rejected(client):
     assert (
         client.put("/strategy/api/risk/costs", json={"brokerage_per_order": 0}).status_code == 400
     )
+
     assert (
         client.post(
             "/strategy/api/risk/resume", json={"mode": "live", "reason": "review"}
         ).status_code
         == 400
     )
+
+
+def test_saving_bse_schedule_preserves_existing_nse_schedule(client):
+    COSTS = {
+        "schedule_id": "fixture", "source": "test-only",
+        "effective_from": "2026-01-01", "effective_to": "2026-12-31",
+        "brokerage_per_order": 20, "exchange_rate": 0, "sebi_rate": 0,
+        "gst_rate": 0, "stamp_buy_rate": 0, "stt_sell_rate": 0, "slippage_bps": 0,
+    }
+
+    with client.session_transaction() as session:
+        session["user"] = "owner"
+    nse = COSTS | {"exchange": "NFO", "broker": "kotak"}
+    ledger.activate_policy("owner")
+    bse = COSTS | {"exchange": "BFO", "broker": "kotak", "exchange_rate": 0.000325}
+    for costs in (nse, bse):
+        assert client.put("/strategy/api/risk/costs", json=costs).status_code == 200
+    data = client.get("/strategy/api/risk").json["data"]
+    assert data["costs"] == nse
+    assert data["costs_by_exchange"] == {"NFO": nse, "BFO": bse}
+    with client.session_transaction() as session:
+        session["user"] = "other"
+    assert client.get("/strategy/api/risk").json["data"]["costs_by_exchange"] == {}
 
 
 def test_activation_refuses_existing_untracked_strategy_runs(client, monkeypatch):

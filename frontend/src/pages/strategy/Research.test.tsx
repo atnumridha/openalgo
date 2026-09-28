@@ -350,6 +350,41 @@ describe('Research workspace', () => {
       )
     )
   })
+  it('loads each saved market independently and does not relabel NSE fees as BSE', async () => {
+    const nse = { ...costs, exchange: 'NFO', broker: 'kotak', schedule_id: 'NSE saved' }
+    const bse = { ...costs, exchange: 'BFO', broker: 'kotak', schedule_id: 'BSE saved', exchange_rate: 0.000325 }
+    rest.get.mockImplementation((url: string) => Promise.resolve({ data: { status: 'success',
+      data: url === '/strategy/api/risk' ? { ...risk(), costs: nse, costs_by_exchange: { NFO: nse, BFO: bse } } : overview(),
+    } }))
+    renderResearch()
+    await screen.findByText(/Selected: NSE saved/)
+    await userEvent.selectOptions(screen.getByLabelText('Saved market schedule'), 'BFO')
+    await userEvent.click(screen.getByText('Edit fee details'))
+    expect(screen.getByLabelText('Exchange fee (%)')).toHaveValue(0.0325)
+    expect(screen.getByLabelText('Schedule name')).toHaveValue('BSE saved')
+    await userEvent.selectOptions(screen.getByLabelText('Saved market schedule'), 'MCX')
+    expect(screen.getByLabelText('Exchange fee (%)')).toHaveValue(null)
+    expect(screen.getByLabelText('Schedule name')).toHaveValue('')
+    await userEvent.selectOptions(screen.getByLabelText('Saved market schedule'), 'NFO')
+    expect(screen.getByLabelText('Exchange fee (%)')).toHaveValue(0.01)
+    expect(rest.put).not.toHaveBeenCalled()
+  })
+
+  it.each([['BFO', 0.000325, 0.0015], ['MCX', 0.000418, 0.0005]])(
+    'saves a scoped Kotak %s draft using the matching rates', async (exchange, exchangeRate, sellTax) => {
+      renderResearch()
+      await screen.findByText('Shared limits enabled')
+      await userEvent.selectOptions(screen.getByLabelText('Saved market schedule'), exchange as string)
+      await userEvent.click(screen.getByRole('button', { name: 'Use Kotak Neo rates' }))
+      await userEvent.type(screen.getByLabelText('Effective until'), '2026-10-10')
+      rest.put.mockResolvedValue({ data: { status: 'success' } })
+      await userEvent.click(screen.getByRole('button', { name: 'Update enabled profile costs' }))
+      await waitFor(() => expect(rest.put).toHaveBeenCalledWith('/strategy/api/risk/costs',
+        expect.objectContaining({ exchange, exchange_rate: exchangeRate, stt_sell_rate: sellTax, brokerage_per_order: 0 })))
+      expect(rest.post).not.toHaveBeenCalled()
+    }
+  )
+
   it('guides setup one step at a time without displaying advanced trading controls upfront', async () => {
     rest.get.mockImplementation((url: string) =>
       Promise.resolve({

@@ -289,7 +289,7 @@ def test_live_dispatch_rechecks_release_after_quote_and_never_blocks_exit(
     revoked = False
     calls = []
     monkeypatch.setattr(
-        execution, "entry_release_reason", lambda metadata: "Release revoked" if revoked else None
+        execution, "entry_release_reason", lambda metadata, exchange=None: "Release revoked" if revoked else None
     )
     monkeypatch.setattr(dispatch, "resolve_live_auth", lambda key: ("token", "kotak", None))
     monkeypatch.setattr(

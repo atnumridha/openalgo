@@ -86,6 +86,15 @@ class RiskSettings(Base):
     costs = Column(JSON, nullable=True)
 
 
+class RiskCostSchedule(Base):
+    """Each market keeps its own fees; the legacy default remains readable."""
+
+    __tablename__ = "trading_risk_cost_schedule"
+    user_id = Column(String(80), primary_key=True)
+    exchange = Column(String(10), primary_key=True)
+    costs = Column(JSON, nullable=False)
+
+
 class RiskDayEquity(Base):
     """Immutable funded-equity baseline established under the account lock."""
 
@@ -551,19 +560,42 @@ def activate_policy(user):
             db.add(RiskSettings(user_id=str(user), costs=None))
 
 
-def get_costs(user):
+def get_costs(user, exchange=None):
     with Session(engine) as db:
+        if exchange:
+            scoped = db.get(RiskCostSchedule, (str(user), str(exchange).upper()))
+            if scoped is not None:
+                return dict(scoped.costs)
+        # Preserve old unscoped schedules and the explicit mismatch refusal.
+        # Never relabel fees from another exchange to make admission pass.
         row = db.get(RiskSettings, str(user))
         return dict(row.costs) if row and row.costs is not None else None
+
+
+def get_cost_schedules(user):
+    with Session(engine) as db:
+        settings = db.get(RiskSettings, str(user))
+        legacy = settings.costs if settings else None
+        schedules = {legacy["exchange"]: dict(legacy)} if legacy and legacy.get("exchange") else {}
+        for row in db.scalars(select(RiskCostSchedule).where(RiskCostSchedule.user_id == str(user))):
+            schedules[row.exchange] = dict(row.costs)
+        return schedules
 
 
 def set_costs(user, costs):
     with Session(engine) as db, db.begin():
         row = db.get(RiskSettings, str(user))
+        exchange = costs.get("exchange")
+        if exchange:
+            scoped = db.get(RiskCostSchedule, (str(user), exchange))
+            if scoped is None:
+                db.add(RiskCostSchedule(user_id=str(user), exchange=exchange, costs=dict(costs)))
+            else:
+                scoped.costs = dict(costs)
         if row is None:
-            db.add(RiskSettings(user_id=str(user), costs=costs))
-        else:
-            row.costs = costs
+            db.add(RiskSettings(user_id=str(user), costs=dict(costs)))
+        elif not row.costs or not exchange or row.costs.get("exchange") == exchange:
+            row.costs = dict(costs)
 
 
 def policy_payload():

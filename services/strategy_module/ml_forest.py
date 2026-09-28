@@ -257,7 +257,7 @@ def prepare(strategy, owner, api_key, mode):
         raise ValueError("Frozen ML admission risk recipe differs from executable admission")
     if config.get("capital") != 25000:
         raise ValueError("Frozen ML allocation differs from the ₹25,000 research allocation")
-    current_costs = trading_risk_db.get_costs(owner)
+    current_costs = trading_risk_db.get_costs(owner, "NFO")
     if execution_economics(current_costs) != execution_economics(config["costs"]):
         raise ValueError("Current execution rates differ from the frozen ML research rates")
     client = FlowOpenAlgoClient(api_key)
