@@ -51,6 +51,8 @@ const labels: Record<string, string> = {
   scheduled: 'Scheduled',
   outside_setup: 'Setup window ended',
   signal_expired: 'Signal expired',
+  data_unavailable: 'Waiting for data',
+  collecting_history: 'Collecting candles',
   unmanaged_run: 'Open run needs attention',
   unknown: 'Unknown automation state',
   link_error: 'Flow link problem',
@@ -412,7 +414,10 @@ export default function Monitor() {
                   </Button>
                 </div>
                 <p className="mt-4 border-l-2 border-primary pl-3 text-sm leading-relaxed">
-                  {current.reason}
+                  {current.monitor_status === 'data_unavailable' &&
+                  current.evaluation?.technical?.data_ready === false
+                    ? current.evaluation.reason || 'Signal data is not ready.'
+                    : current.reason}
                 </p>
                 <dl className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <Fact label="Last check">{stamp(current.last_check_at)}</Fact>
@@ -655,7 +660,7 @@ function Decision({
             )}
             {technical && !technical.data_ready && (
               <p className="mt-3 text-sm text-amber-600 dark:text-amber-400">
-                Expected completed candle is missing. No current pattern can be confirmed.
+                Signal data is not ready. Review the recorded reason and history below.
               </p>
             )}
             {technical && (

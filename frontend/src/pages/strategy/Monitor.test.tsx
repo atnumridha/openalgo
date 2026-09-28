@@ -89,6 +89,24 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('explains candle warm-up without claiming an observed candle is missing', async () => {
+    const warming = {
+      ...strategy,
+      monitor_status: 'data_unavailable',
+      reason: 'The expected completed candle is missing. Inspect history timestamps below.',
+      evaluation: {
+        ...strategy.evaluation,
+        reason: 'Collecting ten contiguous completed five-minute candles',
+        technical: { ...strategy.evaluation.technical, data_ready: false },
+      },
+    }
+    setup(warming)
+    await screen.findByRole('heading', { level: 2, name: strategy.name })
+    expect(screen.getAllByText(warming.evaluation.reason)).toHaveLength(2)
+    expect(screen.queryByText(/expected completed candle is missing/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Signal data is not ready/)).toBeInTheDocument()
+    expect(api.one).not.toHaveBeenCalled()
+  })
   it('keeps the inspected live strategy stable when a refresh changes priority', async () => {
     const first = { ...strategy, id: 19, name: 'Live Bollinger', mode: 'live', live_enabled: true }
     const second = { ...first, id: 20, name: 'Live Trend' }
