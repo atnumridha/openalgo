@@ -277,7 +277,7 @@ def test_ml_queue_worker_frozen_final_reuses_exact_json_model(store, monkeypatch
     assert report["split"]["oos_sessions"] == 6
     assert report["ml"]["accuracy"]["labelled_observations"] > 0
     assert report["ml"]["deployment_supported"] is True
-    assert report["ml"]["artifact"]["risk_recipe"] == "one-lot-cash300-3r-v1"
+    assert report["ml"]["artifact"]["risk_recipe"] == "one-lot-cash300-profit-trail-v2"
     assert report["ml"]["artifact"]["risk_policy_version"] == "shared-300-3r-v1"
     assert report["configuration_hash"] == run["configuration_hash"]
     assert store.get_run("alice", run["id"])["status"] == "completed"

@@ -70,7 +70,7 @@ it('shows current cash exits on every card and qualifies the earlier-rule rankin
   show()
   const shortlist = screen.getByRole('region', { name: 'Scalping strategies' })
   expect(shortlist).toHaveTextContent(/27 September 2026.*earlier exit and risk rules/)
-  expect(shortlist).toHaveTextContent(/not results for the current ₹300\/3R recipe/)
+  expect(shortlist).toHaveTextContent(/not results for the current profit-trailing recipe/)
   const expected = [
     ['EMA 9/15', 'ITM option', '46.58%', '102/219'],
     ['EMA 50/200 + regime', 'ATM option', '46.43%', '13/28'],
@@ -82,7 +82,7 @@ it('shows current cash exits on every card and qualifies the earlier-rule rankin
     const card = cards[index] as HTMLElement
     expect(within(card).getByText(title)).toBeInTheDocument()
     expect(card).toHaveTextContent(contract)
-    expect(card).toHaveTextContent(/current stop up to ₹300 gross \/ 3R option target/)
+    expect(card).toHaveTextContent(/stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500\+/)
     expect(card).toHaveTextContent('15-minute limit')
     expect(card).toHaveTextContent(`Earlier-rule wins: ${winRate} · ${counts} trades`)
   })

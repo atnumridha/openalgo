@@ -10,6 +10,7 @@ from test_trading_research import fees
 from services.research import dataset, replay
 from services.research.ml_live import entry_plan
 from services.risk.budget import BudgetTrade
+from services.risk.profit_exit import PROFIT_RECIPE
 
 RECIPE = "one-lot-cash300-3r-v1"
 CONTRACT = {"symbol": "NIFTY_CE", "lot_size": 75, "multiplier": 1, "tick_size": 0.05}
@@ -76,7 +77,7 @@ def test_new_configuration_binds_three_r_and_pacing_and_rejects_ratio_override()
     config = replay.validate_configuration(
         data, "trend_breakout_filtered", {}, fees(), capital=25000
     )
-    assert config["risk_recipe"] == RECIPE
+    assert config["risk_recipe"] == PROFIT_RECIPE
     assert config["parameters"]["target_pct"] == 0.3
     assert config["pacing"] == {"cooldown_minutes": 5, "daily_trade_cap": None}
     hashes = {
@@ -136,6 +137,7 @@ def test_replay_chronological_loss_stop_and_no_successful_entry_cap(outcomes, wa
     config = replay.validate_configuration(
         data, "trend_breakout_filtered", {}, fees(slippage_bps=0), capital=25000, cooldown_minutes=0
     )
+    config["risk_recipe"] = RECIPE
     config["research_signal_hash"] = dataset.digest(signals)
     result = replay.run_replay(data, config, research_signals=signals)
     assert len(result["trades"]) == want
@@ -158,6 +160,8 @@ def test_label_live_and_replay_share_cash_exit_and_net_costs(stress):
     config = replay.validate_configuration(
         data, "trend_breakout_filtered", {}, costs, capital=25000, cooldown_minutes=0
     )
+    config["risk_recipe"] = RECIPE
+    config["risk_recipe"] = RECIPE
     config["research_signal_hash"] = dataset.digest(signals)
     result = replay.run_replay(data, config, stress=stress, research_signals=signals)
     trade = result["trades"][0]
@@ -205,7 +209,7 @@ def test_new_scalp_context_uses_option_target_and_keeps_deadline():
         100,
     )
     assert context["exit_basis"] == "option_premium"
-    assert context["risk_recipe"] == RECIPE
+    assert context["risk_recipe"] == PROFIT_RECIPE
     assert exit_reason(context, datetime.fromisoformat("2026-01-01T10:01:00+05:30"), 110) is None
     assert (
         exit_reason(context, datetime.fromisoformat("2026-01-01T10:15:00+05:30"), 110)
@@ -262,7 +266,7 @@ def test_new_queued_ml_binds_current_recipe_and_source(monkeypatch):
         },
     )
     configuration = args[2]
-    assert configuration["risk_recipe"] == RECIPE
+    assert configuration["risk_recipe"] == PROFIT_RECIPE
     assert configuration["risk_policy_version"] == "shared-300-3r-v1"
 
 
@@ -370,3 +374,73 @@ def test_current_configuration_has_no_legacy_pacing_and_rejects_boolean_paramete
     assert config["max_hold_minutes"] == 15
     with pytest.raises(ValueError):
         replay.validate_configuration(data, "trend_breakout_filtered", {"stop_pct": True}, fees())
+
+
+def test_profit_recipe_runs_past_900_and_exits_on_the_rising_floor():
+    from services.research.ml import label_option_trade
+    from services.risk.profit_exit import PROFIT_RECIPE
+
+    data, signals = scheduled_data([True])
+    signal = next(iter(signals))
+    option_rows = [r for r in data["rows"] if r["symbol"] == "NIFTY_CE"]
+    from datetime import datetime, timedelta
+
+    start = datetime.fromisoformat(signal) + timedelta(minutes=1)
+    prices = [(100, 104, 99, 104), (108, 113, 107, 112), (116, 121, 115, 120), (118, 119, 115, 116)]
+    for i, (o, h, low, c) in enumerate(prices):
+        at = (start + timedelta(minutes=i)).isoformat()
+        row = next(r for r in option_rows if r["timestamp"] == at)
+        row.update(open=o, high=h, low=low, close=c)
+    config = replay.validate_configuration(
+        data, "trend_breakout_filtered", {}, fees(slippage_bps=0), capital=25000, cooldown_minutes=0
+    )
+    assert config["risk_recipe"] == PROFIT_RECIPE
+    config["research_signal_hash"] = dataset.digest(signals)
+    trade = replay.run_replay(data, config, research_signals=signals)["trades"][0]
+    label = label_option_trade(
+        option_rows,
+        signal,
+        data["metadata"]["contracts"][0],
+        2,
+        fees(slippage_bps=0),
+        "13:00",
+        capital=25000,
+        risk_recipe=PROFIT_RECIPE,
+        max_hold_minutes=15,
+    )
+    assert trade["exit_price"] == 116
+    assert trade["gross_pnl"] == 1200
+    assert trade["exit_reason"] == "profit_stop"
+    assert trade["gross_planned_risk"] == 300
+    assert trade["stop_price"] == 96
+    assert trade["final_stop_price"] == 116
+    assert label["net_pnl"] == trade["net_pnl"]
+    assert label["exit_at"] == trade["exit_at"]
+
+
+def test_managed_leg_restores_bound_profit_floor_after_checkpoint():
+    from services.risk.profit_exit import profit_config
+    from services.strategy_module import state
+    from services.strategy_module.recovery import _rebuild_legacy_leg
+    from services.strategy_module.risk_adapter import evaluate_leg
+
+    config = profit_config(CONTRACT, fees(slippage_bps=0))
+    leg = state._new_leg_state(
+        dict(
+            CONTRACT,
+            leg_id=1,
+            position="B",
+            quantity=75,
+            exchange="NFO",
+            sl_pts=4,
+            target_pts=12,
+            profit_protection=config,
+        )
+    )
+    leg.update(entry_avg=100, status="open", entry_filled_qty=75)
+    d = evaluate_leg(leg, 112)
+    assert not d.breached and d.stop_price == 108
+    restored = _rebuild_legacy_leg("1", [], [], leg, {})
+    assert restored["profit_protection"] == config
+    d = evaluate_leg(restored, 107)
+    assert d.breached and d.stop_price == 108

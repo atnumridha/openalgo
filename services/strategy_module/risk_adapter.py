@@ -35,6 +35,7 @@ from services.risk import (
     target_from_points,
     trail_stops_to_entry,
 )
+from services.risk.profit_exit import evaluate_profit
 
 # A leg's configured stop and target are points from entry; the core works in
 # prices. These two are the only place that conversion happens.
@@ -173,7 +174,10 @@ def apply_leg_decision(leg: dict[str, Any], decision: PositionDecision) -> None:
 
 def evaluate_leg(leg: dict[str, Any], last_price: Any) -> PositionDecision:
     """Evaluate one leg against a tick and write the outcome back."""
-    decision = evaluate_position(leg_to_position_risk(leg), last_price)
+    risk = leg_to_position_risk(leg)
+    protection = leg.get("profit_protection")
+    decision = (evaluate_profit(risk, last_price, protection) if protection is not None
+                else evaluate_position(risk, last_price))
     if decision.evaluated:
         leg["ltp"] = float(last_price)
     apply_leg_decision(leg, decision)

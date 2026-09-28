@@ -766,8 +766,15 @@ def _recover_run(run_id: int) -> RecoveredRun:
             target_value is None or not math.isfinite(target_value) or target_value <= 0
         ):
             raise _ManagedRecoveryError("Persisted ML target geometry is unavailable")
+        from services.risk.profit_exit import PROFIT_RECIPE, validate_profit_config
+        protection = scalp_context.get("profit_protection")
+        if scalp_context.get("risk_recipe") == PROFIT_RECIPE:
+            try:
+                protection = validate_profit_config(protection)
+            except ValueError as exc:
+                raise _ManagedRecoveryError("Persisted profit protection is unavailable") from exc
         for leg in config_legs.values():
-            leg.update(sl_pts=stop, target_pts=target, trail={}, risk_unit="points")
+            leg.update(sl_pts=stop, target_pts=target, trail={}, risk_unit="points", profit_protection=protection)
 
     rebuilt = _rebuild_state(
         run_id,
@@ -1499,6 +1506,7 @@ def _rebuild_legacy_leg(
         "status": status,
         "tick_source": "ws",
         # Risk levels
+        "profit_protection": config_leg.get("profit_protection", cp_leg.get("profit_protection")),
         "sl_pts": sl_pts,
         "target_pts": target_pts,
         "trail_x": trail_x,

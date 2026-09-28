@@ -17,7 +17,8 @@ from services.research.replay import _filtered_contract, _slipped, _tick, resear
 from services.risk import BreachReason, PositionRisk, evaluate_position
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
 from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
-from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit
+from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit
+from services.risk.profit_exit import profit_bar, profit_config
 
 MAX_SEED_GAP_DAYS = 7
 
@@ -163,9 +164,9 @@ def label_option_trade(
     entry = _slipped(rows[start]["open"], slip, contract, buy=True)
     exact = Decimal(str(entry))
     technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
-    if risk_recipe == CASH_RISK_RECIPE:
+    if risk_recipe in CASH_RECIPES:
         try:
-            stop, target, _ = cash_exit(exact, technical, contract)
+            stop, target, _ = cash_exit(exact, technical, contract, runner=risk_recipe == CASH_RISK_RECIPE)
             stop, target = float(stop), float(target)
         except ValueError:
             return None
@@ -173,7 +174,7 @@ def label_option_trade(
         stop = _tick(exact - technical, contract)
         target = _tick(exact + (exact - Decimal(str(stop))) * 2, contract, up=True)
     distance = exact - Decimal(str(stop))
-    filter_distance = technical if risk_recipe == CASH_RISK_RECIPE else distance
+    filter_distance = technical if risk_recipe in CASH_RECIPES else distance
     if not 20 <= entry <= 120 or filter_distance > exact * Decimal(".25"):
         return None
     units = contract["lot_size"] * contract["multiplier"]
@@ -181,12 +182,12 @@ def label_option_trade(
     capital = research_capital({"capital": capital})
     policy = (
         current_policy(capital)
-        if risk_recipe == CASH_RISK_RECIPE
+        if risk_recipe in CASH_RECIPES
         else BudgetPolicy(capital=capital)
     )
     if Decimal(str(entry * units)) + entry_fee > capital * (1 - policy.cash_buffer_pct):
         return None
-    if risk_recipe in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
+    if risk_recipe in (ML_RISK_RECIPE, *CASH_RECIPES):
         planned = planned_entry_risk(
             distance * Decimal(str(units)), Decimal(str(entry * units)), costs
         )
@@ -209,31 +210,40 @@ def label_option_trade(
         capital,
         planned,
         proposed_gross_risk=distance * Decimal(str(units))
-        if risk_recipe == CASH_RISK_RECIPE
+        if risk_recipe in CASH_RECIPES
         else None,
     )
     if not admission.allowed:
         return None
     risk = PositionRisk(entry_price=entry, quantity=units, stop_price=stop, target_price=target)
+    protection = profit_config(contract, costs) if risk_recipe == CASH_RISK_RECIPE else None
     for bar in rows[start:]:
         at = bar["timestamp"]
         if at != expected or at[:10] != signal_at[:10] or at[11:16] > session_close:
             return None
-        opening = evaluate_position(risk, bar["open"])
-        price, reason, ambiguous = None, None, False
-        if opening.reason in (BreachReason.STOP, BreachReason.TARGET):
-            price, reason = bar["open"], str(opening.reason)
-        else:
-            stopped = evaluate_position(risk, bar["low"]).reason == BreachReason.STOP
-            won = evaluate_position(risk, bar["high"]).reason == BreachReason.TARGET
-            if stopped:
-                price, reason, ambiguous = stop, "sl", won
-            elif won:
-                price, reason = target, "target"
-            elif deadline is not None and at >= deadline:
+        if protection:
+            risk, price, reason = profit_bar(risk, bar, protection)
+            ambiguous = False
+            if reason is None and deadline is not None and at >= deadline:
                 price, reason = bar["close"], "time_limit"
-            elif at[11:16] == session_close:
+            elif reason is None and at[11:16] == session_close:
                 price, reason = bar["close"], "session_close"
+        else:
+            opening = evaluate_position(risk, bar["open"])
+            price, reason, ambiguous = None, None, False
+            if opening.reason in (BreachReason.STOP, BreachReason.TARGET):
+                price, reason = bar["open"], str(opening.reason)
+            else:
+                stopped = evaluate_position(risk, bar["low"]).reason == BreachReason.STOP
+                won = evaluate_position(risk, bar["high"]).reason == BreachReason.TARGET
+                if stopped:
+                    price, reason, ambiguous = stop, "sl", won
+                elif won:
+                    price, reason = target, "target"
+                elif deadline is not None and at >= deadline:
+                    price, reason = bar["close"], "time_limit"
+                elif at[11:16] == session_close:
+                    price, reason = bar["close"], "session_close"
         if price is not None:
             fill = _slipped(price, slip, contract)
             net = (
@@ -341,13 +351,13 @@ def build_opportunities(
     risk_recipe=None,
 ):
     """Opportunity eligibility uses only data observable at the signal timestamp."""
-    if risk_recipe not in (None, ML_RISK_RECIPE, CASH_RISK_RECIPE):
+    if risk_recipe not in (None, ML_RISK_RECIPE, *CASH_RECIPES):
         raise ValueError("Unsupported ML admission risk recipe")
     meta = data["metadata"]
     capital = research_capital({"capital": capital})
     policy = (
         current_policy(capital)
-        if risk_recipe == CASH_RISK_RECIPE
+        if risk_recipe in CASH_RECIPES
         else BudgetPolicy(capital=capital)
     )
     if check_cancel:

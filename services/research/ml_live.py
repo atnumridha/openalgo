@@ -17,7 +17,7 @@ from services.research.ml_artifact import predict_probabilities, validate_artifa
 from services.research.replay import _tick, research_capital
 from services.risk.admission import ML_RISK_RECIPE, planned_entry_risk
 from services.risk.budget import BudgetPolicy, current_policy, evaluate_budget
-from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit
+from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit
 
 
 def validate_completed_rows(rows, now, symbol, *, minutes=1, settle_seconds=5):
@@ -150,16 +150,16 @@ def entry_plan(
     equity = Decimal(str(equity if equity is not None else amount))
     peak = Decimal(str(peak if peak is not None else equity))
     day = day or datetime.now().date().isoformat()
-    current = risk_recipe == CASH_RISK_RECIPE
+    current = risk_recipe in CASH_RECIPES
     policy = current_policy(amount) if current else BudgetPolicy(capital=amount)
-    if risk_recipe not in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
+    if risk_recipe not in (ML_RISK_RECIPE, *CASH_RECIPES):
         raise ValueError("Frozen ML admission risk recipe changed")
     if not isfinite(float(entry)) or not isfinite(float(atr)) or entry <= 0 or atr < 0:
         raise ValueError("Current option entry or volatility is invalid")
     exact = Decimal(str(entry))
     technical = max(exact * Decimal(".10"), Decimal(str(atr)) * Decimal("1.5"))
     if current:
-        stop, target, _ = cash_exit(exact, technical, contract)
+        stop, target, _ = cash_exit(exact, technical, contract, runner=risk_recipe == CASH_RISK_RECIPE)
     else:
         stop = Decimal(str(_tick(exact - technical, contract)))
         target = Decimal(str(_tick(exact + (exact - stop) * 2, contract, up=True)))

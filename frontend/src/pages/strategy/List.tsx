@@ -820,7 +820,7 @@ export default function StrategyList() {
           <CardTitle>Saved strategies</CardTitle>
           <p className="text-sm text-muted-foreground">
             Highest historical win % first · 15-minute research variants · wins after modeled base costs.
-            These results used earlier exit and risk rules, before the ₹300 / 3R recipe. They are not current-policy or live win rates.
+            These results used earlier exit and risk rules, before the current profit-trailing recipe. They are not current-policy or live win rates.
           </p>
           <CardDescription>
             P&amp;L columns are live for running strategies and reflect the last-run snapshot for

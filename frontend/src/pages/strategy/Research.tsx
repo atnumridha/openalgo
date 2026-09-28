@@ -668,15 +668,16 @@ export default function Research() {
               value={money(risk.data.policy.per_trade_limit)}
             />
             <Metric
-              label="Gross reward / stop"
-              value="3R before charges"
+              label="Profit objective"
+              value="₹900–₹1,500+ gross"
             />
             <Metric label="Shared daily net-loss allowance" value={money(risk.data.policy.daily_limit)} />
           </dl>
         )}
         <p className="text-xs text-muted-foreground">
           These are strategy limits, not your broker balance. Profits do not refill the loss
-          allowance. Market gaps can exceed a planned stop.
+          allowance. Profit trailing needs OpenAlgo and its price feed running; the broker-held fallback
+          stop stays fixed. Market gaps can exceed a planned stop.
         </p>
         {risk.data && (risk.data.accounts.sandbox?.paused || risk.data.accounts.live?.paused) && (
           <p role="alert" className="text-sm text-destructive">
@@ -1079,7 +1080,7 @@ export default function Research() {
                   <p className="text-sm text-muted-foreground">
                     New experiments start at ₹25,000. This amount sets whole-lot affordability and
                     the 20% portfolio drawdown limit. One option lot risks at most ₹300 before charges,
-                    with an exact gross 3R target, a shared ₹2,000 daily net-loss allowance and 20% cash buffer. Planned risk is not
+                    with a ₹900–₹1,500+ objective and a rising profit stop, a shared ₹2,000 daily net-loss allowance and 20% cash buffer. Planned risk is not
                     a guarantee of realized loss.
                   </p>
                 </div>
@@ -1154,7 +1155,7 @@ export default function Research() {
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Requires one-minute option history with tick sizes. Uses the filtered
-                        execution rules, one lot with a tick-rounded price stop capped at ₹300 and an exact 3R target before charges. Labels and
+                        execution rules, one lot with a tick-rounded price stop capped at ₹300 and a rising profit stop aiming for ₹900–₹1,500+ before charges. Labels and
                         replay exits share the selected 5, 10 or 15-minute limit. Training balances
                         sessions and reduces the weight of overlapping trades.
                       </p>
@@ -1187,13 +1188,13 @@ export default function Research() {
                       whole-lot affordability. One lot per entry, a 5-minute post-exit cooldown and a
                       15-minute maximum holding time. Three consecutive net losses stop new entries for the day.
                       Requires one-minute option bars and contract tick sizes. Technical stop distance is capped
-                      at ₹300 per lot and rounded toward entry; the target is exactly 3R before charges.
+                      at ₹300 per lot and rounded toward entry; profit protection starts at ₹300 gross and trails by ₹300 after ₹600; strong moves can run past ₹1,500 before charges.
                     </p>
                   )}
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {Object.entries(candidate?.defaults ?? {})
-                    .filter(() => runKind !== 'ml')
+                    .filter(([key]) => runKind !== 'ml' && key !== 'target_pct')
                     .filter(
                       ([key]) =>
                         candidateId === 'vwap_pullback' ||

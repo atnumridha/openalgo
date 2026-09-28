@@ -32,7 +32,7 @@ from services.research.replay import (
 )
 from services.risk.admission import ML_RISK_RECIPE
 from services.risk.budget import current_policy
-from services.risk.cash_exit import CASH_RISK_RECIPE, current_configuration
+from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, current_configuration
 
 
 def implementation_hash():
@@ -55,6 +55,7 @@ def implementation_hash():
         "services/risk/budget.py",
         "services/risk/admission.py",
         "services/risk/cash_exit.py",
+        "services/risk/profit_exit.py",
         "services/risk/position.py",
         "services/risk/models.py",
         "services/strategy_module/ml_forest.py",
@@ -297,7 +298,7 @@ def run_ml_experiment(data, configuration, *, check_cancel=None, include_schedul
     current_configuration(configuration)
     settings = validate_ml_settings(configuration.get("ml_settings"))
     risk_recipe = configuration.get("risk_recipe")
-    if risk_recipe not in (None, ML_RISK_RECIPE, CASH_RISK_RECIPE):
+    if risk_recipe not in (None, ML_RISK_RECIPE, *CASH_RECIPES):
         raise ValueError("Unsupported ML admission risk recipe")
     if len(data["sessions"]) < 80:
         raise ValueError(
@@ -351,7 +352,7 @@ def run_ml_experiment(data, configuration, *, check_cancel=None, include_schedul
     )
     if current_configuration(configuration):
         model["artifact"].update(
-            risk_recipe=CASH_RISK_RECIPE, risk_policy_version=current_policy().version
+            risk_recipe=configuration["risk_recipe"], risk_policy_version=current_policy().version
         )
         model["model_hash"] = digest(model["artifact"])
     replay_configuration = dict(configuration)
@@ -625,7 +626,7 @@ def queue_run(store, owner, payload):
             or configuration["parameters"] != DEFAULTS
         ):
             raise ValueError(
-                "ML uses filtered minute execution with one-lot cash stops up to ₹300 and gross 3R targets; use the default rule parameters"
+                "ML uses filtered minute execution with one-lot cash stops up to ₹300 and a rising profit stop with no hard target; use the default rule parameters"
             )
         configuration["ml_settings"] = validate_ml_settings(payload.get("ml_settings"))
         configuration["max_hold_minutes"] = configuration["ml_settings"]["max_hold_minutes"]

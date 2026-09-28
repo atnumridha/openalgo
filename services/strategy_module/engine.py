@@ -486,6 +486,11 @@ def start_run(
             return StartResult(ok=False, error=loss_refusal)
 
         if scalp_context:
+            from services.risk.profit_exit import PROFIT_RECIPE, validate_profit_config
+            if scalp_context.get("risk_recipe") == PROFIT_RECIPE:
+                scalp_context["profit_protection"] = validate_profit_config(
+                    resolved[0].get("profit_protection")
+                )
             from services.strategy_module.automation_control import require_automation_entry
             from services.strategy_module.scalping import IST
 

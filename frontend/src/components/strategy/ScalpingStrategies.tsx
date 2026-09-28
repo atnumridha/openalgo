@@ -12,19 +12,19 @@ const profiles = [
     id: 'regime50200',
     title: 'EMA 50/200 + regime',
     description: '5-minute crossover filtered by prior-day trend and volatility.',
-    exits: 'ATM option · current stop up to ₹300 gross / 3R option target',
+    exits: 'ATM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'ema915',
     title: 'EMA 9/15',
     description: 'Nifty pullback with Bank Nifty trend confirmation.',
-    exits: 'ITM option · current stop up to ₹300 gross / 3R option target',
+    exits: 'ITM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'box15',
     title: 'Opening-box breakout',
     description: 'First 1-minute breakout of the completed 09:15–09:30 Nifty range.',
-    exits: 'ATM option · current stop up to ₹300 gross / 3R option target',
+    exits: 'ATM option · stop up to ₹300 gross · rising profit stop · aim ₹900–₹1,500+',
   },
 ] as const
 
@@ -58,7 +58,7 @@ export function ScalpingStrategies({
           <p className="text-sm text-muted-foreground">
             Experimental shortlist, ordered by historical net win %. The 27 September 2026 research
             used earlier exit and risk rules, 15-minute holds and modeled base costs. These are
-            not results for the current ₹300/3R recipe or live trading.
+            not results for the current profit-trailing recipe or live trading.
           </p>
         </div>
         {!complete && (
@@ -124,8 +124,11 @@ export function ScalpingStrategies({
         })}
       </div>
       <p className="text-xs text-muted-foreground">
-        Current entries use one Nifty option lot, a price stop capped at ₹300 gross and a 3R
-        option target before charges. ₹20,000
+        Current entries use one Nifty option lot and a price stop capped at ₹300 gross. At ₹300
+        gross profit, move the stop to estimated break-even after fees. From ₹600, trail ₹300
+        behind the best observed profit; aim for ₹900–₹1,500+ before charges, with no hard profit cap.
+        Stops only rise. The existing holding deadline still applies. Profit trailing is monitored
+        by OpenAlgo and requires a connected price feed; the Kotak-held fallback stop stays fixed. ₹20,000
         premium ceiling based on the ₹25,000 research assumption; your saved account budget may be
         lower. Enable the shared capital profile and costs in{' '}
         <Link className="underline" to="/strategy/research">

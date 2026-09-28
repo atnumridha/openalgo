@@ -242,7 +242,8 @@ def protect_entry_fill(
             _failure(run, strategy, leg, "A prior protective stop outcome is unresolved; duplicate stop blocked")
             return False
         if row.get("status") == "open":
-            if row.get("broker_order_id") and _verify_working_stop(
+            recorded_trigger = _recorded_broker_trigger(leg, row)
+            if recorded_trigger is not None and row.get("broker_order_id") and _verify_working_stop(
                 api_key,
                 str(row["broker_order_id"]),
                 {
@@ -250,7 +251,7 @@ def protect_entry_fill(
                     "exchange": leg["exchange"],
                     "action": order_dispatch.exit_action(leg["position"]),
                     "quantity": int(leg["qty"]),
-                    "trigger_price": float(trigger),
+                    "trigger_price": float(recorded_trigger),
                     "product": row.get("product") or "",
                 },
             ):
@@ -472,6 +473,26 @@ def resize_after_partial_stop_fill(
     )
 
 
+def _recorded_broker_trigger(leg: dict, stop: dict) -> float | None:
+    """App profit ratchets do not amend the broker's independently held fallback."""
+    risk = risk_adapter.leg_to_position_risk(leg)
+    if leg.get("profit_protection") is None:
+        return risk.stop_price
+    from services.risk.profit_exit import validate_profit_config
+
+    try:
+        validate_profit_config(leg["profit_protection"])
+        trigger = float(stop.get("trigger_price") or 0)
+        initial = float(risk.initial_stop_price or 0)
+        if not math.isfinite(trigger) or not math.isfinite(initial) or min(trigger, initial) <= 0:
+            return None
+        if (risk.is_long and trigger < initial) or (not risk.is_long and trigger > initial):
+            return None
+        return trigger
+    except (TypeError, ValueError):
+        return None
+
+
 def verify_recovered_run(run_id: int, api_key: str) -> list[str]:
     """Verify held positions against their durable broker stop orders on boot."""
     snapshot = state.get_run_state(run_id) or {}
@@ -499,14 +520,14 @@ def verify_recovered_run(run_id: int, api_key: str) -> list[str]:
                 issues.append(str(leg.get("symbol") or leg.get("leg_id")))
                 continue
             stop = stops[0]
-            risk = risk_adapter.leg_to_position_risk(leg)
-            if risk.stop_price is None or not math.isfinite(float(risk.stop_price)):
+            trigger = _recorded_broker_trigger(leg, stop)
+            if trigger is None or not math.isfinite(float(trigger)):
                 issues.append(str(leg.get("symbol") or leg.get("leg_id")))
                 continue
             expected = {
                 "symbol": leg["symbol"], "exchange": leg["exchange"],
                 "action": order_dispatch.exit_action(leg["position"]),
-                "quantity": int(leg["qty"]), "trigger_price": float(risk.stop_price),
+                "quantity": int(leg["qty"]), "trigger_price": float(trigger),
                 "product": stop.get("product") or "",
             }
             if _verify_working_stop(api_key, str(stop["broker_order_id"]), expected) is None:

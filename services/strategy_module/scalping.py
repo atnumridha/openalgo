@@ -14,7 +14,7 @@ from services.research.scalp_strategies import ema_reversal_signals, macd_featur
 from services.research.tradejini_scalping import tradejini_signals
 from services.risk import PositionRisk, evaluate_position
 from services.risk.budget import current_policy
-from services.risk.cash_exit import CASH_RISK_RECIPE, cash_exit, pacing_config
+from services.risk.cash_exit import CASH_RECIPES, CASH_RISK_RECIPE, cash_exit, pacing_config
 
 IST = ZoneInfo("Asia/Kolkata")
 PROFILES = {
@@ -381,8 +381,8 @@ def protect_leg(leg, context, client):
     if stop_points <= 0 or stop_points >= premium:
         raise ValueError("Option stop cannot be represented at the price tick")
     target_points = 20 if profile == "box15" else None
-    if context.get("risk_recipe") == CASH_RISK_RECIPE:
-        stop, target, gross = cash_exit(premium, stop_points, leg)
+    if context.get("risk_recipe") in CASH_RECIPES:
+        stop, target, gross = cash_exit(premium, stop_points, leg, runner=context.get("risk_recipe") == CASH_RISK_RECIPE)
         stop_points = Decimal(str(premium)) - stop
         target_points = float(target - Decimal(str(premium)))
         context["gross_planned_risk"] = float(gross)

@@ -3,11 +3,14 @@
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 
 from services.risk.budget import current_policy
+from services.risk.profit_exit import PROFIT_RECIPE
 
-CASH_RISK_RECIPE = "one-lot-cash300-3r-v1"
+FIXED_CASH_RECIPE = "one-lot-cash300-3r-v1"
+CASH_RISK_RECIPE = PROFIT_RECIPE
+CASH_RECIPES = (FIXED_CASH_RECIPE, CASH_RISK_RECIPE)
 
 
-def cash_exit(entry, technical_distance, contract):
+def cash_exit(entry, technical_distance, contract, *, runner=False):
     """Cap monetary loss, rounding the absolute stop toward the entry tick."""
     try:
         exact, distance = Decimal(str(entry)), Decimal(str(technical_distance))
@@ -26,7 +29,12 @@ def cash_exit(entry, technical_distance, contract):
     actual = exact - stop
     if actual < tick or stop <= 0:
         raise ValueError("Cash stop cannot be represented by at least one price tick")
-    return stop, exact + 3 * actual, actual * units
+    target = exact + 3 * actual
+    if runner:
+        target = ((exact + Decimal(900) / units) / tick).to_integral_value(
+            rounding=ROUND_CEILING
+        ) * tick
+    return stop, target, actual * units
 
 
 def pacing_config(cooldown_minutes=5):
@@ -39,7 +47,7 @@ def current_configuration(config):
     """Reject partial/mixed version bindings; absent bindings retain legacy math."""
     if config.get("risk_policy_version") not in (None, "two-bucket-v1", current_policy().version):
         raise ValueError("Unsupported risk policy version")
-    current = config.get("risk_recipe") == CASH_RISK_RECIPE
+    current = config.get("risk_recipe") in CASH_RECIPES
     if current or config.get("risk_policy_version") == current_policy().version:
         if not current or config.get("risk_policy_version") != current_policy().version:
             raise ValueError("Current cash recipe and risk policy must be bound together")

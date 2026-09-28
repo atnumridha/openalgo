@@ -364,6 +364,7 @@ def resolved_leg(strategy, context):
         "exchange": "NFO",
         "segment": "options",
         "lot_size": contract["lot_size"],
+        "tick_size": contract.get("tick_size"),
         "underlying": "NIFTY",
         "lots": context["lots"],
         "quantity": context["quantity"],

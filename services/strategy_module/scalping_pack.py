@@ -24,7 +24,7 @@ def definitions():
 def workflow_definition(strategy, strategy_id, owner, connection_id):
     return {
         "name": f"{strategy['name']} Workflow",
-        "description": "Evaluate saved signals on completed candles with one-lot stops up to ₹300, gross 3R option targets, 5-minute cooldown and a 15-minute deadline. Start disabled; choose sandbox or live in Strategies.",
+        "description": "Evaluate saved signals on completed candles with one-lot stops up to ₹300, a rising profit stop aiming for ₹900–₹1,500+, 5-minute cooldown and a 15-minute deadline. Start disabled; choose sandbox or live in Strategies.",
         "broker_connection_id": connection_id,
         "nodes": [
             {

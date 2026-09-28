@@ -396,3 +396,25 @@ def test_closed_loss_triggers_exit_for_other_active_run(monkeypatch):
         "u", "sandbox", "a", status="closed", net_pnl=D("-2000"), filled=True, evidence={}
     )
     assert service.breached_runs(12) == [(13, "u")]
+
+
+def test_profit_protection_binds_admitted_fees_and_missing_tick_refuses(monkeypatch):
+    from services.risk.profit_exit import PROFIT_RECIPE
+    from services.strategy_module.state import _new_leg_state
+    from services.strategy_module.risk_adapter import evaluate_leg
+    monkeypatch.setattr(ledger, 'POLICY', current_policy())
+    ledger.set_costs('profit', COSTS)
+    facts = SimpleNamespace(**{**vars(FACTS), 'entry_risk': D('300')})
+    leg = dict(LEG, scalp_context={'risk_recipe': PROFIT_RECIPE}, sl_pts=6, target_pts=18)
+    decision, _ = service.reserve_entry('profit', STRATEGY, [leg], 'sandbox', 'sandbox', facts, NOW)
+    assert not decision.allowed and decision.code == 'profit_protection_metadata_required'
+    assert ledger.list_trades('profit', 'sandbox') == []
+    leg['tick_size'] = .05
+    decision, _ = service.reserve_entry('profit', STRATEGY, [leg], 'sandbox', 'sandbox', facts, NOW)
+    assert decision.allowed
+    ledger.set_costs('profit', COSTS | {'brokerage_per_order': 200})
+    live = _new_leg_state(leg)
+    live.update(entry_avg=100, status='open')
+    decision = evaluate_leg(live, 106)
+    assert decision.stop_price == 100.8  # admitted fees40 / units50, not the later400
+    assert not decision.breached

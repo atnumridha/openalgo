@@ -149,6 +149,13 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
     entry_fee = order_cost(premium, "BUY", costs)
     # Preserve the established conservative guard arithmetic for all profiles.
     risk = planned_entry_risk(facts.entry_risk, premium, costs)
+    from services.risk.profit_exit import PROFIT_RECIPE, profit_config
+    protection = None
+    if (leg.get("scalp_context") or {}).get("risk_recipe") == PROFIT_RECIPE:
+        try:
+            protection = profit_config(leg, costs)
+        except (ValueError, TypeError):
+            return _refusal("profit_protection_metadata_required")
     ref = str(leg.get("position_ref") or "")
     result = ledger.reserve(
         user,
@@ -189,6 +196,8 @@ def reserve_entry(user, strategy, legs, mode, broker, facts, now):
             )
             _sync_qualification(user, mode, ref)
             return _refusal("paper_registration_required")
+    if result.allowed and protection is not None:
+        leg["profit_protection"] = protection
     return result, ref if result.allowed else None
 
 

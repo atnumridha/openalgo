@@ -23,11 +23,13 @@ from services.risk.budget import (
     evaluate_budget,
 )
 from services.risk.cash_exit import (
+    CASH_RECIPES,
     CASH_RISK_RECIPE,
     cash_exit,
     current_configuration,
     pacing_config,
 )
+from services.risk.profit_exit import profit_config, profit_open, profit_reason
 
 LEGACY_DEFAULTS = {
     "lookback": 20,
@@ -41,7 +43,7 @@ CANDIDATES = [
     {
         "id": "trend_breakout_filtered",
         "name": "Filtered breakout · minute execution",
-        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, one-lot cash stops up to ₹300, gross 3R targets and a 5-minute cooldown. Research hypothesis, not proven profitable.",
+        "description": "Prior-bar trend confirmation, non-expiry options, liquidity and affordability filters, one-lot cash stops up to ₹300, a rising profit stop with no hard target and a 5-minute cooldown. Research hypothesis, not proven profitable.",
         "defaults": DEFAULTS,
     },
     {
@@ -57,7 +59,7 @@ CANDIDATES = [
         "defaults": DEFAULTS,
     },
 ]
-ENGINE_VERSION = "closed-bar-cash-3r-v3"
+ENGINE_VERSION = "closed-bar-profit-trail-v4"
 FILTER_RULES = {
     "fast_bars": 8,
     "slow_bars": 21,
@@ -397,7 +399,7 @@ def run_replay(
     pace = config["pacing"] if current else FILTER_RULES
     risk_recipe = config.get("risk_recipe")
     if risk_recipe is not None and (
-        risk_recipe not in (ML_RISK_RECIPE, CASH_RISK_RECIPE)
+        risk_recipe not in (ML_RISK_RECIPE, *CASH_RECIPES)
         or (risk_recipe == ML_RISK_RECIPE and config["candidate"] != "trend_breakout_filtered")
     ):
         raise ValueError("Unsupported ML admission risk recipe")
@@ -515,7 +517,7 @@ def run_replay(
                 )
                 if current:
                     try:
-                        stop, target, _ = cash_exit(exact_entry, distance, contract)
+                        stop, target, _ = cash_exit(exact_entry, distance, contract, runner=risk_recipe == CASH_RISK_RECIPE)
                         exact_distance = exact_entry - stop
                         stop, target = float(stop), float(target)
                     except ValueError:
@@ -543,7 +545,7 @@ def run_replay(
                     lots = (low_lots + high_lots) // 2
                     units = lot_units * lots
                     entry_fees = order_cost(Decimal(str(entry * units)), "BUY", costs)
-                    if risk_recipe in (ML_RISK_RECIPE, CASH_RISK_RECIPE):
+                    if risk_recipe in (ML_RISK_RECIPE, *CASH_RECIPES):
                         planned = planned_entry_risk(
                             exact_distance * Decimal(str(units)), Decimal(str(entry * units)), costs
                         )
@@ -589,6 +591,9 @@ def run_replay(
                         "planned": planned,
                         "bucket": bucket,
                         "last_bar_at": at,
+                        "initial_stop": stop,
+                        "target_milestone": target,
+                        "profit_protection": profit_config(contract, costs) if risk_recipe == CASH_RISK_RECIPE else None,
                         "risk": PositionRisk(
                             entry_price=entry,
                             quantity=units,
@@ -630,9 +635,14 @@ def run_replay(
                 )
                 exit_price = reason = None
                 ambiguous_exit = False
-                opening = evaluate_position(risk, bar["open"])
+                protection = active["profit_protection"]
+                if protection:
+                    risk, opening = profit_open(risk, bar["open"], protection)
+                    active["risk"] = risk
+                else:
+                    opening = evaluate_position(risk, bar["open"])
                 if opening.reason == BreachReason.STOP:
-                    exit_price, reason = bar["open"], "stop_loss"
+                    exit_price, reason = bar["open"], profit_reason(risk) if protection else "stop_loss"
                 elif _drawdown_breached(policy, day, opening_mark, peak):
                     exit_price, reason = bar["open"], "portfolio_drawdown"
                 elif opening.reason == BreachReason.TARGET:
@@ -640,7 +650,7 @@ def run_replay(
                 else:
                     low_mark = _liquidation_equity(active, bar["low"], equity, costs, slip)
                     if evaluate_position(risk, bar["low"]).reason == BreachReason.STOP:
-                        exit_price, reason = risk.stop_price, "stop_loss"
+                        exit_price, reason = risk.stop_price, profit_reason(risk) if protection else "stop_loss"
                     if _drawdown_breached(policy, day, low_mark, peak):
                         drawdown_price = _drawdown_exit_price(
                             active, bar, equity, peak, policy, day, costs, slip
@@ -649,7 +659,7 @@ def run_replay(
                         # is crossed first. Do not use a low reached after exit.
                         if exit_price is None or drawdown_price >= exit_price:
                             exit_price, reason = drawdown_price, "portfolio_drawdown"
-                    ambiguous_exit = bool(reason and bar["high"] >= risk.target_price)
+                    ambiguous_exit = bool(reason and risk.target_price is not None and bar["high"] >= risk.target_price)
                     if reason is None:
                         max_open_drawdown = max(
                             max_open_drawdown, float((peak - low_mark) / peak * 100)
@@ -664,6 +674,11 @@ def run_replay(
                             exit_price, reason = bar["close"], "time_limit"
                         elif at[11:16] >= meta["session_close"]:
                             exit_price, reason = bar["close"], "session_close"
+                if protection and reason is None:
+                    risk, closing = profit_open(risk, bar["close"], protection)
+                    active["risk"] = risk
+                    if closing.breached:
+                        exit_price, reason = bar["close"], profit_reason(risk)
                 if reason:
                     exit_mark = _liquidation_equity(active, exit_price, equity, costs, slip)
                     max_open_drawdown = max(
@@ -703,15 +718,16 @@ def run_replay(
                         exit_reason=reason,
                         planned_risk=float(active["planned"]),
                         gross_planned_risk=float(
-                            (Decimal(str(active["entry_price"])) - Decimal(str(risk.stop_price)))
+                            (Decimal(str(active["entry_price"])) - Decimal(str(active["initial_stop"])))
                             * Decimal(str(active["units"]))
                         ),
                         completion_sequence=len(trades) + 1,
                         completion_day=day,
                         budget_bucket=active["bucket"],
                         ambiguous_exit=ambiguous_exit,
-                        stop_price=risk.stop_price,
-                        target_price=risk.target_price,
+                        stop_price=active["initial_stop"],
+                        final_stop_price=risk.stop_price,
+                        target_price=active["target_milestone"],
                     )
                     trade["risk_reserve_headroom"] = (
                         trade["planned_risk"] - trade["gross_planned_risk"]
