@@ -82,7 +82,7 @@ it('shows current cash exits on every card and qualifies the earlier-rule rankin
     const card = cards[index] as HTMLElement
     expect(within(card).getByText(title)).toBeInTheDocument()
     expect(card).toHaveTextContent(contract)
-    expect(card).toHaveTextContent(/technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500\+/)
+    expect(card).toHaveTextContent(/technical stop · ₹300 price-stop limit · rising profit stop · aim ₹900–₹1,500\+/)
     expect(card).toHaveTextContent('15-minute limit')
     expect(card).toHaveTextContent(`Earlier-rule wins: ${winRate} · ${counts} trades`)
   })

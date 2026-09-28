@@ -12,19 +12,19 @@ const profiles = [
     id: 'regime50200',
     title: 'EMA 50/200 + regime',
     description: '5-minute crossover filtered by prior-day trend and volatility.',
-    exits: 'ATM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ATM option · technical stop · ₹300 price-stop limit · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'ema915',
     title: 'EMA 9/15',
     description: 'Nifty pullback with Bank Nifty trend confirmation.',
-    exits: 'ITM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ITM option · technical stop · ₹300 price-stop limit · rising profit stop · aim ₹900–₹1,500+',
   },
   {
     id: 'box15',
     title: 'Opening-box breakout',
     description: 'First 1-minute breakout of the completed 09:15–09:30 Nifty range.',
-    exits: 'ATM option · technical stop · equity-based risk · rising profit stop · aim ₹900–₹1,500+',
+    exits: 'ATM option · technical stop · ₹300 price-stop limit · rising profit stop · aim ₹900–₹1,500+',
   },
 ] as const
 
@@ -125,7 +125,7 @@ export function ScalpingStrategies({
       </div>
       <p className="text-xs text-muted-foreground">
         Current entries use one Nifty option lot with its technical stop, and are skipped if planned
-        loss including costs exceeds 1% of equity or ₹300. At ₹300 gross profit, protect ₹100;
+        price-stop loss exceeds ₹300. Charges and slippage are reserved separately within the ₹2,000 daily loss allowance. At ₹300 gross profit, protect ₹100;
         at ₹600, protect ₹300; at ₹900, protect ₹600. Then keep raising the stop with a maximum
         ₹300 giveback from peak executable profit. At ₹1,500, protect ₹1,200. These profit levels
         are before charges; there is no hard profit cap.

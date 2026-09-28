@@ -686,7 +686,7 @@ export default function Research() {
         <p className="max-w-3xl text-sm text-muted-foreground">
           {risk.data?.enabled
             ? transitionPending
-              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current equity-based limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
+              ? `Legacy policy still active: ${legacyModes.join(', ')}. Reconcile its recorded exposure and completion evidence before transition. Current fixed limits apply only to upgraded modes. Live trading still requires qualification and session authorization.`
               : 'Your managed strategy entries share these limits. Live trading still needs a qualified strategy, review and session authorization.'
             : 'Your existing flows keep their current rules. Complete step 1 to apply these shared limits to managed Strategy Module entries. Saving this setup does not start trading.'}
         </p>
@@ -700,14 +700,16 @@ export default function Research() {
             <Metric label="Sandbox allocation" value={money(risk.data.accounts.sandbox?.capital)} />
             <Metric label="Live allocation" value={money(risk.data.accounts.live?.capital)} />
             <Metric
-              label="Absolute per-trade ceiling incl. costs"
+              label={risk.data.policy.version === 'fixed-300-v3'
+                ? 'Planned price-stop limit before charges'
+                : 'Planned per-trade limit incl. costs'}
               value={money(risk.data.policy.per_trade_limit)}
             />
             <Metric
               label="Profit objective"
               value="₹900–₹1,500+ gross"
             />
-            <Metric label="Absolute daily loss ceiling" value={money(risk.data.policy.daily_limit)} />
+            <Metric label="Daily entry loss limit incl. costs" value={money(risk.data.policy.daily_limit)} />
           </dl>
         )}
         <p className="text-xs text-muted-foreground">

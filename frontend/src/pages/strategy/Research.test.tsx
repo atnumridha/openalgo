@@ -151,6 +151,7 @@ it('sets 50k only for sandbox through the reviewed allocation control', async ()
     mode: 'sandbox', capital: 50000, reason: 'User requested sandbox testing capital',
   }))
   expect(screen.getByRole('region', { name: 'Setup status' })).toHaveTextContent('Fixed ₹300')
+  expect(screen.getByRole('region', { name: 'Setup status' })).toHaveTextContent('Planned price-stop limit before charges')
   expect(screen.getAllByRole('button', { name: 'Set sandbox capital to ₹50,000' })).toHaveLength(1)
 })
 
@@ -882,7 +883,7 @@ it('qualifies the setup summary when Live remains on the legacy policy', async (
   const setup = await screen.findByRole('region', { name: 'Setup status' })
   await waitFor(() => expect(setup).toHaveTextContent('Policy transition needed'))
   expect(setup).toHaveTextContent('Legacy policy still active: Live')
-  expect(setup).toHaveTextContent('Current equity-based limits apply only to upgraded modes')
+  expect(setup).toHaveTextContent('Current fixed limits apply only to upgraded modes')
   expect(setup).not.toHaveTextContent('Your managed strategy entries share these limits')
   expect(setup).not.toHaveTextContent('Shared limits enabled')
   expect(rest.post).not.toHaveBeenCalled()
