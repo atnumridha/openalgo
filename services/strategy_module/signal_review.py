@@ -13,6 +13,19 @@ from services.research.groww_algorithmic import features as regime_features
 from services.research.scalp_strategies import aggregate_fifteen, macd_features
 
 RULES = {
+    "receiver_trend": [
+        "35 completed five-minute bars: EMA 9/15 aligned with both slopes over three bars; current candle touches their band and rejects in trend direction.",
+        "Bullish close above EMA 9 buys CE; bearish close below EMA 9 buys PE. The latest closed fifteen-minute candle must agree in body and close-to-close direction.",
+    ],
+    "receiver_retest": [
+        "A completed five-minute candle breaks the preceding six-bar high/low with a body of at least half its range.",
+        "Only the first later retest within three completed bars may enter: touch the broken level and close beyond it with matching body. A close back through the level invalidates the setup.",
+        "Fifteen-minute confirmation must agree. Buy CE for a bullish retest or PE for a bearish retest; never short an option.",
+    ],
+    "receiver_momentum": [
+        "Completed five-minute close breaks the previous six-bar high/low, body at least 70% of its range, and range at least 1.2 times the preceding six-bar median range.",
+        "Latest completed fifteen-minute body and close-to-close direction must confirm. Buy CE for bullish momentum and PE for bearish momentum.",
+    ],
     "ema915": [
         "5-minute NIFTY: EMA 9 above/below EMA 15; both 3-bar slopes at least +0.10 / at most −0.10 ATR per bar.",
         "Candle intersects the EMA band and closes bullish above EMA 9 for CE, bearish below EMA 9 for PE. Full body ≥60%, big bar ≥1.5 prior ATR with body ≥50%, or pin wick ≥2× body and close in outer 25%.",

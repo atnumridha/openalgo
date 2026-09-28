@@ -33,6 +33,8 @@ from services.strategy_module.automation_control import (  # noqa: E402
 )
 from services.strategy_module.engine import StartResult  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("live_authorization_broker")
+
 USER = "lifecycle-tester"
 OTHER = "somebody-else"
 
@@ -45,6 +47,8 @@ def isolated_store(tmp_path_factory):
     store.db_session.configure(bind=engine)
     store.engine = engine
     store.Base.metadata.create_all(bind=engine)
+    from database import flow_db
+    flow_db.init_db()
     yield engine
     store.db_session.remove()
     engine.dispose()

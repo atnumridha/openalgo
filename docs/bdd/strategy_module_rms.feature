@@ -33,14 +33,14 @@ Feature: Strategy module and risk management
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:546
+  # Source: test/test_strategy_module_engine.py:548
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
     Then no run row, strategy claim or broker order is created
     And the failure names the leg and reason
 
-  # Source: test/test_strategy_module_qa_segments.py:1506
+  # Source: test/test_strategy_module_qa_segments.py:1507
   Scenario: Every leg is sent a product its venue accepts
     Given one strategy product applies to cash and derivative legs
     When an order is built
@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:987, test/test_strategy_module_engine.py:943, test/test_strategy_module_scheduler.py:750
+  # Source: services/strategy_module/engine.py:989, test/test_strategy_module_engine.py:945, test/test_strategy_module_scheduler.py:752
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -79,7 +79,7 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:1447
+  # Source: test/test_strategy_module_engine.py:1449
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns
@@ -125,28 +125,28 @@ Feature: Strategy module and risk management
     And run_stop_failed is recorded at critical severity
     And the pending run stays open for another exit attempt
 
-  # Source: test/test_strategy_module_signals.py:1078
+  # Source: test/test_strategy_module_signals.py:1080
   Scenario: A durable stop gates new signal entries but permits exit retries
     Given a signal run has stop_requested_reason populated
     When entry and exit alerts arrive
     Then a new entry claim is refused under the run lock
     And an alert targeting exposure still held can retry its exit
 
-  # Source: test/test_strategy_module_signals.py:1585
+  # Source: test/test_strategy_module_signals.py:1587
   Scenario: A normal signal round trip keeps one platform-session run
     Given a signal leg opens and exits for a risk reason
     When it becomes flat before the session ends
     Then the platform-session run remains open
     And a later alert reuses its P&L, peak, trough and audit history
 
-  # Source: services/strategy_module/risk_adapter.py:101, services/strategy_module/risk_adapter.py:224
+  # Source: services/strategy_module/risk_adapter.py:102, services/strategy_module/risk_adapter.py:247
   Scenario: Every strategy risk decision comes from the shared core
     Given a held leg and run have configured stops, targets and trailing rules
     When a usable market price reaches the engine
     Then the adapter translates both levels into the shared risk types
     And the shared position and aggregate evaluators make the decisions
 
-  # Source: test/test_strategy_module_qa_edges.py:851, frontend/src/pages/strategy/Detail.test.tsx:529
+  # Source: test/test_strategy_module_qa_edges.py:851, frontend/src/pages/strategy/Detail.test.tsx:765
   Scenario: An overall target preserves trigger, execution and terminal truth
     Given a multi-leg basket is marked from rolling latest-known one-symbol ticks
     And those marks reach its overall target without promising a simultaneous snapshot
@@ -163,14 +163,14 @@ Feature: Strategy module and risk management
     Then entry is refused before a new order
     And the boundary is the platform session reset rather than midnight
 
-  # Source: test/test_strategy_module_scheduler.py:284
+  # Source: test/test_strategy_module_scheduler.py:286
   Scenario: An intraday strategy always receives a square-off job
     Given an intraday strategy has an exit time and scheduling is disabled
     When jobs are synchronized
     Then a weekday square-off is installed at that time
     And no start job is installed
 
-  # Source: test/test_strategy_module_qa_segments.py:1889, test/test_strategy_module_webhook_e2e.py:220
+  # Source: test/test_strategy_module_qa_segments.py:1890, test/test_strategy_module_webhook_e2e.py:220
   Scenario: A signal must name a listed contract and never doubles a held side
     Given a derivatives signal leg names only a base symbol or repeats its held side
     When its entry alert arrives
@@ -214,7 +214,7 @@ Feature: Strategy module and risk management
     Then it is finalised with recovery_failed
     And recovery continues for every other open run
 
-  # Source: frontend/src/pages/strategy/useStrategyLive.test.tsx:246
+  # Source: frontend/src/pages/strategy/useStrategyLive.test.tsx:252
   Scenario: A stale strategy socket returns to periodic reads
     Given the strategy page once received a live frame
     When that socket becomes silent beyond the recency window
@@ -228,21 +228,21 @@ Feature: Strategy module and risk management
     Then a live run reads the broker and a sandbox run reads sandbox
     And account rows are narrowed to the strategy's durable orders or contracts
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:379
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:488
   Scenario: No run means broker truth was not requested
     Given a strategy has no current or historical run
     When an operator opens a broker-backed tab
     Then no broker request is made
     And the page labels recorded rows as strategy audit rather than broker-empty truth
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:170
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:327
   Scenario: Broker numerics preserve zero and expose unavailable values
     Given a broker row contains zero, missing, malformed and non-finite numerics
     When the Detail page normalizes it
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:1067, frontend/src/pages/strategy/strategy_module.test.ts:133
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1230, frontend/src/pages/strategy/strategy_module.test.ts:133
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -250,7 +250,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:803, frontend/src/pages/strategy/Detail.test.tsx:860, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:957, frontend/src/pages/strategy/Detail.test.tsx:1020, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable
@@ -260,7 +260,7 @@ Feature: Strategy module and risk management
     And a prior-run live frame never values the current run's fallback
     And a broker contract shared with another source is not attributed to this strategy
 
-  # Source: test/test_strategy_module_lifecycle_api.py:262
+  # Source: test/test_strategy_module_lifecycle_api.py:266
   Scenario: Close all records an attempt rather than proof of flatness
     Given an operator calls close_all
     When its intent event is written before the stop and broker results

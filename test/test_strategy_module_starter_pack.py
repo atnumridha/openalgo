@@ -39,7 +39,7 @@ def empty_tables(isolated_store, monkeypatch):
     monkeypatch.setattr(
         starter_workflows,
         "install",
-        lambda _ids, _owner, broker_connection_ids=None: starter_workflows.WorkflowInstallResult((), ()),
+        lambda _ids, _owner, broker_connection_ids=None, strategy_profiles=None: starter_workflows.WorkflowInstallResult((), ()),
     )
     store.db_session.remove()
     with isolated_store.begin() as connection:
@@ -216,7 +216,7 @@ def test_install_passes_saved_strategy_connection_to_workflow_installer(monkeypa
     store.db_session.commit()
     captured = []
 
-    def capture_install(ids, owner, broker_connection_ids=None):
+    def capture_install(ids, owner, broker_connection_ids=None, strategy_profiles=None):
         captured.append((ids, owner, broker_connection_ids))
         return starter_workflows.WorkflowInstallResult((), ())
 

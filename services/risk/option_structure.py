@@ -9,6 +9,7 @@ from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from services.risk.budget import EQUITY_POLICY_VERSION, FIXED_POLICY_VERSION
+from services.risk.contract_units import price_multiplier
 
 STRUCTURE_RECIPE = "one-lot-option-structure-runner-v5"
 IST = ZoneInfo("Asia/Kolkata")
@@ -40,8 +41,12 @@ def structure_plan(contract, candles, signal_at, entry, bid):
     tick, lot, quantity = (positive(contract.get(k)) for k in ("tick_size", "lot_size", "quantity"))
     if quantity != lot or lot != lot.to_integral_value() or entry % tick:
         raise ValueError("Option structure requires one whole lot and a tick-aligned entry")
-    if contract.get("position") != "B" or contract.get("exchange") != "NFO":
-        raise ValueError("Option structure requires a long NFO option")
+    exchange = contract.get("exchange")
+    if contract.get("position") != "B" or exchange not in {"NFO", "BFO", "MCX"}:
+        raise ValueError("Option structure requires a supported long option")
+    if exchange in {"BFO", "MCX"} and contract.get("price_multiplier") is None:
+        raise ValueError("Option structure requires verified contract price units")
+    multiplier = Decimal(str(price_multiplier(contract)))
     if not str(contract.get("symbol", "")).endswith(("CE", "PE")):
         raise ValueError("Option structure requires an option contract")
     if not isinstance(candles, list) or len(candles) != 3:
@@ -63,7 +68,8 @@ def structure_plan(contract, candles, signal_at, entry, bid):
     return {
         "version": STRUCTURE_RECIPE, "symbol": contract["symbol"], "exchange": contract["exchange"],
         "signal_at": signal.isoformat(), "candles": validated, "entry_price": str(entry),
-        "quote_bid": str(bid), "stop_price": str(stop), "planned_gross_loss": str((entry-stop)*quantity),
+        "quote_bid": str(bid), "stop_price": str(stop), "planned_gross_loss": str((entry-stop)*quantity if exchange=="NFO" else (entry-stop)*quantity*multiplier),
+        **({"price_multiplier":str(multiplier)} if exchange!="NFO" else {}),
         "objective_r": 3, "hard_target": False, "profit_milestone_inr": 900,
     }
 

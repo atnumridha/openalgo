@@ -115,7 +115,13 @@ def install(owner, template_id):
                 raise ValueError("Existing strategy has different research rules")
             graph = workflow_definition(row, row["id"], owner, row["broker_connection_id"])
         else:
-            graph = starter_workflows.workflow_definitions({name: row["id"]}, owner)[0]
+            from services.strategy_module.receiver_rules import RECEIVER_NAMES
+
+            if row.get("scalp_profile") not in (None, RECEIVER_NAMES[name]):
+                raise ValueError("Existing receiver has different rules")
+            graph = starter_workflows.workflow_definitions(
+                {name: row["id"]}, owner, strategy_profiles={name: row.get("scalp_profile")}
+            )[0]
         errors = validate_workflow(graph, strict=True)
         if errors:
             raise ValueError("Template Flow is invalid")

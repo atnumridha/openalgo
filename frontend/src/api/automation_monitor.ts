@@ -17,6 +17,19 @@ export interface MonitorStrategy {
   webhook_locked: boolean
   monitor_status: string
   reason: string
+  activity_status?: string
+  activity_reason?: string
+  live_readiness?: {
+    blocked: boolean
+    blocker_count: number
+    checks: {
+      code: string
+      label: string
+      status: 'passed' | 'blocked' | 'pending'
+      message: string
+      action_url?: string | null
+    }[]
+  }
   workflow_id: number | null
   workflow_name: string | null
   workflow_active: boolean

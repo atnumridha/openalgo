@@ -194,6 +194,19 @@ def _status(row, data, now, scheduler):
 def overview(owner, *, now=None):
     now = utc(now or datetime.now(UTC))
     scheduler, health = scheduler_state()
+    from database.trading_risk_db import get_live_entry_policy
+    from services.strategy_module.live_authorization import peek_status as live_status
+    from services.strategy_module.live_readiness import inspect_setup
+
+    authorization = live_status(owner)
+    risk = {
+        mode: risk_evidence(owner, mode, now.astimezone(IST).date().isoformat())
+        for mode in ("sandbox", "live")
+    }
+    try:
+        policy = get_live_entry_policy(owner)
+    except Exception:
+        policy = None
     with Session(store.engine) as db:
         rows = db.scalars(
             select(store.SmStrategy)
@@ -351,10 +364,24 @@ def overview(owner, *, now=None):
         data["entry_plan"] = {"at": iso(plan.ts), "details": plan.payload} if plan else None
         data["checkpoint"] = store.checkpoint_to_dict(checkpoint) if checkpoint else None
         data["monitor_status"], data["reason"] = _status(row, data, now, health)
+        data["live_readiness"] = inspect_setup(
+            owner, row, data, authorization, risk["live"], health, policy, now=now
+        )
+        # Keep scheduling/time evidence alongside setup blockers. An open run
+        # must remain visible even while new live entries cannot be admitted.
+        if data["mode"] == "live" and row.automation_state == "armed":
+            if data["open_run_count"]:
+                data["activity_status"], data["activity_reason"] = data["monitor_status"], data["reason"]
+                data["monitor_status"], data["reason"] = (
+                    "in_trade", "A managed run is active. Inspect fills and protection; setup blockers below apply to new entries."
+                )
+            elif data["live_readiness"]["blocked"]:
+                data["activity_status"], data["activity_reason"] = data["monitor_status"], data["reason"]
+                count = data["live_readiness"]["blocker_count"]
+                data["monitor_status"], data["reason"] = (
+                    "live_blocked", f"Live entry has {count} setup blocker(s). Review the complete checklist below."
+                )
         result.append(clean(data))
-    from services.strategy_module.live_authorization import peek_status as live_status
-
-    authorization = live_status(owner)
     return {
         "server_time": iso(now),
         "refresh_interval_seconds": 3,
@@ -363,10 +390,7 @@ def overview(owner, *, now=None):
             "active": authorization.active,
             "expires_at": authorization.expires_at,
         },
-        "risk": {
-            mode: risk_evidence(owner, mode, now.astimezone(IST).date().isoformat())
-            for mode in ("sandbox", "live")
-        },
+        "risk": risk,
         "strategies": result,
     }
 
@@ -633,6 +657,7 @@ def risk_evidence(owner, mode, day):
                 "available": True,
                 "policy_version": account.policy_version,
                 "capital": float(account.capital),
+                "max_positions": policy.max_positions,
                 "costs_configured": bool(settings and settings.costs),
                 "pause_reason": account.pause_reason,
                 "daily_stop_reason": stopped.reason if stopped else account.daily_stop_reason,

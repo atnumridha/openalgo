@@ -65,3 +65,27 @@ def trading_profile_schema():
     init_db()
     from database.strategy_qualification_db import init_db as qualification_init_db
     qualification_init_db()
+    from database.live_authorization_db import init_db as authorization_init_db
+    authorization_init_db()
+
+
+@pytest.fixture
+def live_authorization_broker(tmp_path, monkeypatch):
+    """Consumer-unit-test identity seam; authority still uses real SQLite.
+
+    Broker binding itself is covered with real Auth rows in the dedicated
+    live-authorization suite. Opt in only when a suite tests callers of the
+    authorization API, rather than broker identity.
+    """
+    from database import live_authorization_db as durable
+    from database.engine_factory import create_db_engine
+    from services.strategy_module import live_authorization as authz
+
+    engine = create_db_engine(f"sqlite:///{tmp_path / 'live-authorizations.db'}")
+    monkeypatch.setattr(durable, "engine", engine)
+    monkeypatch.setattr(durable, "_current_binding", lambda _connection, owner: f"test-{owner}")
+    for flag in ("_revocation_failed", "_revocation_epoch", "_revocations_inflight", "_grants_inflight"):
+        monkeypatch.setattr(authz, flag, False if flag == "_revocation_failed" else 0)
+    durable.init_db()
+    yield engine
+    engine.dispose()

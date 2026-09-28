@@ -191,6 +191,9 @@ export interface StrategySummary {
     | 'sma_macd'
     | 'bollinger'
     | 'ml_forest'
+    | 'receiver_trend'
+    | 'receiver_retest'
+    | 'receiver_momentum'
     | null
   name: string
   strategy_kind: StrategyKind

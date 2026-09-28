@@ -107,14 +107,14 @@ from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
-from blueprints.trading_research import trading_research_bp
-from blueprints.strategy_qualification import strategy_qualification_bp
-from blueprints.trading_risk import trading_risk_bp
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
+from blueprints.strategy_qualification import strategy_qualification_bp
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
+from blueprints.trading_research import trading_research_bp
+from blueprints.trading_risk import trading_risk_bp
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
@@ -135,16 +135,17 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.live_authorization_db import init_db as ensure_live_authorization_tables_exists
 from database.profit_comparison_db import init_db as ensure_profit_comparison_tables_exist
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
-from database.trading_research_db import init_db as ensure_trading_research_tables_exist
-from database.trading_risk_db import init_db as ensure_trading_risk_tables_exist
 from database.strategy_qualification_db import init_db as ensure_strategy_qualification_tables_exist
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
+from database.trading_research_db import init_db as ensure_trading_research_tables_exist
+from database.trading_risk_db import init_db as ensure_trading_risk_tables_exist
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
 from database.watchlist_db import init_db as ensure_watchlist_tables_exists
@@ -771,6 +772,7 @@ def setup_environment(app):
                 ("Latency DB", ensure_latency_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
                 ("Strategy Module DB", ensure_strategy_module_tables_exists),
+                ("Live Authorization DB", ensure_live_authorization_tables_exists),
                 ("Trading Research DB", ensure_trading_research_tables_exist),
                 ("Strategy Qualification DB", ensure_strategy_qualification_tables_exist),
                 ("Trading Risk DB", ensure_trading_risk_tables_exist),

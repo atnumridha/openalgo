@@ -35,6 +35,7 @@ need → drill into the specific file. Don't load everything at once.
 | One-click local startup (macOS) | [local-startup.md](local-startup.md) |
 | Groww algorithmic tests and cumulative strategy ranking | [strategy-ranking-2026-09-27.md](strategy-ranking-2026-09-27.md) |
 | 28 September strategy results, entry refusals and execution audit | [strategy-operations-audit-2026-09-28.md](strategy-operations-audit-2026-09-28.md) |
+| Live approval persistence, setup blockers and bullish/bearish receiver repairs | [live-readiness-repairs-2026-09-28.md](live-readiness-repairs-2026-09-28.md) |
 | Kotak MCX contract units, supported products and accounting examples | [mcx-contract-units.md](mcx-contract-units.md) |
 | Ubuntu server install | [installation-guidelines/getting-started/ubuntu-server-installation.md](installation-guidelines/getting-started/ubuntu-server-installation.md) |
 | Docker | [docker/README.md](docker/README.md) |

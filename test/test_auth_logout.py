@@ -12,6 +12,8 @@ import blueprints.auth as auth_bp_module  # noqa: E402
 import database.auth_db as auth_db  # noqa: E402
 from services.strategy_module import live_authorization as authz  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("live_authorization_broker")
+
 
 def _app():
     app = Flask(__name__)

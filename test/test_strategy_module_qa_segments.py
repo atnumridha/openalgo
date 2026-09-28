@@ -334,6 +334,7 @@ _SEED_ROWS = [
     ("SENSEX04JAN3078000CE", "SENSEX", "BFO", "04-JAN-30", SENSEX_LOT, "CE"),
     ("RELIANCE31JAN303000CE", "RELIANCE", "NFO", "31-JAN-30", RELIANCE_LOT, "CE"),
     ("CRUDEOIL16AUG306750CE", "CRUDEOIL", "MCX", "16-AUG-30", CRUDEOIL_LOT, "CE"),
+    ("CRUDEOILM16AUG306750CE", "CRUDEOILM", "MCX", "16-AUG-30", 10, "CE"),
     ("USDINR26MAY3088.25CE", "USDINR", "CDS", "26-MAY-30", USDINR_LOT, "CE"),
     # A broker master that puts a description in `name` rather than the base,
     # for a product whose base is a prefix of another one. The real family is
@@ -1887,11 +1888,13 @@ def test_a_signal_leg_in_units_on_a_lot_boundary_is_accepted(market, broker):
 
 
 def test_a_signal_exit_covers_the_side_actually_held_on_a_derivative(market, broker):
+    # Use a supported MCX contract so this side/exit test reaches fill accounting.
+    market.list_contract("CRUDEOILM16AUG306750CE", "MCX", 10)
     strategy = _signal_strategy(
         [
             {
                 "id": 1,
-                "symbol": "CRUDEOIL16AUG306750CE",
+                "symbol": "CRUDEOILM16AUG306750CE",
                 "exchange": "MCX",
                 "qty": 2,
                 "qty_mode": "lots",
@@ -1899,7 +1902,8 @@ def test_a_signal_exit_covers_the_side_actually_held_on_a_derivative(market, bro
             }
         ]
     )
-    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    entry = signals.handle_signal(strategy, "short_entry", leg_id=1)
+    assert entry.ok is True, entry.error
     # An exit closes a confirmed quantity, so the entry has to have filled.
     engine.apply_fill(store.get_strategy(strategy.id, USER).current_run_id, 1, 100.0, is_entry=True)
 

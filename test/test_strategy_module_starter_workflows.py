@@ -26,7 +26,7 @@ def test_six_exchange_aware_workflow_graphs_are_strictly_valid():
         assert validate_workflow(definition, strict=True) == []
         start = next(node for node in definition["nodes"] if node["type"] == "start")
         run = next(node for node in definition["nodes"] if node["type"] == "strategyModuleRun")
-        assert start["data"]["intervalValue"] == 5
+        assert start["data"]["intervalValue"] == 1
         assert start["data"]["intervalUnit"] == "minutes"
         assert start["data"]["marketHoursOnly"] is True
         expected_calendar = "BSE" if definition["metadata"]["exchange"] == "BSE_INDEX" else definition["metadata"]["exchange"]
@@ -35,10 +35,8 @@ def test_six_exchange_aware_workflow_graphs_are_strictly_valid():
         assert type(run["data"]["strategyId"]) is int
         assert run["data"]["strategyId"] == STRATEGY_IDS[definition["metadata"]["strategy_name"]]
         assert run["data"]["brokerOwner"] == "alice"
-        assert run["data"]["barEvidence"] == {
-            "5m": ["bar5Current", "bar5Previous"],
-            "15m": ["bar15Current", "bar15Previous"],
-        }
+        from services.strategy_module.receiver_rules import RECEIVER_NAMES
+        assert run["data"]["barEvidence"] == {"scalpProfile": RECEIVER_NAMES[definition["metadata"]["strategy_name"]]}
         assert run["data"]["marketHoursExchange"] == expected_calendar
 
 
@@ -47,9 +45,9 @@ def test_mcx_graphs_use_mcx_history_and_stricter_confirmation_for_volatile_minis
     by_underlying = {definition["metadata"]["underlying"]: definition for definition in definitions}
 
     for underlying in ("GOLDM", "CRUDEOILM", "SILVERM", "NATGASMINI"):
-        bars = [node for node in by_underlying[underlying]["nodes"] if node["type"] == "barOffset"]
-        assert bars
-        assert all(node["data"]["exchange"] == "MCX" for node in bars)
+        run = next(node for node in by_underlying[underlying]["nodes"] if node["type"] == "strategyModuleRun")
+        assert run["data"]["barEvidence"] == {"scalpProfile":"receiver_momentum"}
+        assert run["data"]["marketHoursExchange"] == "MCX"
 
     assert by_underlying["SILVERM"]["metadata"]["risk_profile"] == "high_volatility"
     assert by_underlying["NATGASMINI"]["metadata"]["risk_profile"] == "high_volatility"
@@ -229,7 +227,7 @@ def test_installer_adds_bar_guard_to_existing_unmodified_starter(monkeypatch):
 
     assert updates
     upgraded = next(node for node in updates[0]["nodes"] if node["type"] == "strategyModuleRun")
-    assert upgraded["data"]["barEvidence"]["5m"] == ["bar5Current", "bar5Previous"]
+    assert upgraded["data"]["barEvidence"] == {"scalpProfile":"receiver_trend"}
 
 
 def test_installer_preserves_a_customized_existing_graph(monkeypatch):
@@ -240,8 +238,7 @@ def test_installer_preserves_a_customized_existing_graph(monkeypatch):
     run = next(node for node in nodes if node["type"] == "strategyModuleRun")
     run["data"].pop("barEvidence")
     run["data"].pop("marketHoursExchange")
-    trend = next(node for node in nodes if node["id"] == "trend5")
-    trend["data"]["rightValue"] = "{{bar5Previous.close}}"
+    run["data"]["receiverOverride"] = "customized rule"
     start = next(node for node in nodes if node["id"] == "start")
     start["data"]["marketHoursExchange"] = "NSE"
     row = SimpleNamespace(id=20, name=definition["name"], nodes=nodes, edges=definition["edges"], is_active=True)

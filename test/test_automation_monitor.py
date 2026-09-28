@@ -147,6 +147,49 @@ def test_monitor_is_owner_scoped_with_actual_check_and_schedule_evidence(db, mon
     assert row["open_run_count"] == 0
 
 
+def test_live_setup_blockers_remain_visible_after_hours(db, monkeypatch):
+    from services.strategy_module import monitor
+
+    sid, wid = seed(live_enabled=True)
+    flow = flow_db.db_session.get(flow_db.FlowWorkflow, wid)
+    flow.nodes = [flow.nodes[0], {**flow.nodes[1], "data": {**flow.nodes[1]["data"], "mode": "live"}}]
+    flow_db.db_session.commit()
+    execution(wid)
+    scheduler(monkeypatch)
+    monkeypatch.setattr("services.strategy_module.live_readiness.inspect_setup", lambda *a, **kw: {
+        "blocked": True, "blocker_count": 2, "checks": [
+            {"code": "session_approval", "status": "blocked", "message": "Approval absent"},
+            {"code": "research_release", "status": "blocked", "message": "Research release absent"},
+        ]})
+    row = monitor.overview("alice", now=NOW + timedelta(hours=6))["strategies"][0]
+    assert row["monitor_status"] == "live_blocked"
+    assert row["activity_status"] == "outside_session"
+    assert row["live_readiness"]["blocker_count"] == 2
+    assert row["live_readiness"]["checks"][0]["code"] == "session_approval"
+    with Session(store.engine) as session:
+        assert session.scalar(select(store.SmStrategyRun).where(store.SmStrategyRun.strategy_id == sid)) is None
+
+
+def test_live_open_run_remains_visible_with_new_entry_blockers(db, monkeypatch):
+    from services.strategy_module import monitor
+
+    sid, wid = seed(live_enabled=True)
+    flow = flow_db.db_session.get(flow_db.FlowWorkflow, wid)
+    flow.nodes = [flow.nodes[0], {**flow.nodes[1], "data": {**flow.nodes[1]["data"], "mode": "live"}}]
+    flow_db.db_session.commit()
+    with Session(store.engine) as session:
+        session.add(store.SmStrategyRun(strategy_id=sid, mode="live"))
+        session.commit()
+    scheduler(monkeypatch)
+    monkeypatch.setattr("services.strategy_module.live_readiness.inspect_setup", lambda *a, **kw: {
+        "blocked": True, "blocker_count": 1, "checks": []})
+    row = monitor.overview("alice", now=NOW + timedelta(hours=6))["strategies"][0]
+    assert row["monitor_status"] == "in_trade"
+    assert row["activity_status"] == "outside_session"
+    assert row["live_readiness"]["blocked"]
+    assert row["open_run_count"] == 1
+
+
 @pytest.mark.parametrize(
     "condition,expected",
     [("missing", "schedule_missing"), ("paused", "scheduler_unavailable"), ("stale", "stale")],
@@ -444,14 +487,18 @@ def test_failure_to_persist_failure_does_not_skip_remaining_closures(db, monkeyp
     assert seen == ids and not result["all_stopped"]
 
 
-def test_authorization_peek_does_not_expire_or_notify(monkeypatch):
+def test_authorization_peek_does_not_expire_or_notify(monkeypatch, live_authorization_broker):
+    from database import live_authorization_db as durable
     from services.strategy_module import live_authorization as live
 
-    old = live.LiveAuthorization(True, "2020-01-01", "2020-01-02T03:00:00+05:30")
-    monkeypatch.setitem(live._authorizations, "monitor-test", old)
+    old = {"user_id": "monitor-test", "active": True, "session_day": "2020-01-01",
+           "expires_at": "2020-01-02T03:00:00+05:30", "binding_digest": "test-monitor-test"}
+    with live_authorization_broker.begin() as connection:
+        connection.execute(durable.authorizations.insert().values(**old))
     monkeypatch.setattr(live, "_notify_transition", lambda *a: pytest.fail("Read must not notify"))
     assert not live.peek_status("monitor-test").active
-    assert live._authorizations["monitor-test"] is old
+    with live_authorization_broker.connect() as connection:
+        assert dict(connection.execute(select(durable.authorizations)).mappings().one()) == old
 
 
 def test_risk_evidence_is_pure_and_reports_effective_caps(db, monkeypatch):

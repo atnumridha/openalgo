@@ -14,7 +14,8 @@ IST = ZoneInfo("Asia/Kolkata")
 NOW = datetime(2026, 9, 28, 10, 5, 10, tzinfo=IST)
 SIGNAL = NOW.replace(second=0)
 RECIPE = "one-lot-option-structure-runner-v5"
-PROFILES = ("ema915", "macd200", "ema5", "regime50200", "box15", "sma_macd", "bollinger")
+PROFILES = ("ema915", "macd200", "ema5", "regime50200", "box15", "sma_macd", "bollinger",
+            "receiver_trend", "receiver_retest", "receiver_momentum")
 
 
 def contract(**overrides):

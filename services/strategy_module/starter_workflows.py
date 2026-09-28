@@ -52,7 +52,7 @@ def _edge(edge_id: str, source: str, target: str, **fields) -> dict:
     return {"id": edge_id, "source": source, "target": target, **fields}
 
 
-def _definition(
+def legacy_definition(
     strategy_name: str,
     strategy_id: int,
     underlying: str,
@@ -190,10 +190,36 @@ def _definition(
     }
 
 
-def workflow_definitions(strategy_ids: Mapping[str, int], broker_owner: str) -> tuple[dict, ...]:
+def _definition(strategy_name, strategy_id, underlying, exchange, risk_profile, broker_owner):
+    from services.strategy_module.receiver_rules import RECEIVER_NAMES, PROFILES, RULE_VERSION
+
+    profile = RECEIVER_NAMES.get(strategy_name)
+    if not profile:
+        return legacy_definition(strategy_name, strategy_id, underlying, exchange, risk_profile, broker_owner)
+    calendar = {"NSE_INDEX":"NSE", "BSE_INDEX":"BSE"}.get(exchange,exchange)
+    return {
+        "name":f"{strategy_name} Workflow",
+        "description":f"{PROFILES[profile]}. Buy CE on bullish confirmation or PE on bearish confirmation. Completed bars only; managed option stops, costs and account limits remain mandatory.",
+        "nodes":[
+            _node("start","start",280,20,label="Evaluate completed 5/15-minute rules",scheduleType="interval",
+                  intervalValue=1,intervalUnit="minutes",marketHoursOnly=True,marketHoursExchange=calendar),
+            _node("run","strategyModuleRun",280,220,strategyId=int(strategy_id),brokerOwner=broker_owner,
+                  mode="sandbox",outputVariable="strategyRun",marketHoursExchange=calendar,
+                  barEvidence={"scalpProfile":profile}),
+        ],
+        "edges":[_edge("receiver-run","start","run")],
+        "metadata":{"starter_pack":RULE_VERSION,"strategy_name":strategy_name,"strategy_id":int(strategy_id),
+                    "underlying":underlying,"exchange":exchange,"risk_profile":risk_profile,"mode":"sandbox"},
+    }
+
+
+def workflow_definitions(strategy_ids: Mapping[str, int], broker_owner: str, *,
+                         strategy_profiles: Mapping[str, str | None] | None = None) -> tuple[dict, ...]:
     """Build graphs only for strategies whose durable ids are known."""
     return tuple(
-        _definition(name, strategy_ids[name], underlying, exchange, risk_profile, broker_owner)
+        (legacy_definition if strategy_profiles is not None and name in strategy_profiles
+         and strategy_profiles[name] is None else _definition)(
+             name, strategy_ids[name], underlying, exchange, risk_profile, broker_owner)
         for name, underlying, exchange, risk_profile in WORKFLOW_SPECS
         if name in strategy_ids
     )
@@ -242,6 +268,7 @@ def install(
     strategy_ids: Mapping[str, int],
     broker_owner: str,
     broker_connection_ids: Mapping[str, str | None] | None = None,
+    strategy_profiles: Mapping[str, str | None] | None = None,
 ) -> WorkflowInstallResult:
     """Create only missing Flow rows; activation remains an explicit step."""
     from database.flow_db import create_workflow, get_all_workflows, update_workflow
@@ -251,7 +278,7 @@ def install(
     created: list[dict] = []
     existing: list[dict] = []
     connection_ids = broker_connection_ids or {}
-    for definition in workflow_definitions(strategy_ids, broker_owner):
+    for definition in workflow_definitions(strategy_ids, broker_owner, strategy_profiles=strategy_profiles):
         strategy_name = definition["metadata"]["strategy_name"]
         connection_id = connection_ids.get(strategy_name)
         current = existing_by_name.get(definition["name"])

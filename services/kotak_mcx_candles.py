@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import atexit
 import math
+import os
 import queue
 import re
 import threading
 import time
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -356,6 +358,51 @@ def _is_current_future(symbol: str) -> bool:
     return bool(current and current["symbol"] == symbol)
 
 
+def _option_contract(symbol: str) -> tuple | None:
+    """Verify an exact, unexpired MCX option against the local broker master."""
+    if not isinstance(symbol, str) or not symbol.endswith(("CE", "PE")):
+        return None
+    from database import symbol as symbol_db
+
+    try:
+        with symbol_db.engine.connect() as connection:
+            rows = connection.execute(select(symbol_db.SymToken.__table__).where(
+                symbol_db.SymToken.symbol == symbol,
+                symbol_db.SymToken.exchange == "MCX",
+            ).limit(2)).mappings().all()
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        side = row["instrumenttype"]
+        root = str(row["name"] or "").strip().upper()
+        expiry = datetime.strptime(str(row["expiry"]), "%d-%b-%y").date()
+        strike = Decimal(str(row["strike"]))
+        lot = float(row["lotsize"])
+        tick = float(row["tick_size"])
+        if (
+            not root or side not in {"CE", "PE"} or expiry < datetime.now(IST).date()
+            or not strike.is_finite() or strike <= 0
+            or not math.isfinite(lot) or lot < 1 or not lot.is_integer()
+            or not math.isfinite(tick) or tick <= 0
+            or not str(row["token"] or "").strip() or not str(row["brsymbol"] or "").strip()
+            or str(row["brexchange"] or "").lower() != "mcx_fo"
+        ):
+            return None
+        canonical = f"{root}{expiry.strftime('%d%b%y').upper()}{format(strike.normalize(), 'f')}{side}"
+        if symbol != canonical:
+            return None
+        return root, expiry, strike, side
+    except (ValueError, TypeError, InvalidOperation):
+        return None
+    except Exception:
+        logger.exception("Could not verify MCX option master contract")
+        return None
+
+
+def _is_supported_contract(symbol: str) -> bool:
+    return _is_current_future(symbol) if str(symbol).endswith("FUT") else _option_contract(symbol) is not None
+
+
 class KotakMcxStreamCollector:
     """One bounded Quote subscription collector for one pinned connection."""
 
@@ -371,14 +418,18 @@ class KotakMcxStreamCollector:
         self.store = store
         self._ws_factory = ws_factory
         self._connection_check = connection_check or _verified_connection
-        self._current_contract = current_contract or _is_current_future
+        self._current_contract = current_contract or _is_supported_contract
         self._ws = None
         self._symbols: set[str] = set()
+        self._option_pairs: dict[str, set[str]] = {}
+        self._symbol_epochs: dict[str, int] = {}
+        self._subscription_epoch = 0
+        self._owns_ws = ws_factory is None
         self._queue = _real_threading.Queue(maxsize=self.MAX_QUEUE)
         self._overflow = False
         self._running = True
         self._thread = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         if start_worker:
             self._thread = threading.Thread(target=self._loop, daemon=True,
                                             name="kotak-mcx-candles")
@@ -387,9 +438,67 @@ class KotakMcxStreamCollector:
     def _client(self):
         if self._ws_factory is not None:
             return self._ws_factory(self.api_key)
-        from services.websocket_client import get_websocket_client
+        if self._ws is not None:
+            return self._ws
+        from services.websocket_client import WebSocketClient
 
-        return get_websocket_client(self.api_key)
+        # A collector owns its subscriptions so rolling an option pair cannot
+        # unsubscribe a Quote consumer sharing the application's singleton.
+        host = os.getenv("WEBSOCKET_HOST", "127.0.0.1")
+        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
+        client = WebSocketClient(self.api_key, host, int(os.getenv("WEBSOCKET_PORT", "8765")))
+        try:
+            if not client.connect():
+                raise ConnectionError("MCX collector WebSocket connection failed")
+            return client
+        except Exception:
+            self._detach_client(client)
+            raise
+
+    @staticmethod
+    def _client_stopped(ws):
+        loop = getattr(ws, "loop", None)
+        thread = getattr(ws, "thread", None)
+        # A disconnected client may still be in its bounded reconnect loop.
+        # Only a closed loop or a finished loop thread proves it cannot recover.
+        return bool((loop is not None and loop.is_closed())
+                    or (thread is not None and not thread.is_alive()))
+
+    def _retire_stopped_client(self):
+        """Invalidate coverage before replacing a terminal owned connection."""
+        ws = self._ws
+        if not self._owns_ws or ws is None or not self._client_stopped(ws):
+            return
+        subscribed = tuple(self._symbols)
+        self._ws = None
+        self._symbols.clear()
+        self._option_pairs.clear()
+        self._symbol_epochs.clear()
+        self._detach_client(ws)
+        for symbol in subscribed:
+            try:
+                self.store.mark_interrupted(self.connection_id, symbol)
+            except Exception:
+                logger.exception("Could not persist MCX collector interruption")
+
+    def _detach_client(self, ws):
+        for event, callback in (("market_data", self._on_market_data), ("auth", self._on_auth)):
+            try:
+                ws.unregister_callback(event, callback)
+            except Exception:
+                logger.exception("MCX collector callback cleanup failed")
+        if self._owns_ws:
+            try:
+                ws.disconnect()
+            except Exception:
+                logger.exception("MCX collector disconnect failed")
+            finally:
+                dispatch = getattr(ws, "_dispatch_thread", None)
+                if dispatch is not None:
+                    try:
+                        dispatch.join(timeout=2)
+                    except Exception:
+                        logger.exception("MCX collector dispatcher cleanup failed")
 
     def ensure(self, symbol: str) -> str:
         if not self._connection_check(self.api_key, self.connection_id):
@@ -397,40 +506,82 @@ class KotakMcxStreamCollector:
         if not self._current_contract(symbol):
             return "Data unavailable"
         with self._lock:
+            self._retire_stopped_client()
             if (symbol in self._symbols and self._ws is not None and self._ws.connected
                     and self._ws.authenticated):
                 return "Collecting history"
             if symbol not in self._symbols and len(self._symbols) >= self.MAX_SYMBOLS:
                 return "Risk blocked"
+            ws = None
             try:
                 ws = self._client()
                 if not ws.connected or not ws.authenticated:
                     return "Data unavailable"
                 if ws is not self._ws:
                     if self._ws is not None:
-                        self._ws.unregister_callback("market_data", self._on_market_data)
-                        self._ws.unregister_callback("auth", self._on_auth)
+                        self._detach_client(self._ws)
                         for old_symbol in self._symbols:
                             self.store.mark_interrupted(self.connection_id, old_symbol)
                     ws.register_callback("market_data", self._on_market_data)
                     ws.register_callback("auth", self._on_auth)
                     self._ws = ws
                     self._symbols.clear()
+                    self._option_pairs.clear()
+                    self._symbol_epochs.clear()
                 result = ws.subscribe([{"symbol": symbol, "exchange": "MCX"}], mode="Quote")
                 if result.get("status") != "success":
                     return "Data unavailable"
+                self._subscription_epoch += 1
+                self._symbol_epochs[symbol] = self._subscription_epoch
                 self._symbols.add(symbol)
                 return "Collecting history"
             except Exception:
                 logger.exception("MCX quote subscription failed")
                 return "Data unavailable"
+            finally:
+                if ws is not None and ws is not self._ws:
+                    self._detach_client(ws)
+
+    def warm_options(self, symbols: list[str], contracts: list[tuple]) -> str:
+        """Rotate one exact CE/PE pair, retaining the future and other roots."""
+        root = contracts[0][0]
+        desired = set(symbols)
+        if not self._connection_check(self.api_key, self.connection_id):
+            return "Risk blocked"
+        with self._lock:
+            self._retire_stopped_client()
+            old = self._option_pairs.get(root, set()).copy()
+            if len((self._symbols - old) | desired) > self.MAX_SYMBOLS:
+                return "Risk blocked"
+            for symbol in sorted(old - desired):
+                if self._ws is None:
+                    return "Data unavailable"
+                try:
+                    result = self._ws.unsubscribe([{"symbol": symbol, "exchange": "MCX"}], mode="Quote")
+                except Exception:
+                    logger.exception("MCX option unsubscribe failed")
+                    return "Data unavailable"
+                if result.get("status") != "success":
+                    return "Data unavailable"
+                self._symbols.discard(symbol)
+                self._symbol_epochs.pop(symbol, None)
+                self._option_pairs[root].discard(symbol)
+                if not self._option_pairs[root]:
+                    del self._option_pairs[root]
+                self.store.mark_interrupted(self.connection_id, symbol)
+            for symbol in symbols:
+                readiness = self.ensure(symbol)
+                if readiness != "Collecting history":
+                    return readiness
+                self._option_pairs.setdefault(root, set()).add(symbol)
+        return "Collecting history"
 
     def _on_market_data(self, packet):
         # This callback may be on the asyncio real OS thread. Queue only.
         if (isinstance(packet, dict) and packet.get("exchange") == "MCX"
                 and packet.get("symbol") in self._symbols and packet.get("mode") == 2):
             try:
-                self._queue.put_nowait(("tick", packet))
+                self._queue.put_nowait(("tick", (packet, self._symbol_epochs.get(packet["symbol"]))))
             except queue.Full:
                 self._overflow = True
 
@@ -462,7 +613,10 @@ class KotakMcxStreamCollector:
                     if self._ws is not None:
                         self._ws.subscribe([{"symbol": symbol, "exchange": "MCX"}], mode="Quote")
             elif kind == "tick":
-                self.store.ingest(self.connection_id, packet)
+                packet, epoch = packet
+                if (packet.get("symbol") in self._symbols
+                        and epoch == self._symbol_epochs.get(packet["symbol"])):
+                    self.store.ingest(self.connection_id, packet)
 
     def _loop(self):
         while self._running:
@@ -476,13 +630,20 @@ class KotakMcxStreamCollector:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=2)
+        with self._lock:
+            ws, subscribed = self._ws, tuple(self._symbols)
+            self._ws = None
+            self._symbols.clear()
+            self._option_pairs.clear()
+            self._symbol_epochs.clear()
         try:
-            with self._lock:
-                if self._ws is not None:
-                    self._ws.unregister_callback("market_data", self._on_market_data)
-                    self._ws.unregister_callback("auth", self._on_auth)
-                self._ws = None
-                self._symbols.clear()
+            if ws is not None:
+                self._detach_client(ws)
+            for symbol in subscribed:
+                try:
+                    self.store.mark_interrupted(self.connection_id, symbol)
+                except Exception:
+                    logger.exception("Could not persist MCX collector interruption")
         finally:
             self.store.engine.dispose()
 
@@ -491,14 +652,7 @@ _collectors: dict[str, KotakMcxStreamCollector] = {}
 _collectors_lock = threading.Lock()
 
 
-def get_kotak_mcx_history(api_key, connection_id, symbol, interval, start_date, end_date):
-    """Read completed observations, starting the bounded live stream if needed."""
-    if not connection_id or not _verified_connection(api_key, connection_id):
-        return {"status": "risk_blocked", "readiness": "Risk blocked", "data": [],
-                "message": "An active pinned Kotak broker connection is required"}
-    if not _is_current_future(symbol):
-        return {"status": "data_unavailable", "readiness": "Data unavailable", "data": [],
-                "message": "Current MCX futures contract is unavailable"}
+def _collector_for(api_key, connection_id):
     with _collectors_lock:
         collector = _collectors.get(connection_id)
         if collector is not None and collector.api_key != api_key:
@@ -507,10 +661,73 @@ def get_kotak_mcx_history(api_key, connection_id, symbol, interval, start_date, 
             collector = None
         if collector is None:
             if len(_collectors) >= 8:
-                return {"status": "risk_blocked", "readiness": "Risk blocked", "data": [],
-                        "message": "MCX collector connection limit reached"}
+                return None
             collector = KotakMcxStreamCollector(connection_id, api_key, McxCandleStore())
             _collectors[connection_id] = collector
+    return collector
+
+
+def _unavailable(readiness, message=None):
+    return {"status": "risk_blocked" if readiness == "Risk blocked" else "data_unavailable",
+            "readiness": readiness, "data": [], "message": message or readiness}
+
+
+def warm_kotak_mcx_options(api_key, connection_id, symbols):
+    """Warm one already-resolved ATM CE/PE pair before a signal is evaluated.
+
+    The caller resolves the exact pair with the pinned market-data client.
+    Readiness requires three contiguous, recently completed observed minutes
+    for both premiums; this helper never reconstructs missing history.
+    """
+    if not connection_id or not _verified_connection(api_key, connection_id):
+        return _unavailable("Risk blocked", "An active pinned Kotak broker connection is required")
+    if not isinstance(symbols, (list, tuple)) or len(symbols) != 2:
+        return _unavailable("Data unavailable", "An exact MCX CE/PE option pair is required")
+    contracts = [_option_contract(symbol) for symbol in symbols]
+    if (
+        any(contract is None for contract in contracts)
+        or contracts[0][:3] != contracts[1][:3]
+        or {contract[3] for contract in contracts} != {"CE", "PE"}
+    ):
+        return _unavailable("Data unavailable", "The MCX pair must share a verified root, expiry and strike")
+    collector = _collector_for(api_key, connection_id)
+    if collector is None:
+        return _unavailable("Risk blocked", "MCX collector connection limit reached")
+    readiness = collector.warm_options(list(symbols), contracts)
+    if readiness != "Collecting history":
+        return _unavailable(readiness)
+    now = datetime.now(IST)
+    expected = [_minute(int(now.timestamp())) - offset * 60 for offset in (3, 2, 1)]
+    per_symbol = {}
+    for symbol in symbols:
+        history = collector.store.history(
+            connection_id, symbol, "1m", now.date().isoformat(), now.date().isoformat(), now,
+        )
+        complete = history.get("data", [])
+        per_symbol[symbol] = (
+            "Ready" if [row["timestamp"] for row in complete[-3:]] == expected
+            else history["readiness"] if history["readiness"] != "Ready" else "Collecting history"
+        )
+    readiness = "Ready" if all(value == "Ready" for value in per_symbol.values()) else "Collecting history"
+    if "Data unavailable" in per_symbol.values():
+        readiness = "Data unavailable"
+    return {"status": {"Ready": "success", "Collecting history": "collecting_history",
+                       "Data unavailable": "data_unavailable"}[readiness],
+            "readiness": readiness, "data": [], "symbols": list(symbols),
+            "option_readiness": per_symbol, "connection_id": connection_id}
+
+
+def get_kotak_mcx_history(api_key, connection_id, symbol, interval, start_date, end_date):
+    """Read completed observations, starting the bounded live stream if needed."""
+    if not connection_id or not _verified_connection(api_key, connection_id):
+        return {"status": "risk_blocked", "readiness": "Risk blocked", "data": [],
+                "message": "An active pinned Kotak broker connection is required"}
+    if not _is_supported_contract(symbol):
+        return {"status": "data_unavailable", "readiness": "Data unavailable", "data": [],
+                "message": "A current MCX future or verified unexpired option is required"}
+    collector = _collector_for(api_key, connection_id)
+    if collector is None:
+        return _unavailable("Risk blocked", "MCX collector connection limit reached")
     readiness = collector.ensure(symbol)
     if readiness in {"Risk blocked", "Data unavailable"}:
         return {"status": "risk_blocked" if readiness == "Risk blocked" else "data_unavailable",

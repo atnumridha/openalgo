@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from database import strategy_module_db as store
-
 
 @dataclass(frozen=True, slots=True)
 class InstallResult:
@@ -96,7 +94,7 @@ def _cash_definition(name: str, symbol: str, *, stop: int, target: int) -> dict:
     }
 
 
-def starter_definitions() -> tuple[dict, ...]:
+def legacy_starter_definitions() -> tuple[dict, ...]:
     """Return fresh ordinary Strategy Module payloads for the starter templates.
 
     Options are weekly ATM batch legs so a future run resolves the contract at
@@ -146,6 +144,19 @@ def starter_definitions() -> tuple[dict, ...]:
     )
 
 
+def starter_definitions() -> tuple[dict, ...]:
+    """New option receivers bind their server-side bidirectional rule profile."""
+    from services.strategy_module.receiver_rules import RECEIVER_NAMES
+
+    rows = legacy_starter_definitions()
+    for row in rows:
+        profile = RECEIVER_NAMES.get(row["name"])
+        if profile:
+            row.update(scalp_profile=profile, daily_loss_limit_inr=2000,
+                       overall_sl_mtm=300, overall_target_mtm=None)
+    return rows
+
+
 def install(user_id: str) -> InstallResult:
     """Create missing templates, without starting, scheduling, or enabling them.
 
@@ -156,6 +167,7 @@ def install(user_id: str) -> InstallResult:
     # Kept local to avoid a blueprint -> starter pack -> blueprint import cycle
     # while still making the public validator the single configuration gate.
     from blueprints.strategy_module import validate_strategy_config
+    from database import strategy_module_db as store
 
     existing_by_name = {row["name"]: row for row in store.list_strategies(user_id)}
     created: list[dict] = []
@@ -202,7 +214,8 @@ def install(user_id: str) -> InstallResult:
         name: row.get("broker_connection_id") for name, row in strategy_rows.items()
     }
     workflows = starter_workflows.install(
-        strategy_ids, user_id, broker_connection_ids=connection_ids
+        strategy_ids, user_id, broker_connection_ids=connection_ids,
+        strategy_profiles={name: row.get("scalp_profile") for name, row in strategy_rows.items()},
     )
     return InstallResult(
         tuple(created),

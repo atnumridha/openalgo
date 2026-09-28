@@ -33,6 +33,8 @@ from services.strategy_module import live_authorization as authz
 from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.portfolio_governor import EntryFacts, GovernorDecision
 
+pytestmark = pytest.mark.usefixtures("live_authorization_broker")
+
 USER = "signal_test_user"
 
 #: The cash contracts these legs trade, seeded so the module does not depend on

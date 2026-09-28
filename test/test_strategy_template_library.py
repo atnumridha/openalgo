@@ -48,6 +48,22 @@ def test_listing_uninstalled_templates_never_creates_strategies(owner):
     }
 
 
+def test_retrying_old_receiver_install_does_not_silently_switch_its_rules(owner):
+    from blueprints.strategy_module import validate_strategy_config
+    from services.strategy_module import starter_pack, template_library
+
+    definition = starter_pack.legacy_starter_definitions()[1] | {"broker_connection_id": str(uuid4())}
+    config, error = validate_strategy_config(definition)
+    assert not error
+    row, error = store.create_strategy(owner, config)
+    assert not error
+    result = template_library.install(owner, "nifty-retest")
+    assert result["strategy_id"] == row["id"]
+    assert store.get_strategy(row["id"], owner).scalp_profile is None
+    nodes = flow_db.get_workflow(result["workflow_id"]).nodes
+    assert any(node["id"] == "trend5" for node in nodes)
+
+
 @pytest.mark.parametrize("offset", range(11))
 def test_one_template_install_creates_only_one_stopped_sandbox_pair_and_is_repeatable(
     owner, offset

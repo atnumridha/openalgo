@@ -12,6 +12,7 @@ from services.research.groww_algorithmic import features as regime_features
 from services.research.groww_algorithmic import signals as regime_signals
 from services.research.scalp_strategies import ema_reversal_signals, macd_features, macd_signals
 from services.research.tradejini_scalping import tradejini_signals
+from services.strategy_module.receiver_rules import PROFILES as RECEIVER_PROFILES
 from services.risk import PositionRisk, evaluate_position
 from services.risk.budget import current_policy
 from services.risk.cash_exit import (
@@ -32,6 +33,7 @@ PROFILES = {
     "ema5": "NIFTY 5 EMA Reversal",
     "sma_macd": "NIFTY SMA 5/34 Zero-Cross (Research)",
     "bollinger": "NIFTY Bollinger 20/2 Reversal (Research)",
+    **RECEIVER_PROFILES,
 }
 TOP_PROFILES = ("regime50200", "ema915", "box15")
 ITM_PROFILES = {"ema915", "macd200", "ema5"}
@@ -44,7 +46,7 @@ class WaitingForSignal(ValueError):
 def closed_frame(records, interval, now):
     from services.indicator_service import _market_bar_time, completed_history_records
 
-    minutes = {"1m": 1, "5m": 5}[interval]
+    minutes = {"1m": 1, "5m": 5, "15m": 15}[interval]
     records = completed_history_records(records, interval, now)
     if not records or len(records) > 20000:
         raise WaitingForSignal("Collecting history: no usable completed candles")
@@ -270,6 +272,10 @@ def dispatch_reason(metadata, mode):
 
 def prepare(strategy, owner, api_key, mode):
     """Re-evaluate on the server; HTTP start/webhook data cannot supply a signal."""
+    if strategy.get("scalp_profile") in RECEIVER_PROFILES:
+        from services.strategy_module.receiver import prepare as prepare_receiver
+        return prepare_receiver(strategy, owner, api_key, mode)
+
     from database import flow_db, trading_risk_db
     from services.flow_openalgo_client import FlowOpenAlgoClient
 
@@ -404,8 +410,9 @@ def protect_leg(leg, context, client, *, now=None):
     days = (expiry - now.date()).days
     profile = context.get("profile", "ema915")
     minimum_days = 1 if profile in ITM_PROFILES else 0
-    if not minimum_days <= days <= 7 or leg.get("expiry_fallback"):
-        raise ValueError(f"Scalping requires an expiry {minimum_days}–7 days away")
+    maximum_days = 90 if profile in RECEIVER_PROFILES and leg.get("exchange") == "MCX" else 7
+    if not minimum_days <= days <= maximum_days or leg.get("expiry_fallback"):
+        raise ValueError(f"Scalping requires an expiry {minimum_days}–{maximum_days} days away")
     quantity = int(leg["quantity"])
     if quantity <= 0 or quantity != int(leg["lot_size"]):
         raise ValueError("Scalping requires exactly one option lot")
@@ -483,6 +490,8 @@ def _protect_structure_leg(leg, context, client, now, clock):
                    option_symbol=leg["symbol"],
                    structure_contract={k: leg[k] for k in ("symbol", "exchange", "position", "quantity",
                                                           "lot_size", "tick_size", "initial_stop_price")})
+    if leg.get("price_multiplier") is not None:
+        context["structure_contract"]["price_multiplier"] = leg["price_multiplier"]
     leg["scalp_context"] = dict(context)
     return leg
 

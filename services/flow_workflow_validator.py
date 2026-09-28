@@ -841,12 +841,14 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
         node_type == "strategySignal" and data.get("action") in {"start", "long_entry", "short_entry"}
     )):
         evidence = data.get("barEvidence")
-        from services.strategy_module.scalping import PROFILES
+        from services.strategy_module.scalping import PROFILES, RECEIVER_PROFILES
         scalp_evidence = (node_type == "strategyModuleRun" and isinstance(evidence, dict)
                           and set(evidence) == {"scalpProfile"}
                           and isinstance(evidence["scalpProfile"], str)
                           and evidence["scalpProfile"] in PROFILES
-                          and data.get("marketHoursExchange") == "NSE")
+                          and (data.get("marketHoursExchange") == "NSE" or (
+                              evidence["scalpProfile"] in RECEIVER_PROFILES
+                              and data.get("marketHoursExchange") in {"BSE", "MCX"})))
         if not scalp_evidence and (not isinstance(evidence, dict) or any(
             not isinstance(evidence.get(interval), list)
             or len(evidence[interval]) != 2

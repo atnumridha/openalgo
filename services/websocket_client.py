@@ -191,12 +191,18 @@ class WebSocketClient:
         """Disconnect from the WebSocket server"""
         self.running = False
 
-        if self.loop and self.ws:
+        loop = self.loop
+        if loop and self.ws and not loop.is_closed():
             # Scheduled, not awaited: the thread join below is what waits.
             # call_soon_threadsafe avoids building a concurrent Future whose
             # condition would belong to the wrong world.
-            coro = self._disconnect()
-            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(coro))
+            # Build the coroutine on the loop, so closing during scheduling
+            # cannot abandon an unawaited coroutine or skip state cleanup.
+            try:
+                loop.call_soon_threadsafe(lambda: loop.create_task(self._disconnect()))
+            except RuntimeError:
+                if not loop.is_closed():
+                    logger.exception("Could not schedule WebSocket disconnect")
 
         # Wait for thread to finish
         if self.thread and self.thread.is_alive():

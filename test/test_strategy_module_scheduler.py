@@ -26,6 +26,8 @@ from services.strategy_module import scheduler as sched
 from services.strategy_module.engine import StartResult
 from services.strategy_module.order_dispatch import DispatchResult
 
+pytestmark = pytest.mark.usefixtures("live_authorization_broker")
+
 USER = "scheduler_test_user"
 
 

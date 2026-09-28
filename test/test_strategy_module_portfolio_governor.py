@@ -1508,7 +1508,11 @@ def test_partial_fill_cash_only_settles_after_broker_quantity_is_visible(monkeyp
         strategy_module_db,
         "get_order",
         lambda order_id: (
-            SimpleNamespace(status="cancelled", filled_qty=25) if order_id == 9444 else None
+            SimpleNamespace(
+                id=9444, run_id=445, leg_id=1, position_ref="partial-debit-entry",
+                kind="entry", symbol="RELIANCE", exchange="NSE",
+                status="cancelled", filled_qty=25,
+            ) if order_id == 9444 else None
         ),
     )
 
@@ -1800,7 +1804,11 @@ def test_terminal_cancellation_reconciles_after_run_state_is_gone(monkeypatch):
     monkeypatch.setattr(
         strategy_module_db,
         "get_order",
-        lambda order_id: SimpleNamespace(status="cancelled") if order_id == 9001 else None,
+        lambda order_id: SimpleNamespace(
+            id=9001, run_id=46, leg_id=1, position_ref="cancelled-entry",
+            kind="entry", symbol="NIFTY28MAY2624000CE", exchange="NFO",
+            status="cancelled", filled_qty=0,
+        ) if order_id == 9001 else None,
     )
 
     second, second_admission = portfolio_governor.acquire_entry_admission(
@@ -1889,7 +1897,11 @@ def test_partial_terminal_entry_keeps_reservation_until_exposure_is_visible(monk
         strategy_module_db,
         "get_order",
         lambda order_id: (
-            SimpleNamespace(status="cancelled", filled_qty=25) if order_id == 9003 else None
+            SimpleNamespace(
+                id=9003, run_id=48, leg_id=1, position_ref="partial-terminal-entry",
+                kind="entry", symbol="NIFTY28MAY2624000CE", exchange="NFO",
+                status="cancelled", filled_qty=25,
+            ) if order_id == 9003 else None
         ),
     )
 

@@ -89,6 +89,44 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('shows all live blockers together even outside entry hours', async () => {
+    setup({
+      ...strategy,
+      mode: 'live',
+      live_enabled: true,
+      monitor_status: 'live_blocked',
+      reason: 'Live entry has 2 setup blockers.',
+      activity_reason: 'Entry window ended at 15:20 IST.',
+      live_readiness: {
+        blocked: true,
+        blocker_count: 2,
+        checks: [
+          {
+            code: 'session_approval',
+            label: 'Trading-session approval',
+            status: 'blocked',
+            message: 'Approve the current session.',
+          },
+          {
+            code: 'research_release',
+            label: 'Research requirement',
+            status: 'blocked',
+            message: 'No approved forward release.',
+            action_url: '/strategy/research',
+          },
+        ],
+      },
+    } as typeof strategy)
+    await screen.findByText('Approve the current session.')
+    expect(screen.getByText('No approved forward release.')).toBeInTheDocument()
+    expect(screen.getByText('Entry window ended at 15:20 IST.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Review Research requirement' })).toHaveAttribute(
+      'href',
+      '/strategy/research'
+    )
+    expect(screen.getByText('2 setup blockers')).toBeInTheDocument()
+    expect(api.one).not.toHaveBeenCalled()
+  })
   it('separates enabled automation, no trade and real-money eligibility', async () => {
     setup()
     await screen.findByText('Automation review')

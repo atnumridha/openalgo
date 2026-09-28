@@ -57,6 +57,7 @@ const labels: Record<string, string> = {
   flow_inactive: 'Flow inactive',
   scheduler_unavailable: 'Scheduler unavailable',
   schedule_missing: 'Schedule missing',
+  live_blocked: 'Live setup blocked',
 }
 const attention = new Set([
   'stale',
@@ -70,7 +71,15 @@ const attention = new Set([
   'risk_blocked',
   'unmanaged_run',
   'unknown',
+  'live_blocked',
 ])
+function needsAttention(row: MonitorStrategy) {
+  return (
+    attention.has(row.monitor_status) ||
+    (row.activity_status !== undefined && attention.has(row.activity_status)) ||
+    (row.mode === 'live' && row.automation_state === 'armed' && row.live_readiness?.blocked)
+  )
+}
 function stamp(value: string | null | undefined) {
   if (!value) return 'Not recorded'
   const date = new Date(value)
@@ -256,7 +265,7 @@ export default function Monitor() {
         {[
           ['Signal monitors enabled', rows.filter((r) => r.automation_state === 'armed').length],
           ['Managed runs open', rows.reduce((n, r) => n + r.open_run_count, 0)],
-          ['Need attention', rows.filter((r) => attention.has(r.monitor_status)).length],
+          ['Need attention', rows.filter(needsAttention).length],
           [
             'Live / Sandbox',
             `${rows.filter((r) => r.mode === 'live').length} / ${rows.filter((r) => r.mode === 'sandbox').length}`,
@@ -322,13 +331,17 @@ export default function Monitor() {
                     <span>
                       #{row.id} · {row.mode}
                     </span>
-                    <span>{pretty(row.automation_state)}</span>
+                    <span>
+                      {row.automation_state === 'armed'
+                        ? 'Monitoring enabled'
+                        : pretty(row.automation_state)}
+                    </span>
                   </div>
                   <div className="text-sm font-semibold leading-snug">{row.name}</div>
                   <div
                     className={cn(
                       'mt-2 flex items-center gap-1.5 text-xs',
-                      attention.has(row.monitor_status)
+                      needsAttention(row)
                         ? 'text-amber-600 dark:text-amber-400'
                         : 'text-muted-foreground'
                     )}
@@ -336,6 +349,11 @@ export default function Monitor() {
                     <Activity className="size-3.5" />
                     {labels[row.monitor_status] ?? pretty(row.monitor_status)}
                   </div>
+                  {row.mode === 'live' && row.live_readiness?.blocked && (
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      {row.live_readiness.blocker_count} setup blockers
+                    </p>
+                  )}
                 </button>
               ))}
             </div>
@@ -353,10 +371,16 @@ export default function Monitor() {
                     <div className="mb-2 flex gap-2">
                       <Badge variant={current.mode === 'live' ? 'destructive' : 'secondary'}>
                         {current.mode === 'live'
-                          ? 'LIVE · real money'
+                          ? current.live_readiness?.blocked
+                            ? 'LIVE · new entries blocked'
+                            : 'LIVE · configured'
                           : 'SANDBOX · simulated orders'}
                       </Badge>
-                      <Badge variant="outline">{pretty(current.automation_state)}</Badge>
+                      <Badge variant="outline">
+                        {current.automation_state === 'armed'
+                          ? 'Monitoring enabled'
+                          : pretty(current.automation_state)}
+                      </Badge>
                     </div>
                     <h2 className="text-xl font-semibold">{current.name}</h2>
                   </div>
@@ -521,11 +545,13 @@ function Decision({
         <p className="mt-2 text-sm leading-relaxed">
           {row.mode !== 'live'
             ? 'Real-money orders will not trigger in Sandbox. An eligible signal can create a simulated order.'
-            : !row.live_enabled
-              ? 'Live entry is blocked: this strategy has no live opt-in.'
-              : !data.live_authorization.active
-                ? 'Live entry is blocked: session authorization is missing.'
-                : 'Live mode and session authorization are set. Signal, contract, risk checks and any required research qualification must still pass at submission.'}
+            : row.live_readiness?.blocked
+              ? 'New live entries are blocked. Every known setup issue is listed below; resolving one may leave others to complete.'
+              : !row.live_enabled
+                ? 'Live entry is blocked: this strategy has no live opt-in.'
+                : !data.live_authorization.active
+                  ? 'Live entry is blocked: session authorization is missing.'
+                  : 'Live mode and session authorization are set. Signal, contract, risk checks and any required research qualification must still pass at submission.'}
         </p>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
           <Fact label="Saved execution mode">{row.mode}</Fact>
@@ -536,12 +562,57 @@ function Decision({
               : 'Not granted'}
           </Fact>
         </dl>
+        {row.activity_reason && (
+          <p className="mt-3 text-sm text-muted-foreground">{row.activity_reason}</p>
+        )}
+        {row.live_readiness && (
+          <div className="mt-5">
+            <h4 className="text-sm font-semibold">Live setup checklist</h4>
+            <ul className="mt-3 divide-y rounded-lg border px-3">
+              {row.live_readiness.checks.map((check) => (
+                <li key={check.code} className="flex gap-3 py-3 text-sm">
+                  <span
+                    className={cn(
+                      'mt-0.5 shrink-0',
+                      check.status === 'passed'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : check.status === 'blocked'
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-muted-foreground'
+                    )}
+                  >
+                    {check.status === 'passed' ? (
+                      <Check className="size-4" aria-label="Passed" />
+                    ) : check.status === 'blocked' ? (
+                      <X className="size-4" aria-label="Blocked" />
+                    ) : (
+                      <CircleHelp className="size-4" aria-label="Checked at entry" />
+                    )}
+                  </span>
+                  <div>
+                    <p className="font-medium">{check.label}</p>
+                    <p className="mt-1 text-muted-foreground">{check.message}</p>
+                    {check.action_url && check.status === 'blocked' && (
+                      <Link
+                        to={check.action_url}
+                        className="mt-1 inline-block underline"
+                        aria-label={`Review ${check.label}`}
+                      >
+                        Review settings
+                      </Link>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
           There is no guaranteed trigger time. The next scheduler check is not a promised trade. A
-          fresh qualifying closed-candle signal must be ≤55 seconds old, fit a complete 15-minute
-          hold before 15:20, and pass duplicate-signal, cooldown, contract, liquidity, executable
-          quote, cash, cost, portfolio and any required research-release checks. These checks are revalidated at
-          entry; a signal alone is not permission to trade.
+          fresh qualifying closed-candle signal must fit the strategy's entry and holding window,
+          and pass duplicate-signal, cooldown, contract, liquidity, executable quote, cash, cost,
+          portfolio and any required research-release checks. These checks are revalidated at entry;
+          a signal alone is not permission to trade.
         </p>
       </div>
       <div className="rounded-xl border bg-card p-5">
@@ -703,7 +774,13 @@ function Decision({
           <>
             <dl className="mt-4 grid gap-4 sm:grid-cols-3">
               <Fact label="Saved allocation">₹{risk.capital?.toLocaleString('en-IN')}</Fact>
-              <Fact label={risk.policy_version === 'fixed-300-v3' ? 'Planned price-stop limit (before charges)' : 'Current per-trade risk cap'}>
+              <Fact
+                label={
+                  risk.policy_version === 'fixed-300-v3'
+                    ? 'Planned price-stop limit (before charges)'
+                    : 'Current per-trade risk cap'
+                }
+              >
                 ₹{String(risk.ledger?.per_trade_limit ?? 'Unknown')}
               </Fact>
               <Fact label="Daily risk remaining">

@@ -512,6 +512,177 @@ def _broker_reflects(
     return current <= target
 
 
+def _matches_reserved_entry(order: Any, component: ReservationComponent) -> bool:
+    """Row ids can be reused after a reset; the position identity must agree."""
+    return bool(
+        order
+        and component.entry_order_id is not None
+        and component.run_id is not None
+        and component.position_ref
+        and getattr(order, "id", None) == component.entry_order_id
+        and getattr(order, "run_id", None) == component.run_id
+        and str(getattr(order, "leg_id", "")) == str(component.leg_id)
+        and getattr(order, "position_ref", None) == component.position_ref
+        and getattr(order, "kind", None) == "entry"
+        and str(getattr(order, "exchange", "")).upper() == component.exchange.upper()
+        and str(getattr(order, "symbol", "")).upper() == component.symbol.upper()
+    )
+
+
+def _durably_closed_component(
+    reservation: _EntryReservation, component: ReservationComponent,
+) -> bool:
+    """Prove a stopped position is flat from bounded, attributable order fills.
+
+    Neither absent runtime state nor a flat aggregate broker position proves
+    this trade closed. Incomplete histories and unresolved/late fills retain
+    their reservation until the order evidence is settled.
+    """
+    from sqlalchemy.orm import Session
+
+    from database import strategy_module_db as store
+
+    if not component.position_ref or component.run_id is None or component.entry_order_id is None:
+        return False
+    mode = _scope_mode(reservation.scope)
+    if mode not in {"live", "sandbox"}:
+        return False
+    try:
+        with Session(bind=store.db_session.bind) as session:
+            run = (
+                session.query(store.SmStrategyRun)
+                .join(store.SmStrategy, store.SmStrategy.id == store.SmStrategyRun.strategy_id)
+                .filter(
+                    store.SmStrategyRun.id == component.run_id,
+                    store.SmStrategy.user_id == reservation.user_id,
+                    store.SmStrategyRun.mode == mode,
+                    store.SmStrategyRun.stopped_at.isnot(None),
+                )
+                .first()
+            )
+            if run is None or (
+                mode == "live" and str(run.broker or "").lower() != _scope_broker(reservation.scope)
+            ):
+                return False
+            orders = (
+                session.query(store.SmStrategyOrder)
+                .filter_by(
+                    run_id=component.run_id, leg_id=component.leg_id,
+                    position_ref=component.position_ref,
+                )
+                .order_by(store.SmStrategyOrder.id)
+                .limit(101)
+                .all()
+            )
+            if not orders or len(orders) > 100:
+                return False
+            entries = [order for order in orders if order.kind == "entry"]
+            if len(entries) != 1 or not _matches_reserved_entry(entries[0], component):
+                return False
+            entry = entries[0]
+            if entry.status != "complete" or entry.action not in {"BUY", "SELL"}:
+                return False
+            entry_quantity = _decimal(entry.filled_qty)
+            if entry_quantity is None or entry_quantity <= 0 or entry_quantity != _decimal(entry.qty):
+                return False
+            if component.quantity_delta and (
+                abs(component.quantity_delta) != entry_quantity
+                or (component.quantity_delta > 0) != (entry.action == "BUY")
+            ):
+                return False
+            exited = Decimal("0")
+            for order in orders:
+                if (
+                    order.symbol != entry.symbol or order.exchange != entry.exchange
+                    or order.product != entry.product or order.kind not in store.ORDER_KINDS
+                ):
+                    return False
+                filled = _decimal(order.filled_qty)
+                if filled is None or filled < 0:
+                    return False
+                if order.status in {"cancelled", "rejected"} and filled == 0 and order.id != entry.id:
+                    continue
+                price = _decimal(order.avg_fill_price)
+                if (
+                    order.status != "complete" or filled <= 0
+                    or filled != _decimal(order.qty) or price is None or price <= 0
+                    or not order.broker_order_id or order.filled_at is None
+                ):
+                    return False
+                if order.id != entry.id:
+                    if (
+                        order.action != ("SELL" if entry.action == "BUY" else "BUY")
+                        or order.placed_at < entry.placed_at
+                        or order.filled_at < entry.filled_at
+                    ):
+                        return False
+                    exited += filled
+            return exited == entry_quantity
+    except Exception:
+        logger.exception("Could not reconcile closed entry risk for %s", reservation.scope)
+        return False
+
+
+def _release_persisted_components(
+    reservation: _EntryReservation, released: list[ReservationComponent],
+) -> bool:
+    """Prune exact position identities durably before releasing memory risk."""
+    from sqlalchemy import String, cast, literal
+    from sqlalchemy.orm import Session
+
+    from database import strategy_module_db as store
+
+    def identity(payload: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(str(payload.get(key)) for key in (
+            "run_id", "leg_id", "position_ref", "entry_order_id",
+        ))
+
+    wanted = {identity(_component_payload(component)) for component in released}
+    if not wanted:
+        return True
+    try:
+        with Session(bind=store.db_session.bind) as session:
+            rows = (
+                session.query(store.SmRiskReservation)
+                .filter_by(user_id=reservation.user_id, scope=reservation.scope)
+                .limit(101)
+                .all()
+            )
+            if len(rows) > 100:
+                return False
+            found: set[tuple[str, ...]] = set()
+            for row in rows:
+                original = row.components or []
+                matched = {identity(payload) for payload in original} & wanted
+                if not matched:
+                    continue
+                found.update(matched)
+                remaining = [payload for payload in original if identity(payload) not in wanted]
+                # A concurrent recovery must not have changed this row since
+                # it was read. Roll back the whole batch if any compare fails.
+                query = session.query(store.SmRiskReservation).filter(
+                    store.SmRiskReservation.id == row.id,
+                    # PostgreSQL's JSON type has no equality operator. Cast
+                    # both sides using the column's JSON serializer so this
+                    # optimistic comparison also works outside SQLite.
+                    cast(store.SmRiskReservation.components, String)
+                    == cast(literal(original, type_=store.SmRiskReservation.components.type), String),
+                )
+                if remaining:
+                    changed = query.update({"components": remaining}, synchronize_session=False)
+                else:
+                    changed = query.delete(synchronize_session=False)
+                if changed != 1:
+                    return False
+            if found != wanted:
+                return False
+            session.commit()
+            return True
+    except Exception:
+        logger.exception("Could not durably release reconciled entry risk for %s", reservation.scope)
+        return False
+
+
 def _terminal_without_exposure(component: ReservationComponent) -> bool:
     if component.run_id is None or component.position_ref is None:
         return False
@@ -521,7 +692,7 @@ def _terminal_without_exposure(component: ReservationComponent) -> bool:
     order = store.get_order(component.entry_order_id) if component.entry_order_id else None
     order_filled = _decimal(getattr(order, "filled_qty", 0)) if order else None
     if (
-        order
+        _matches_reserved_entry(order, component)
         and str(order.status).lower() in {"rejected", "cancelled"}
         and order_filled is not None
         and order_filled <= 0
@@ -531,7 +702,11 @@ def _terminal_without_exposure(component: ReservationComponent) -> bool:
     leg = (snapshot.get("legs") or {}).get(str(component.leg_id)) if snapshot else None
     if not leg or str(leg.get("position_ref") or "") != component.position_ref:
         return False
-    if str(leg.get("status") or "").lower() in {"closed", "rejected", "cancelled"}:
+    if component.entry_order_id is not None:
+        # A runtime flag cannot override missing/mismatched durable evidence,
+        # or discard a partial fill that arrived after cancellation.
+        return False
+    if str(leg.get("status") or "").lower() in {"rejected", "cancelled"}:
         return True
     if str(leg.get("entry_status") or "").lower() in {"rejected", "cancelled"}:
         return True
@@ -555,7 +730,7 @@ def _terminal_partial_component(
     from database import strategy_module_db as store
 
     order = store.get_order(component.entry_order_id)
-    if order is None or str(order.status).lower() not in {"rejected", "cancelled"}:
+    if not _matches_reserved_entry(order, component) or str(order.status).lower() not in {"rejected", "cancelled"}:
         return component
     filled = _decimal(getattr(order, "filled_qty", None))
     if filled is None:
@@ -624,16 +799,20 @@ def _reconcile_reservations(
     user_key = str(scope or facts.scope or user_id)
     quantities = _broker_quantity_map(facts)
     active: list[ReservationComponent] = []
+    persistence_failed = False
     with _admission_registry_lock:
         for reservation in list(_entry_reservations.get(user_key, ())):
             if not reservation.committed:
                 continue
             reconciled: list[ReservationComponent] = []
+            released: list[ReservationComponent] = []
             for component in reservation.components:
                 adjusted = _terminal_partial_component(component)
                 if adjusted is None:
+                    released.append(component)
                     continue
-                if _terminal_without_exposure(adjusted):
+                if _terminal_without_exposure(adjusted) or _durably_closed_component(reservation, adjusted):
+                    released.append(component)
                     continue
                 if _broker_reflects(adjusted, quantities):
                     adjusted = replace(
@@ -648,10 +827,18 @@ def _reconcile_reservations(
                     )
                 if _component_has_reserved_exposure(adjusted):
                     reconciled.append(adjusted)
+                else:
+                    released.append(component)
+            if not _release_persisted_components(reservation, released):
+                # Keep the complete memory reservation until its durable
+                # counterpart has been pruned successfully.
+                persistence_failed = True
+                continue
             reservation.components = reconciled
             if not reservation.components:
                 _remove_reservation(reservation)
-        _reconcile_reserved_debit(user_key, facts.available_cash)
+        if not persistence_failed:
+            _reconcile_reserved_debit(user_key, facts.available_cash)
         for reservation in list(_entry_reservations.get(user_key, ())):
             reservation.components = [
                 component
@@ -1702,7 +1889,16 @@ def build_entry_facts(
         from services.risk.option_structure import STRUCTURE_RECIPE, objective_ratio
         if isinstance(index, dict) and index.get("risk_recipe") == STRUCTURE_RECIPE:
             try:
-                if profile not in {"ema915", "macd200", "ema5", "regime50200", "box15", "sma_macd", "bollinger"} or index.get("profile") != profile or len(resolved_legs) != 1 or not is_nifty_option or position != "B":
+                from services.strategy_module.receiver_rules import PROFILES as RECEIVER_PROFILES
+
+                supported = (
+                    profile in {"ema915", "macd200", "ema5", "regime50200", "box15", "sma_macd", "bollinger"}
+                    and is_nifty_option
+                ) or (
+                    profile in RECEIVER_PROFILES
+                    and (is_nifty_option or is_sensex_option or is_mcx_option)
+                )
+                if not supported or index.get("profile") != profile or len(resolved_legs) != 1 or position != "B":
                     raise ValueError("Invalid managed option runner")
                 reward_ratio = objective_ratio(leg, price)
                 reward_risk_basis = "option_premium_objective"

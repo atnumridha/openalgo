@@ -2873,6 +2873,42 @@ def test_structure_runner_recovery_keeps_absolute_stop_and_earned_floor(with_che
     assert decision.target_price is None
 
 
+@pytest.mark.parametrize("exchange,symbol,quantity,multiplier", [
+    ("BFO", "SENSEX01OCT2680000PE", 10, 1),
+    ("MCX", "GOLDM30OCT2675000CE", 100, .1),
+])
+def test_receiver_recovery_preserves_verified_premium_units(exchange, symbol, quantity, multiplier):
+    from services.risk.option_structure import structure_plan, STRUCTURE_RECIPE
+    from services.risk.profit_exit import profit_config
+    from services.strategy_module.risk_adapter import evaluate_leg
+    from test_scalp_execution_contract import bars, SIGNAL
+    from test_trading_research import fees
+
+    instrument = dict(exchange=exchange, symbol=symbol, position="B", quantity=quantity,
+                      lot_size=quantity, tick_size=.05, price_multiplier=multiplier)
+    plan = structure_plan(instrument, bars(), SIGNAL.isoformat(), "40", "39.95")
+    instrument["initial_stop_price"] = float(plan["stop_price"])
+    sid = _strategy(legs=[_leg(position="B")], scalp_profile="receiver_momentum")
+    run_id = _run(sid)
+    context = {"profile":"receiver_momentum", "risk_recipe":STRUCTURE_RECIPE,
+               "premium_stop_points":.55, "premium_target_points":None,
+               "structure":plan, "structure_contract":instrument,
+               "profit_protection":profit_config(instrument, fees(), recipe=STRUCTURE_RECIPE)}
+    store.get_run(run_id).scalp_context = context
+    store.db_session.commit()
+    row = store.record_order(run_id, 1, "entry", dict(symbol=symbol, exchange=exchange,
+                             action="BUY", qty=quantity, pricetype="LIMIT", status="open",
+                             position_ref="receiver-position"))
+    store.update_order(row.id,status="complete",avg_fill_price=40.2,filled_qty=quantity)
+    recovered = recovery.recover_run(run_id)
+    assert recovered.ok, recovered.error
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["price_multiplier"] == multiplier
+    assert leg["initial_stop_price"] == 39.45
+    assert store.get_run(run_id).scalp_context == context
+    assert evaluate_leg(leg, 39.4).breached
+
+
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('with_checkpoint', [False, True])
 def test_ml_recovery_keeps_persisted_exit_geometry_and_deadline(legacy, with_checkpoint):

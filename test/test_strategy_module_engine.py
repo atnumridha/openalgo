@@ -26,6 +26,8 @@ from services.strategy_module.portfolio_governor import EntryFacts, GovernorDeci
 from services.strategy_module.symbol_resolver import ResolvedLeg
 from services.strategy_module.tick_feed import STALE, TickSourceEvent
 
+pytestmark = pytest.mark.usefixtures("live_authorization_broker")
+
 USER = "engine_test_user"
 
 

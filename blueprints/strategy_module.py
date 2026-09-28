@@ -943,18 +943,23 @@ def _validate_strategy_config(payload: Any) -> dict:
     _reject_uncoverable_short_cash(config)
     profile = raw.get("scalp_profile")
     if profile is not None:
-        from services.strategy_module.scalping import ITM_PROFILES, PROFILES
+        from services.strategy_module.scalping import ITM_PROFILES, PROFILES, RECEIVER_PROFILES
 
         if not isinstance(profile, str) or profile not in PROFILES:
             raise ValidationError("Unknown scalping profile")
-        if (kind != "batch" or config["underlying"] != "NIFTY"
-                or config["underlying_exchange"] != "NSE_INDEX"
+        receiver = profile in RECEIVER_PROFILES
+        receiver_venue = ((config["underlying"],config["underlying_exchange"]) in {
+            ("NIFTY","NSE_INDEX"),("SENSEX","BSE_INDEX"),("GOLDM","MCX"),
+            ("CRUDEOILM","MCX"),("SILVERM","MCX"),("NATGASMINI","MCX")})
+        if (kind != "batch" or (receiver and not receiver_venue)
+                or (not receiver and (config["underlying"] != "NIFTY" or config["underlying_exchange"] != "NSE_INDEX"))
                 or config["strategy_type"] != "intraday" or len(legs) != 1
                 or legs[0].get("segment") != "options" or legs[0].get("position") != "B"
                 or legs[0].get("lots") != 1
                 or legs[0].get("atm_offset") != ("ITM1" if profile in ITM_PROFILES else "ATM")
-                or legs[0].get("strike_mode") != "atm" or legs[0].get("expiry") != "weekly"):
-            raise ValidationError("Scalping requires one long weekly NIFTY option lot at the profile's ATM/ITM1 strike")
+                or legs[0].get("strike_mode") != "atm"
+                or legs[0].get("expiry") != ("current" if receiver and config["underlying_exchange"]=="MCX" else "weekly")):
+            raise ValidationError("Scalping requires one long option lot at the profile's supported venue and ATM/ITM1 strike")
     config["scalp_profile"] = profile
     return config
 
