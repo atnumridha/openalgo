@@ -11,7 +11,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import {
   type AutomationMonitor,
@@ -136,12 +136,20 @@ export default function Monitor() {
     retry: 1,
   })
   const data = query.data
-  const rows = data?.strategies ?? []
-  const current = rows.find((r) => r.id === selected) ?? rows[0]
+  const rows = useMemo(() => {
+    const priority = (row: MonitorStrategy) =>
+      (row.mode === 'live' ? 0 : 100) + (row.open_run_count > 0 ? 0 : needsAttention(row) ? 1 : 2)
+    return [...(data?.strategies ?? [])].sort((a, b) => priority(a) - priority(b) || a.id - b.id)
+  }, [data?.strategies])
   const filtered = rows.filter(
     (r) =>
       (mode === 'all' || r.mode === mode) && r.name.toLowerCase().includes(search.toLowerCase())
   )
+  const current = filtered.find((r) => r.id === selected) ?? filtered[0]
+  const inspectedId = current?.id
+  useEffect(() => {
+    if (inspectedId !== undefined && inspectedId !== selected) setSelected(inspectedId)
+  }, [inspectedId, selected])
   const stale = query.isError || (query.dataUpdatedAt > 0 && clock - query.dataUpdatedAt > 12000)
   const stop = useMutation({
     mutationFn: async (target: 'all' | number): Promise<StopResult> => {
@@ -292,8 +300,11 @@ export default function Monitor() {
       )}
       {rows.length > 0 && (
         <div className="grid items-start gap-5 lg:grid-cols-[290px_minmax(0,1fr)] xl:grid-cols-[330px_minmax(0,1fr)]">
-          <aside className="overflow-hidden rounded-xl border bg-card">
-            <div className="space-y-2 border-b p-3">
+          <aside className="flex flex-col overflow-hidden rounded-xl border bg-card lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)]">
+            <div className="shrink-0 space-y-2 border-b p-3">
+              <p className="text-xs text-muted-foreground">
+                Live strategies first · select to inspect
+              </p>
               <Input
                 aria-label="Find a strategy"
                 placeholder="Find a strategy…"
@@ -311,7 +322,7 @@ export default function Monitor() {
                 <option value="live">Live only</option>
               </select>
             </div>
-            <div className="divide-y">
+            <div className="max-h-80 min-h-0 divide-y overflow-y-auto lg:max-h-none">
               {filtered.map((row) => (
                 <button
                   type="button"

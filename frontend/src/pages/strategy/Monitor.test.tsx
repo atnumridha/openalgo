@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -49,7 +49,7 @@ const strategy = {
     history: [],
   },
 }
-function setup(data = strategy) {
+function setup(data: typeof strategy | (typeof strategy)[] = strategy) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   })
@@ -57,7 +57,7 @@ function setup(data = strategy) {
     server_time: new Date().toISOString(),
     scheduler: { status: 'running' },
     live_authorization: { active: false },
-    strategies: [data],
+    strategies: Array.isArray(data) ? data : [data],
     risk: { sandbox: { available: false } },
   })
   return {
@@ -89,6 +89,51 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('keeps the inspected live strategy stable when a refresh changes priority', async () => {
+    const first = { ...strategy, id: 19, name: 'Live Bollinger', mode: 'live', live_enabled: true }
+    const second = { ...first, id: 20, name: 'Live Trend' }
+    const { client } = setup([first, second])
+    await screen.findByRole('heading', { level: 2, name: first.name })
+    api.overview.mockResolvedValue({
+      ...client.getQueryData(['automation-monitor']),
+      strategies: [first, { ...second, open_run_count: 1 }],
+    })
+    await client.invalidateQueries({ queryKey: ['automation-monitor'] })
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /^Inspect / })[0]).toHaveAccessibleName(
+        `Inspect ${second.name}`
+      )
+    )
+    expect(screen.getByRole('heading', { level: 2, name: first.name })).toBeInTheDocument()
+  })
+  it('opens on the live strategy without mutating or activating the saved list', async () => {
+    const live = { ...strategy, id: 19, name: 'Live Bollinger', mode: 'live', live_enabled: true }
+    const saved = [strategy, live]
+    setup(saved)
+    await screen.findByRole('heading', { level: 2, name: live.name })
+    expect(screen.getAllByRole('button', { name: /^Inspect / })[0]).toHaveAccessibleName(
+      `Inspect ${live.name}`
+    )
+    expect(saved[0].id).toBe(13)
+    expect(api.one).not.toHaveBeenCalled()
+    expect(api.stop).not.toHaveBeenCalled()
+  })
+  it('keeps the inspected strategy inside the active filter and hides stale details on no match', async () => {
+    const live = { ...strategy, id: 19, name: 'Live Bollinger', mode: 'live', live_enabled: true }
+    setup([strategy, live])
+    const user = userEvent.setup()
+    await screen.findByRole('button', { name: `Inspect ${live.name}` })
+    await user.selectOptions(screen.getByLabelText('Execution mode'), 'live')
+    await screen.findByRole('heading', { level: 2, name: live.name })
+    await user.selectOptions(screen.getByLabelText('Execution mode'), 'sandbox')
+    await screen.findByRole('heading', { level: 2, name: strategy.name })
+    await user.type(screen.getByLabelText('Find a strategy'), 'does not exist')
+    expect(screen.getByText('No strategies match these filters.')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Stop automation & close' })
+    ).not.toBeInTheDocument()
+  })
   it('shows all live blockers together even outside entry hours', async () => {
     setup({
       ...strategy,
