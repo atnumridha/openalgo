@@ -451,6 +451,48 @@ def is_within_market_hours(
     return start_minutes <= minutes <= end_minutes
 
 
+def _receiver_interval_replacement(workflow, job, data):
+    """Refresh a receiver's persisted cadence without replacing job settings.
+
+    The offline receiver upgrade changes its graph from five-minute polling to
+    one minute. A correctly settled old trigger is still stale in that case.
+    Other profiles, custom callbacks and non-interval schedules remain alone.
+    """
+    from services.strategy_module.receiver_rules import PROFILES
+
+    old = getattr(job, "trigger", None)
+    if (
+        data.get("scheduleType") != "interval"
+        or not isinstance(old, IntervalTrigger)
+        or getattr(job, "func", None) is not execute_workflow_scheduled
+    ):
+        return None
+    receiver = any(
+        node.get("type") == "strategyModuleRun"
+        and isinstance(node.get("data", {}).get("barEvidence"), dict)
+        and node["data"]["barEvidence"].get("scalpProfile") in PROFILES
+        for node in (workflow.nodes or [])
+    )
+    value, unit = data.get("intervalValue", 1), data.get("intervalUnit", "minutes")
+    if (
+        not receiver
+        or type(value) is not int
+        or value <= 0
+        or unit not in {"seconds", "minutes", "hours"}
+    ):
+        return None
+    interval = timedelta(**{unit: value})
+    if old.interval == interval:
+        return None
+    return IntervalTrigger(
+        seconds=interval.total_seconds(),
+        start_date=_next_aligned_start(value, unit, candle_driven=True),
+        end_date=old.end_date,
+        timezone=old.timezone,
+        jitter=old.jitter,
+    )
+
+
 def reconcile_scheduler_jobs() -> dict:
     """Bring the persistent jobstore and the database back into agreement.
 
@@ -466,7 +508,12 @@ def reconcile_scheduler_jobs() -> dict:
 
     Returns counts of what it changed.
     """
-    from database.flow_db import get_active_workflows, get_workflow, set_schedule_job_id, get_workflow_api_key
+    from database.flow_db import (
+        get_active_workflows,
+        get_workflow,
+        get_workflow_api_key,
+        set_schedule_job_id,
+    )
     from services.flow_lifecycle_service import deactivate_workflow
     from services.flow_readiness_service import strategy_link_issues, strategy_nodes
 
@@ -525,6 +572,35 @@ def reconcile_scheduler_jobs() -> dict:
         existing_job = scheduler.get_workflow_job(workflow.id)
         candle_driven = uses_completed_candles(workflow.nodes)
         if existing_job is not None:
+            try:
+                replacement = _receiver_interval_replacement(workflow, existing_job, data)
+            except Exception:
+                logger.exception(
+                    "Could not construct receiver workflow %s interval; preserving its existing job",
+                    workflow.id,
+                )
+                continue
+            if replacement is not None:
+                try:
+                    # Modify just the trigger and next fire time. Keep job args,
+                    # callback, individual pause, misfire policy and other saved
+                    # scheduler settings; no mode or activation change is made.
+                    next_fire = (
+                        replacement.get_next_fire_time(None, datetime.now(replacement.timezone))
+                        if existing_job.next_run_time is not None
+                        else None
+                    )
+                    scheduler.scheduler.modify_job(
+                        existing_job.id, trigger=replacement, next_run_time=next_fire
+                    )
+                    restored += 1
+                    logger.warning(
+                        "Refreshed receiver workflow %s interval to match its saved graph",
+                        workflow.id,
+                    )
+                except Exception:
+                    logger.exception("Could not refresh receiver workflow %s interval", workflow.id)
+                continue
             trigger = getattr(existing_job, "trigger", None)
             start_date = getattr(trigger, "start_date", None)
             if not (candle_driven and schedule_type == "interval" and data.get("intervalUnit") != "seconds"
@@ -560,7 +636,7 @@ def reconcile_scheduler_jobs() -> dict:
     if removed or restored:
         logger.info(
             f"Scheduler reconciliation: removed {removed} orphaned job(s), "
-            f"restored {restored} missing job(s)"
+            f"restored or refreshed {restored} job(s)"
         )
     return {"removed": removed, "restored": restored}
 

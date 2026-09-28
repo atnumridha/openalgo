@@ -26,6 +26,9 @@ were separate requirements.
   profiles. Bullish signals buy calls; bearish signals buy puts. Their existing
   managed execution path enforces owner/pin/mode, closed-bar freshness, durable
   duplicate claims, option stops and portfolio admission.
+- Startup reconciles a receiver's persisted polling interval with its saved
+  graph. This replaces legacy five-minute timers after the one-minute upgrade,
+  while preserving individual job pauses and other scheduler settings.
 - Structure stops support verified NFO, BFO and supported MCX quote units. The
   existing seven NIFTY profiles retain their execution and stop rules.
 - MCX collectors subscribe to the verified ATM call/put pair before a signal
@@ -62,8 +65,10 @@ ambiguous links or open exposure. It does not enable LIVE.
 
 Regression fixtures test bullish and bearish direction, causality, retest timing,
 duplicate prevention, affordability, contract units, authorization lifecycle and
-reservation evidence. Browser testing uses an isolated API fixture and verifies
-the checklist, technical direction and stop-confirmation cancellation. These
+reservation evidence. Browser tests cover the checklist, technical direction,
+stop-confirmation cancellation and stable strategy selection. The deployed app
+on port 5001 was also checked for working approval/research navigation and
+strategy filters. The temporary port 5184 fixture is not the trading app. These
 are software checks, not new evidence of strategy profitability or a completed
 real broker trade.
 
