@@ -383,6 +383,14 @@ describe('sandbox automation controls', () => {
     expect(liveReason).not.toHaveClass('sr-only')
   })
 
+  it('allows stopping LIVE monitoring while blocking its mode toggle', async () => {
+    mockStrategyList([{ ...stoppedStrategy, live_enabled: true, automation_state: 'armed' }])
+    renderList()
+    const row = (await screen.findByRole('link', { name: 'test stat' })).closest('tr') as HTMLElement
+    expect(within(row).getByRole('button', { name: /disable automation/i })).toBeEnabled()
+    expect(within(row).getByRole('button', { name: /disable live/i })).toBeDisabled()
+  })
+
   it('confirms disable and displays close pending without claiming completion', async () => {
     const serverRows = [
       { ...stoppedStrategy, strategy_kind: 'signal', automation_state: 'armed', status: 'running' },

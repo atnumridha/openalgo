@@ -11,6 +11,10 @@ Open **Strategies** and use the **Scalping strategies** cards. The highlighted r
 
 The global header mode does not override each strategy's selected execution mode. All saved strategies share account limits; they do not each receive a separate capital allocation. Running them together can cause later signals to be refused because another position has reserved the available funds or risk.
 
+The strategy detail page shows trade status and automation status separately. A **stopped** trade can still have **Automation: Monitoring**, ready to evaluate the next signal. Use **Stop automation**, confirm **Stop automation & close positions**, and wait for **Automation: Disabled** before changing mode. **Stop & Close Positions** closes the current run; it does not disable future signal monitoring. Closing or close-failed states keep mode changes blocked and show the reconciliation reason.
+
+The same Start flow applies to generic linked signal receivers. **Start live** validates the linked Flow and enables monitoring; it does not submit an immediate manual entry. An inactive Flow with no open run may have all its managed entry and exit nodes switched together. Missing, ambiguous, shared, malformed or broker-mismatched links are refused; LIVE monitoring also refuses Flows containing unmanaged broker-order nodes. Stop is available in either mode, including when an older saved LIVE flag differs from the Flow's mode.
+
 ## Rules and exits
 
 Signals reuse the historical research implementations on completed candles. EMA9/15 requires both indices to agree. MACD uses its EMA200/support-resistance setup. The 5 EMA setup combines five-minute bearish and fifteen-minute bullish non-touch alerts with subsequent one-minute breaks. Missing warmup history, incomplete candles, stale signals or stale quotes prevent entry.

@@ -468,6 +468,18 @@ def start_run(
     # durable session result here so a simultaneous trigger cannot use a fact
     # collected before the previous entry finished.
     try:
+        if trigger_source.startswith('flow:') and not scalp_context:
+            from services.strategy_module.automation_control import flow_entry_reason
+
+            source_id = trigger_source.removeprefix('flow:')
+            flow_refusal = (
+                flow_entry_reason(strategy, user_id, mode, workflow_id=int(source_id))
+                if source_id.isdecimal() else 'Invalid Flow execution source'
+            )
+            if flow_refusal:
+                if admission is not None:
+                    admission.release()
+                return StartResult(ok=False, error=flow_refusal)
         if store.has_unresolved_order_outcomes(user_id, mode):
             if admission is not None:
                 admission.release()

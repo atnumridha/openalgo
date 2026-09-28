@@ -1495,4 +1495,59 @@ describe('strategy exit action toasts describe proven state only', () => {
     expect(within(dialog).getByRole('button', { name: 'Open authorization controls' })).toBeEnabled()
     expect(rest.post).not.toHaveBeenCalled()
   })
+
+  it('shows monitoring separately from the stopped trade and unlocks mode only after confirmed closure', async () => {
+    let automationState = 'armed'
+    rest.get.mockImplementation((url: string) => Promise.resolve({ data: { data:
+      url === '/strategy/api/strategies/7'
+        ? { ...strategy, status: 'stopped', current_run_id: null, live_enabled: true, automation_state: automationState }
+        : []
+    } }))
+    rest.post.mockImplementation(() => {
+      automationState = 'disabled'
+      return Promise.resolve({ data: { data: { strategy_id: 7, state: 'disabled', outcome: 'disabled', close_pending: false } } })
+    })
+    const user = userEvent.setup()
+    renderDetail()
+    expect(await screen.findByText('Automation: Monitoring')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Disable LIVE' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Stop automation' }))
+    const dialog = screen.getByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Stop automation & close positions' }))
+    await waitFor(() => expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/automation/disable'))
+    expect(await screen.findByText('Automation: Disabled')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Disable LIVE' })).toBeEnabled()
+    expect(rest.post).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps mode blocked while an automation stop is still closing', async () => {
+    rest.get.mockImplementation((url: string) => Promise.resolve({ data: { data:
+      url === '/strategy/api/strategies/7'
+        ? { ...strategy, status: 'stopped', current_run_id: null, automation_state: 'armed' }
+        : []
+    } }))
+    rest.post.mockResolvedValue({ data: { data: { state: 'closing', outcome: 'close_pending', close_pending: true } } })
+    const user = userEvent.setup()
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Stop automation' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Stop automation & close positions' }))
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith('Automation is closing — waiting for confirmed exits'))
+    expect(screen.getByRole('button', { name: 'Enable LIVE' })).toBeDisabled()
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('reports signal monitoring instead of claiming that zero legs were placed', async () => {
+    rest.get.mockImplementation((url: string) => Promise.resolve({ data: { data:
+      url === '/strategy/api/strategies/7'
+        ? { ...strategy, status: 'stopped', current_run_id: null, automation_state: 'disabled' }
+        : []
+    } }))
+    rest.post.mockResolvedValue({ data: { automation_state: 'armed', mode: 'sandbox', legs: [], message: 'Waiting for a valid signal' } })
+    const user = userEvent.setup()
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Start run' }))
+    await user.click(screen.getByRole('button', { name: 'Start sandbox' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Monitoring — Waiting for a valid signal'))
+    expect(toast.warning).not.toHaveBeenCalled()
+  })
 })

@@ -182,7 +182,7 @@ def _mark_kind(sid, kind):
     store_session.remove()
 
 
-def _start(sid, mode="sandbox", dispatch=None, resolved=None):
+def _start(sid, mode="sandbox", dispatch=None, resolved=None, trigger_source='manual'):
     """Start a run with resolution and placement mocked."""
     resolved = resolved if resolved is not None else [_resolved()]
     dispatch = dispatch or (
@@ -210,7 +210,22 @@ def _start(sid, mode="sandbox", dispatch=None, resolved=None):
             return_value=(Decimal("10000000"), []),
         ),
     ):
-        return engine.start_run(sid, USER, mode)
+        return engine.start_run(sid, USER, mode, trigger_source=trigger_source)
+
+
+def test_generic_flow_cannot_enter_after_automation_stops_before_admission(api_key, monkeypatch):
+    sid = _make()
+    store.set_automation_state(sid, USER, 'armed')
+    acquire = portfolio_governor.acquire_entry_admission
+    def stop_before_admission(*args, **kwargs):
+        store.set_automation_state(sid, USER, 'disabled')
+        return acquire(*args, **kwargs)
+    monkeypatch.setattr(portfolio_governor, 'acquire_entry_admission', stop_before_admission)
+    dispatch = Mock(return_value=DispatchResult(ok=True, broker_order_id='must-not-place'))
+    result = _start(sid, dispatch=dispatch, trigger_source='flow:17')
+    assert not result.ok and 'disabled' in result.error
+    dispatch.assert_not_called()
+    assert store.get_strategy(sid, USER).current_run_id is None
 
 
 def _bank_loss(sid, amount=1000):

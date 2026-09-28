@@ -8,6 +8,9 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+- Fix LIVE starts for linked strategies: Start now validates and enables their Flow for signal monitoring, including generic signal receivers. Inactive, flat Flows can change mode with all entry and exit nodes together; active Flows must be stopped first. Live session approval, per-strategy approval and entry risk checks remain required. Strategy detail now separates automation status from trade status, exposes Stop automation and blocks mode changes until closure is confirmed. The list also permits stopping LIVE automation.
+- Recheck generic Flow entries under account admission against the current strategy, mode, active linked graph and automation epoch. Evaluations left over from a stop or restart cannot submit new entries, including after rearming. Protective exits remain available. A same-second execution whose start time cannot prove it followed arming is skipped until a fresh signal.
+
 - Add an optional research qualification setting under Research → Sandbox & live. Existing accounts retain the required historical/forward campaign and research-release checks by default. An audited operator review can make research optional while retaining per-strategy LIVE approval, session authorization, funds, contract and risk checks. Changing this setting requires flat, reconciled live exposure and LIVE mode off on every strategy; it never starts trading or marks research as passed. Requires the additive table migration included in `upgrade/migrate_trading_research.py`.
 
 - Strategy starts now enable signal monitoring for linked Flow strategies, including the earlier batch option templates, instead of submitting immediate entries. Standalone batches retain manual starts; unavailable or malformed Flow references never grant a manual fallback. Start results distinguish monitoring from an open trade and expose the remaining MCX value-conversion restriction.

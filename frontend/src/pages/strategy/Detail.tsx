@@ -32,6 +32,7 @@ import {
   type StrategyLiveState,
   type StrategyLiveStatus,
   setLiveEnabled,
+  disableStrategyAutomation,
   startRun,
   stopRun,
   strategyQueryKeys,
@@ -452,7 +453,9 @@ function LiveTab({
           <CardDescription>
             {isRunning
               ? 'Active run — LTP, MTM and effective SL from the engine.'
-              : 'Run inactive — start the strategy to see live state here.'}
+              : strategy.automation_state === 'armed'
+                ? 'Waiting for a valid signal — legs appear when a trade starts.'
+                : 'Run inactive — start the strategy to see live state here.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -2638,6 +2641,7 @@ export default function StrategyDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmKill, setConfirmKill] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
+  const [confirmStopAutomation, setConfirmStopAutomation] = useState(false)
   const [confirmEnableLive, setConfirmEnableLive] = useState(false)
   const [startDialogOpen, setStartDialogOpen] = useState(false)
   const [startMode, setStartMode] = useState<RunMode>('sandbox')
@@ -2651,7 +2655,11 @@ export default function StrategyDetail() {
     queryKey: strategyQueryKeys.strategy(numId),
     queryFn: () => getStrategy(numId),
     enabled: validId,
-    refetchInterval: (query) => (query.state.data?.status === 'running' ? SAFETY_POLL_MS : false),
+    refetchInterval: (query) =>
+      query.state.data?.status === 'running' ||
+      (query.state.data?.automation_state ?? 'disabled') !== 'disabled'
+        ? SAFETY_POLL_MS
+        : false,
   })
 
   const liveAuthorizationQuery = useQuery({
@@ -2710,7 +2718,9 @@ export default function StrategyDetail() {
     mutationFn: (mode: RunMode) => startRun(numId, mode),
     onSuccess: (result) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
-      if (result.acknowledged === false) {
+      if (result.automation_state === 'armed') {
+        showToast.success(`Monitoring — ${result.message || 'Waiting for a valid signal'}`)
+      } else if (result.acknowledged === false) {
         showToast.warning(
           'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
         )
@@ -2739,6 +2749,25 @@ export default function StrategyDetail() {
       invalidateAll()
     },
     onError: (err: Error) => showToast.error(err.message || 'Stop failed'),
+  })
+
+  const stopAutomationMutation = useMutation({
+    mutationFn: () => disableStrategyAutomation(numId),
+    onSuccess: (result) => {
+      if (result.state === 'disabled' && !result.close_pending) {
+        showToast.success('Automation stopped — positions confirmed flat')
+      } else if (result.state === 'close_failed' || result.outcome === 'failed') {
+        showToast.error(result.reason || 'Automation close failed — retry closure')
+      } else {
+        showToast.warning('Automation is closing — waiting for confirmed exits')
+      }
+      setConfirmStopAutomation(false)
+      invalidateAll()
+    },
+    onError: (err: Error) => {
+      showToast.error(err.message || 'Could not stop automation')
+      invalidateAll()
+    },
   })
 
   const closeLegMutation = useMutation({
@@ -2833,6 +2862,14 @@ export default function StrategyDetail() {
   const events = eventsQuery.data ?? []
   const running = strategy.status === 'running'
   const stopped = !running
+  const automationState = strategy.automation_state ?? 'disabled'
+  const automationActive = automationState !== 'disabled'
+  const automationLabel = {
+    disabled: 'Disabled',
+    armed: 'Monitoring',
+    closing: 'Closing',
+    close_failed: 'Close failed',
+  }[automationState]
 
   return (
     <div className="space-y-6">
@@ -2844,6 +2881,9 @@ export default function StrategyDetail() {
           <h1 className="text-2xl font-bold tracking-tight">{strategy.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <Badge variant={statusBadgeVariant(strategy.status)}>{strategy.status}</Badge>
+            <Badge variant={automationState === 'close_failed' ? 'destructive' : 'outline'}>
+              Automation: {automationLabel}
+            </Badge>
             <Badge variant={strategy.live_enabled ? 'destructive' : 'secondary'}>
               {strategy.live_enabled ? 'LIVE-enabled' : 'SANDBOX-only'}
             </Badge>
@@ -2902,7 +2942,14 @@ export default function StrategyDetail() {
               lifecycle over legs that carry an accepted side rather than a
               position to enter at. */}
           {stopped && !strategy.webhook_locked && strategy.strategy_kind !== 'signal' && (
-            <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
+            <Button
+              disabled={automationActive}
+              onClick={() => {
+                startMutation.reset()
+                setStartMode(strategy.live_enabled ? 'live' : 'sandbox')
+                setStartDialogOpen(true)
+              }}
+            >Start run</Button>
           )}
           {stopped && !strategy.webhook_locked && strategy.strategy_kind === 'signal' && (
             <span
@@ -2922,9 +2969,21 @@ export default function StrategyDetail() {
               {stopMutation.isPending ? 'Stopping…' : 'Stop & Close Positions'}
             </Button>
           )}
+          {automationActive && (
+            <Button
+              variant="outline"
+              disabled={stopAutomationMutation.isPending || automationState === 'closing'}
+              onClick={() => setConfirmStopAutomation(true)}
+            >
+              {stopAutomationMutation.isPending || automationState === 'closing'
+                ? 'Closing automation…'
+                : automationState === 'close_failed' ? 'Retry automation close' : 'Stop automation'}
+            </Button>
+          )}
           {stopped && !strategy.live_enabled && (
             <Button
               variant="destructive"
+              disabled={automationActive || liveModeMutation.isPending}
               onClick={() => setConfirmEnableLive(true)}
               title="Enable live mode - real broker orders"
             >
@@ -2935,7 +2994,7 @@ export default function StrategyDetail() {
             <Button
               variant="outline"
               onClick={() => liveModeMutation.mutate(false)}
-              disabled={liveModeMutation.isPending}
+              disabled={automationActive || liveModeMutation.isPending}
               title="Disable live mode — strategy reverts to sandbox-only"
             >
               {liveModeMutation.isPending ? 'Disabling…' : 'Disable LIVE'}
@@ -2943,7 +3002,7 @@ export default function StrategyDetail() {
           )}
           <Button
             variant="outline"
-            disabled={!stopped}
+            disabled={!stopped || automationActive}
             title={!stopped ? `Cannot edit while ${strategy.status}` : undefined}
             onClick={() => navigate(`/strategy/${strategy.id}/edit`)}
           >
@@ -2954,7 +3013,7 @@ export default function StrategyDetail() {
           </Button>
           <Button
             variant="destructive"
-            disabled={!stopped}
+            disabled={!stopped || automationActive}
             onClick={() => setConfirmDelete(true)}
             title={!stopped ? `Cannot delete while ${strategy.status}` : undefined}
           >
@@ -2971,6 +3030,22 @@ export default function StrategyDetail() {
           </span>
         ) : null}
       </div>
+
+      {automationActive && (
+        <div className="space-y-1 rounded-md border p-3 text-sm" role="status">
+          <p>
+            {automationState === 'armed'
+              ? running
+                ? 'Automation is active. Stop automation to block future entries and close the current trade.'
+                : 'Automation is monitoring for the next valid signal. The stopped badge refers to the last trade.'
+              : 'New entries are blocked while positions and pending orders are being reconciled.'}
+          </p>
+          <p className="text-muted-foreground">
+            Stop automation and wait for confirmed closure before changing mode.
+          </p>
+          {strategy.automation_state_reason && <p>{strategy.automation_state_reason}</p>}
+        </div>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex flex-wrap gap-1 bg-transparent">
@@ -3061,7 +3136,8 @@ export default function StrategyDetail() {
           <DialogHeader>
             <DialogTitle>Start run — pick mode</DialogTitle>
             <DialogDescription>
-              Live mode places real broker orders. Sandbox mode is paper-only.
+              Linked strategies monitor their Flow and enter only after a valid signal and risk
+              checks. Live uses real broker funds; Sandbox uses simulated funds.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -3125,6 +3201,7 @@ export default function StrategyDetail() {
                 </div>
               )}
           </div>
+          {startMutation.error && <p role="alert" className="text-sm text-destructive">{startMutation.error.message}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setStartDialogOpen(false)}>
               Cancel
@@ -3154,6 +3231,17 @@ export default function StrategyDetail() {
         destructive
         loading={liveModeMutation.isPending}
         onConfirm={() => liveModeMutation.mutate(true)}
+      />
+
+      <ConfirmDialog
+        open={confirmStopAutomation}
+        onOpenChange={setConfirmStopAutomation}
+        title="Stop automation?"
+        description="Blocks new entries and requests exits for open positions. Mode changes stay blocked until positions and pending orders are confirmed closed. This does not switch trading mode."
+        confirmLabel="Stop automation & close positions"
+        destructive
+        loading={stopAutomationMutation.isPending}
+        onConfirm={() => stopAutomationMutation.mutate()}
       />
 
       <ConfirmDialog

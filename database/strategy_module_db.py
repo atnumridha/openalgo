@@ -1538,8 +1538,8 @@ def set_live_enabled(strategy_id: int, user_id: str, enabled: bool) -> tuple[boo
             return False, "Strategy not found"
         if row.status == "running":
             return False, "Stop the strategy before changing its mode"
-        if row.scalp_profile and row.automation_state != "disabled":
-            return False, "Disable scalping automation before changing mode"
+        if row.automation_state != "disabled":
+            return False, "Stop automation before changing mode"
         row.live_enabled = bool(enabled)
         db_session.commit()
         return True, None

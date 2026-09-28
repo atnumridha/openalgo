@@ -492,11 +492,15 @@ def test_enable_arms_future_signals_without_starting_or_dispatching(control_env)
     assert env.calls == ["flow:register"]
 
 
-def test_enable_accepts_cash_workflow_with_entry_and_two_protective_exits(control_env):
+@pytest.mark.parametrize('mode', ['sandbox', 'live'])
+def test_enable_accepts_cash_workflow_with_entry_and_two_protective_exits(control_env, monkeypatch, mode):
+    from services.strategy_module import live_authorization
     env = control_env
     row = _control_strategy(env)
     row.strategy_kind = "signal"
+    row.live_enabled = mode == 'live'
     env.store.db_session.commit()
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
     workflow = _control_workflow(env)
     nodes = deepcopy(workflow.nodes)
     entry = next(node for node in nodes if node["id"] == "run")
@@ -511,10 +515,13 @@ def test_enable_accepts_cash_workflow_with_entry_and_two_protective_exits(contro
              {"id": "exit-target", "source": "trend15", "target": exits[1]["id"], "sourceHandle": "false"}]
     assert flow_db.update_workflow(workflow.id, nodes=[*nodes, *exits], edges=edges)
 
-    result = automation_control.enable_sandbox(env.strategy_id, env.owner, "test-key")
+    result = automation_control.enable_sandbox(env.strategy_id, env.owner, "test-key", mode=mode)
 
     assert result.ok and result.state == "armed"
     assert _control_workflow(env).is_active is True
+    signal_nodes = [n for n in _control_workflow(env).nodes if n['type'] == 'strategySignal']
+    assert len(signal_nodes) == 3
+    assert {n['data']['mode'] for n in signal_nodes} == {mode}
     assert _control_strategy(env).current_run_id is None
     assert env.calls == ["flow:register"]
 
@@ -610,7 +617,7 @@ def test_enable_refuses_missing_ambiguous_or_invalid_workflow(control_env, link_
             else node
             for node in wf.nodes
         ]
-        flow_db.update_workflow(wf.id, nodes=nodes)
+        flow_db.update_workflow(wf.id, nodes=nodes, is_active=True)
     else:
         flow_db.update_workflow(wf.id, edges=[])
 
@@ -688,12 +695,20 @@ def test_enable_wrong_owner_cannot_touch_strategy_or_flow(control_env):
     assert env.calls == []
 
 
-def _armed_run(env, monkeypatch, *, outcome=None, finalise=False):
+def _armed_run(env, monkeypatch, *, outcome=None, finalise=False, mode='sandbox'):
     from services.strategy_module import engine, state
 
+    if mode == 'live':
+        assert env.store.set_live_enabled(env.strategy_id, env.owner, True)[0]
+        wf = _control_workflow(env)
+        nodes = deepcopy(wf.nodes)
+        for node in nodes:
+            if node['type'] == 'strategyModuleRun':
+                node['data']['mode'] = mode
+        flow_db.update_workflow(wf.id, nodes=nodes)
     env.store.set_automation_state(env.strategy_id, env.owner, "armed")
     flow_db.activate_workflow(env.workflow_id, api_key="test-key")
-    run = env.store.create_run(env.strategy_id, "sandbox", "sandbox")
+    run = env.store.create_run(env.strategy_id, mode, 'kotak' if mode == 'live' else 'sandbox')
     run_id = run.id
     env.store.set_strategy_status(env.strategy_id, "running", run_id)
     state.init_run_state(run_id, env.strategy_id, [])
@@ -717,9 +732,10 @@ def _armed_run(env, monkeypatch, *, outcome=None, finalise=False):
     return run_id
 
 
-def test_disable_persists_closing_before_accepted_pending_stop(control_env, monkeypatch):
+@pytest.mark.parametrize('mode', ['sandbox', 'live'])
+def test_disable_persists_closing_before_accepted_pending_stop(control_env, monkeypatch, mode):
     env = control_env
-    run_id = _armed_run(env, monkeypatch)
+    run_id = _armed_run(env, monkeypatch, mode=mode)
 
     result = automation_control.disable_and_close(env.strategy_id, env.owner)
 
@@ -957,7 +973,7 @@ def test_delayed_control_recovery_cannot_close_a_new_automation_epoch(
     monkeypatch.setattr(engine, "_api_key_for", lambda owner: None)
 
     @contextmanager
-    def complete_then_rearm_before_admission(owner):
+    def complete_then_rearm_before_admission(owner, *, include_live=False):
         if not interleaved:
             interleaved.append(True)
             # This happens after recovery's enumeration, but before its lease
@@ -975,7 +991,7 @@ def test_delayed_control_recovery_cannot_close_a_new_automation_epoch(
                 env.store.set_automation_state(env.strategy_id, owner, "closing")
             if lease_error:
                 raise RuntimeError("admission lease unavailable after the competing control")
-        with original_lease(owner):
+        with original_lease(owner, include_live=include_live):
             yield
 
     monkeypatch.setattr(automation_control, "_control_lease", complete_then_rearm_before_admission)
@@ -1333,11 +1349,12 @@ def test_flow_mutation_lease_serializes_another_worker_process(control_env):
         child.close()
 
 @pytest.mark.parametrize('mode', ['sandbox', 'live'])
-def test_scalping_mode_can_arm_and_disable_without_placing_orders(control_env, monkeypatch, mode):
+@pytest.mark.parametrize('profile', [None, 'ema915'])
+def test_linked_mode_can_arm_and_disable_without_placing_orders(control_env, monkeypatch, mode, profile):
     from services.strategy_module import live_authorization
     env = control_env
     row = _control_strategy(env)
-    row.scalp_profile = 'ema915'
+    row.scalp_profile = profile
     row.live_enabled = mode == 'live'
     env.store.db_session.commit()
     monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
@@ -1353,17 +1370,97 @@ def test_scalping_mode_can_arm_and_disable_without_placing_orders(control_env, m
     assert _control_strategy(env).current_run_id is None
 
 
-def test_scalping_live_start_requires_live_session(control_env, monkeypatch):
+@pytest.mark.parametrize('profile', [None, 'ema915'])
+def test_linked_live_start_requires_live_session(control_env, monkeypatch, profile):
     from services.strategy_module import live_authorization
     env = control_env
     row = _control_strategy(env)
-    row.scalp_profile = 'ema915'
+    row.scalp_profile = profile
     row.live_enabled = True
     env.store.db_session.commit()
     monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (False, 'session authorization required'))
     result = automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key', mode='live')
     assert not result.ok and 'authorization' in result.error
     assert env.calls == []
+
+
+def test_linked_live_start_refuses_active_sandbox_flow(control_env, monkeypatch):
+    from services.strategy_module import live_authorization
+    env = control_env
+    assert automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key').ok
+    row = _control_strategy(env)
+    # Reproduce the legacy state: LIVE enabled while sandbox monitoring was active.
+    row.live_enabled = True
+    env.store.db_session.commit()
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
+    result = automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key', mode='live')
+    assert not result.ok
+    assert 'switching mode' in result.error
+    flow = _control_workflow(env)
+    assert next(n for n in flow.nodes if n['id'] == 'run')['data']['mode'] == 'sandbox'
+    assert env.calls == ['flow:register']
+    # Stopping must remain available, even with this mismatched legacy flag.
+    result = automation_control.disable_and_close(env.strategy_id, env.owner)
+    assert result.ok, result.error
+    assert result.state == 'disabled'
+    assert not _control_workflow(env).is_active
+
+
+def test_linked_live_start_requires_strategy_approval(control_env, monkeypatch):
+    from services.strategy_module import live_authorization
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
+    result = automation_control.enable_sandbox(control_env.strategy_id, control_env.owner, 'test-key', mode='live')
+    assert not result.ok and 'Enable LIVE' in result.error
+    assert control_env.calls == []
+
+
+def test_linked_live_start_rejects_unmanaged_order_nodes(control_env, monkeypatch):
+    from services.strategy_module import live_authorization
+    env = control_env
+    row = _control_strategy(env)
+    row.live_enabled = True
+    env.store.db_session.commit()
+    wf = _control_workflow(env)
+    flow_db.update_workflow(wf.id, nodes=[*wf.nodes, {'id': 'unmanaged', 'type': 'placeOrder', 'data': {}}])
+    monkeypatch.setattr(live_authorization, 'require_live_entry', lambda *_: (True, None))
+    result = automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key', mode='live')
+    assert not result.ok and 'unmanaged order' in result.error
+    assert env.calls == []
+
+
+@pytest.mark.parametrize('change', [None, 'stopped', 'rearmed', 'mode', 'graph', 'old_execution', 'missing_origin'])
+def test_generic_flow_entry_rechecks_origin_epoch_and_mode(control_env, change):
+    from datetime import UTC, datetime, timedelta
+    from services.research.qualification_context import workflow_digest
+    from services.research.qualification_execution import flow_origin
+    env = control_env
+    assert automation_control.enable_sandbox(env.strategy_id, env.owner, 'test-key').ok
+    row = _control_strategy(env)
+    # Executions use DB timestamps with second precision; use an earlier epoch.
+    row.automation_state_updated_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=2)
+    env.store.db_session.commit()
+    snapshot = env.store.strategy_to_dict(_control_strategy(env))
+    graph_hash = workflow_digest([_control_workflow(env)])
+    execution = flow_db.create_execution(env.workflow_id, status='running')
+    execution_id = execution.id
+    if change in {'stopped', 'rearmed', 'old_execution'}:
+        env.store.set_automation_state(env.strategy_id, env.owner, 'disabled')
+        if change != 'stopped':
+            env.store.set_automation_state(env.strategy_id, env.owner, 'armed')
+        if change == 'old_execution':
+            snapshot = env.store.strategy_to_dict(_control_strategy(env))
+    elif change == 'mode':
+        row = _control_strategy(env)
+        row.live_enabled = True
+        env.store.db_session.commit()
+    elif change == 'graph':
+        wf = _control_workflow(env)
+        nodes = deepcopy(wf.nodes)
+        nodes[0]['data']['label'] = 'Changed while evaluating'
+        flow_db.update_workflow(wf.id, nodes=nodes)
+    with flow_origin(env.workflow_id, None if change == 'missing_origin' else execution_id, graph_hash):
+        reason = automation_control.flow_entry_reason(snapshot, env.owner, 'sandbox', workflow_id=env.workflow_id)
+    assert (reason is None) is (change is None), reason
 
 
 def test_scalping_pack_installs_once_and_keeps_all_three_inactive(control_env, monkeypatch):

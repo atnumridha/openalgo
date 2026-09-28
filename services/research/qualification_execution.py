@@ -42,6 +42,11 @@ def current_flow_origin():
         return dict(origin) if row is not None else None
 
 
+def has_flow_origin():
+    """Keep a broken/expired Flow context distinct from an external webhook."""
+    return _flow_origin.get() is not None
+
+
 def entry_release_reason(metadata, exchange=None):
     from database import trading_risk_db as ledger
     from services.research import qualification

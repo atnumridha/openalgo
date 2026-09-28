@@ -222,6 +222,13 @@ def _fill(strategy, *leg_ids, price=100.0):
     return run_id
 
 
+def _enable_live(sid):
+    # Mode changes require flat, disabled automation before it is rearmed.
+    assert store.set_automation_state(sid, USER, 'disabled')[0]
+    assert store.set_live_enabled(sid, USER, True)[0]
+    assert store.set_automation_state(sid, USER, 'armed')[0]
+
+
 def _make(**overrides):
     automation_state = overrides.pop("automation_state", "armed")
     config = {
@@ -363,6 +370,15 @@ def test_automation_requires_fresh_owner_scoped_durable_state(placed):
 
     assert result.ok is False
     assert "disabled" in result.error
+    assert placed == []
+
+
+def test_flow_directional_entry_requires_verified_execution_origin(placed):
+    from services.research.qualification_execution import flow_origin
+    strategy = _make()
+    with flow_origin(17, None, 'missing-execution'):
+        result = signals.handle_signal(strategy, 'long_entry', leg_id=1)
+    assert not result.ok and 'Flow execution' in result.error
     assert placed == []
 
 
@@ -624,7 +640,7 @@ def test_signal_entry_fails_closed_when_session_pnl_is_unavailable(placed):
 def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(placed):
     """An expired live-entry gate must never strand an already open position."""
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     authz.grant(USER)
     with (
         patch.object(
@@ -653,7 +669,7 @@ def test_revocation_blocks_live_signal_entries_without_blocking_live_exits(place
 
 def test_live_signal_refuses_unverified_protection_before_entry_claim(placed):
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     authz.grant(USER)
     try:
         refused = signals.handle_signal(strategy, "long_entry", leg_id=1)
@@ -671,7 +687,7 @@ def test_live_signal_refuses_unverified_protection_before_entry_claim(placed):
 @pytest.mark.usefixtures("mock_verified_live_contract")
 def test_live_governor_rejects_signal_before_the_entry_claim(placed):
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     strategy = store.get_strategy(strategy.id, USER)
     authz.grant(USER)
     try:
@@ -1635,7 +1651,7 @@ def test_stale_signal_rollover_uses_full_stop_management_before_replacement(plac
 
 def test_stale_live_owner_is_exited_before_new_entry_protection_refusal(placed):
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     strategy = store.get_strategy(strategy.id, USER)
     run_id, error = signals._day_run(strategy)
     assert error is None
@@ -1776,7 +1792,7 @@ def test_a_batch_run_still_ends_when_it_goes_flat(placed):
 @pytest.mark.usefixtures("mock_verified_live_contract")
 def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     strategy = store.get_strategy(strategy.id, USER)
     authz.grant(USER)
     admission = SimpleNamespace(released=False, committed=False)
@@ -1834,7 +1850,7 @@ def test_live_signal_holds_portfolio_admission_until_exposure_is_visible():
 @pytest.mark.usefixtures("mock_verified_live_contract")
 def test_live_signal_releases_portfolio_admission_when_entry_claim_is_refused():
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     strategy = store.get_strategy(strategy.id, USER)
     authz.grant(USER)
     admission = SimpleNamespace(released=False)
@@ -1934,7 +1950,7 @@ def test_live_signal_pending_entries_reserve_positions_during_broker_lag(monkeyp
         for index in range(3)
     ]
     for strategy in strategies:
-        store.set_live_enabled(strategy.id, USER, True)
+        _enable_live(strategy.id)
     strategies = [store.get_strategy(strategy.id, USER) for strategy in strategies]
     authz.grant(USER)
     monkeypatch.setattr(auth_db, "get_auth_token_broker", lambda _key: ("token", "broker"))
@@ -1985,7 +2001,7 @@ def test_live_signal_pending_entries_reserve_positions_during_broker_lag(monkeyp
 @pytest.mark.usefixtures("mock_verified_live_contract")
 def test_live_signal_rechecks_authorization_inside_portfolio_admission():
     strategy = _make()
-    store.set_live_enabled(strategy.id, USER, True)
+    _enable_live(strategy.id)
     strategy = store.get_strategy(strategy.id, USER)
     expired = "Live automation authorization expired while waiting"
     placed = []

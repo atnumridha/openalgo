@@ -1649,8 +1649,8 @@ def set_live(sid):
             store.db_session.refresh(row)
             if row.status == "running":
                 return _error("Stop the strategy before changing its mode", 409)
-            if getattr(row, "scalp_profile", None) and row.automation_state != "disabled":
-                return _error("Disable scalping automation before changing mode", 409)
+            if row.automation_state != "disabled":
+                return _error("Stop automation before changing mode", 409)
             changed, message = store.set_live_enabled(sid, username, enabled)
     except RuntimeError:
         return _error("An entry or control is being processed. Refresh and try again.", 503)
@@ -1776,8 +1776,6 @@ def start_strategy(sid):
         logger.exception("Could not check start workflow for strategy %s", sid)
         return _error("Could not verify the linked automation. No trade was started; retry shortly.", 503)
     if signal_start:
-        if mode == "live" and not getattr(_row, "scalp_profile", None):
-            return _error("This strategy requires a signal from its linked Flow. Configure and verify its live Flow before trading.", 409)
         result = automation_control.enable_sandbox(sid, username, _api_key_for(username), mode=mode)
         if not result.ok:
             return _error(result.error or "Could not enable signal monitoring", 409)
@@ -1896,7 +1894,7 @@ def start_all_sandbox_strategies():
 @check_session_validity
 @_api_limit
 def start_all_live_strategies():
-    """Start every eligible batch strategy live after explicit confirmation."""
+    """Start eligible strategies; linked strategies monitor their validated Flow."""
     username = _current_user()
     if not username:
         return _error("Not authenticated", 401)
@@ -1943,22 +1941,16 @@ def start_all_live_strategies():
                     "close_pending": False,
                     "reason": "Strategy is not live-enabled",
                 }
-            elif getattr(row, "scalp_profile", None):
-                from services.strategy_module import automation_control
-
-                result = automation_control.enable_sandbox(row.id, username, _api_key_for(username), mode="live")
-                item = _automation_item(row, result, api_key=_api_key_for(username))
             elif automation_control.requires_signal_start(row):
-                item = {
-                    "strategy_id": row.id,
-                    "name": row.name,
-                    "state": row.automation_state,
-                    "outcome": "skipped",
-                    "workflow_id": None,
-                    "run_id": row.current_run_id,
-                    "close_pending": False,
-                    "reason": "Strategy requires a valid live signal from its linked Flow; no immediate entry was submitted",
-                }
+                key = _api_key_for(username)
+                result = automation_control.enable_sandbox(row.id, username, key, mode="live")
+                _audit_automation_result(row, username, result, enabling=True,
+                                         previous_state=row.automation_state)
+                item = _automation_item(row, result, api_key=key)
+                if result.ok:
+                    item["reason"] = automation_control.signal_start_message(row)
+                elif _bulk_automation_skipped(result):
+                    item["outcome"] = "skipped"
             else:
                 result = engine.start_run(
                     row.id, username, "live", trigger_source="manual"

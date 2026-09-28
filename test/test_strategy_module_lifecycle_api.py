@@ -231,7 +231,7 @@ def test_real_enable_transition_is_audited_once_and_idempotent(client):
 
     sid = _make_signal()
     active = {"value": False}
-    def link(_row, _workflow_id=None):
+    def link(_row, _workflow_id=None, *, require_sandbox=True):
         return WorkflowLink(7, active["value"], "sandbox", USER, None), None
     def activate(_workflow_id, _key):
         active["value"] = True
@@ -719,13 +719,43 @@ def test_invalid_link_does_not_fall_back_to_manual_start(client, bulk):
 
 
 @pytest.mark.parametrize("bulk", [False, True])
-def test_linked_batch_live_start_cannot_bypass_its_signal(client, bulk):
+def test_linked_batch_live_start_monitors_without_bypassing_its_signal(client, bulk):
     sid = _make()
     store.set_live_enabled(sid, USER, True)
     authz.grant(USER)
-    with patch(
+    with patch.object(strategy_module, '_api_key_for', return_value='test-key'), patch(
         "services.strategy_module.automation_control.get_workflows_for_strategy",
         return_value=[SimpleNamespace(id=17)],
+    ), patch(
+        'services.strategy_module.automation_control.enable_sandbox',
+        return_value=ControlResult(True, 'armed', workflow_id=17),
+    ) as enable, patch("services.strategy_module.engine.start_run") as start:
+        response = client.post(
+            "/strategy/api/strategies/start-all-live" if bulk else
+            f"/strategy/api/strategies/{sid}/start",
+            json={"mode": "live", "confirmation": "START LIVE"},
+        )
+    start.assert_not_called()
+    enable.assert_called_once_with(sid, USER, 'test-key', mode='live')
+    assert response.status_code == 200
+    if bulk:
+        assert response.get_json()["data"]["items"][0]["outcome"] == "armed"
+    else:
+        assert response.get_json()['automation_state'] == 'armed'
+        assert response.get_json()['legs'] == []
+
+
+@pytest.mark.parametrize('bulk', [False, True])
+def test_invalid_live_link_never_falls_back_to_manual_entry(client, bulk):
+    sid = _make()
+    store.set_live_enabled(sid, USER, True)
+    authz.grant(USER)
+    with patch.object(strategy_module, '_api_key_for', return_value='test-key'), patch(
+        'services.strategy_module.automation_control.get_workflows_for_strategy',
+        return_value=[SimpleNamespace(id=17)],
+    ), patch(
+        'services.strategy_module.automation_control.enable_sandbox',
+        return_value=ControlResult(False, 'disabled', error='Linked Flow has a different owner'),
     ), patch("services.strategy_module.engine.start_run") as start:
         response = client.post(
             "/strategy/api/strategies/start-all-live" if bulk else
@@ -736,6 +766,17 @@ def test_linked_batch_live_start_cannot_bypass_its_signal(client, bulk):
     assert response.status_code == (200 if bulk else 409)
     if bulk:
         assert response.get_json()["data"]["items"][0]["outcome"] == "skipped"
+        assert 'different owner' in response.get_json()["data"]["items"][0]["reason"]
+
+
+@pytest.mark.parametrize('automation_state', ['armed', 'closing', 'close_failed'])
+def test_linked_strategy_mode_change_requires_disabled_automation(client, automation_state):
+    sid = _make()
+    store.set_automation_state(sid, USER, automation_state)
+    response = client.post(f'/strategy/api/strategies/{sid}/live', json={'enabled': True})
+    assert response.status_code == 409
+    assert 'Stop automation' in response.get_json()['message']
+    assert not store.get_strategy(sid, USER).live_enabled
 
 
 @pytest.mark.parametrize("reference", ["{id}", " {id} ", "{id}.0", 1.0, True])
@@ -780,7 +821,7 @@ def test_start_all_live_starts_only_live_enabled_batch_strategies(client):
     assert items[sandbox_only]["outcome"] == "skipped"
     assert "not live-enabled" in items[sandbox_only]["reason"]
     assert items[signal]["outcome"] == "skipped"
-    assert "valid live signal" in items[signal]["reason"]
+    assert "API key not configured" in items[signal]["reason"]
     started.assert_called_once_with(live, USER, "live", trigger_source="manual")
 
 

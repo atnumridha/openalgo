@@ -883,7 +883,7 @@ export default function StrategyList() {
                       : state
                   const shouldDisable =
                     state === 'armed' || state === 'close_failed' || row.status === 'running'
-                  const ineligibleReason = row.live_enabled
+                  const ineligibleReason = row.live_enabled && !shouldDisable
                     ? 'Live-enabled strategies cannot use sandbox automation controls'
                     : undefined
                   return (
@@ -914,13 +914,14 @@ export default function StrategyList() {
                             aria-label={`Start run for ${row.name}`}
                             disabled={
                               startMutation.isPending ||
+                              state !== 'disabled' ||
                               bulkMutation.isPending ||
                               liveBulkMutation.isPending
                             }
                             onClick={() => {
                               startMutation.reset()
                               setStartTarget(row)
-                              setStartMode('sandbox')
+                              setStartMode(row.live_enabled ? 'live' : 'sandbox')
                               setStartConfirmation('')
                             }}
                           >
@@ -1014,9 +1015,11 @@ export default function StrategyList() {
                             size="sm"
                             variant={row.live_enabled ? 'outline' : 'destructive'}
                             aria-label={`${row.live_enabled ? 'Disable' : 'Enable'} LIVE for ${row.name}`}
-                            disabled={row.status !== 'stopped' || liveModeMutation.isPending}
+                            disabled={row.status !== 'stopped' || state !== 'disabled' || liveModeMutation.isPending}
                             title={
-                              row.status !== 'stopped'
+                              state !== 'disabled'
+                                ? 'Stop automation before changing mode'
+                                : row.status !== 'stopped'
                                 ? 'Stop and close the run before changing live mode'
                                 : undefined
                             }

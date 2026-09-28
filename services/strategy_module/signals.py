@@ -135,9 +135,12 @@ class _StrategySnapshot:
     name: str
     pricetype: str
     daily_loss_limit_inr: Any
+    flow_config: dict | None = None
 
 
 def _snapshot_strategy(strategy: Any) -> _StrategySnapshot:
+    from services.research.qualification_execution import has_flow_origin
+
     current_run_id = getattr(strategy, "current_run_id", None)
     return _StrategySnapshot(
         id=int(strategy.id),
@@ -153,6 +156,10 @@ def _snapshot_strategy(strategy: Any) -> _StrategySnapshot:
         name=str(getattr(strategy, "name", "") or ""),
         pricetype=str(getattr(strategy, "pricetype", "MARKET") or "MARKET"),
         daily_loss_limit_inr=getattr(strategy, "daily_loss_limit_inr", None),
+        flow_config=(
+            strategy.flow_config if isinstance(strategy, _StrategySnapshot)
+            else store.strategy_to_dict(strategy) if has_flow_origin() else None
+        ),
     )
 
 
@@ -716,6 +723,10 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         raise
 
     try:
+        if strategy.flow_config is not None:
+            reason = automation_control.flow_entry_reason(strategy.flow_config, strategy.user_id, mode)
+            if reason:
+                return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=reason)
         admitted, error = automation_control.require_automation_entry(strategy.id, strategy.user_id)
         if not admitted:
             return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=error)
