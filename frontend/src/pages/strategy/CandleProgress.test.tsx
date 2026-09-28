@@ -76,6 +76,27 @@ it('labels stale evidence instead of presenting it as current readiness', async 
   setup()
   await screen.findByText(/Historical assessment — more than 6 minutes old/)
 })
+it.each([
+  'Receiver 5m market history unavailable',
+  'Receiver 15m market history unavailable',
+  'Collecting history: no usable completed candles',
+])('shows newer failure %s instead of reviving old warm-up counts', async (reason) => {
+  logs.mockResolvedValue({ items: [
+    { id: 103, kind: 'signal_evaluation', at: new Date(now).toISOString(), details: {
+      mode: 'sandbox', profile: 'receiver_momentum', history: [],
+      reason: 'Signal expired; waiting for the next receiver candle',
+    } },
+    { id: 102, kind: 'signal_evaluation', at: new Date(now - 60000).toISOString(), details: {
+      mode: 'sandbox', profile: 'receiver_momentum', history: [],
+      reason,
+    } },
+    event(3),
+  ] })
+  setup()
+  await screen.findByText(reason)
+  expect(screen.getByText(/Current usable candle count is unavailable/)).toBeInTheDocument()
+  expect(screen.queryByText(/3 \/ 10 completed candles/)).not.toBeInTheDocument()
+})
 it('reports unavailable evidence when the log request fails', async () => {
   logs.mockRejectedValue(new Error('unavailable'))
   setup()

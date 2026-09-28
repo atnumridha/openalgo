@@ -36,8 +36,9 @@ export default function CandleProgress({ row, clock }: { row: MonitorStrategy; c
     return (
       detail.mode === row.mode &&
       detail.profile === profile &&
-      Array.isArray(detail.history) &&
-      detail.history.some(isHistory)
+      ((Array.isArray(detail.history) && detail.history.some(isHistory)) ||
+        /^Receiver (5m|15m) market history unavailable$/.test(String(detail.reason ?? '')) ||
+        detail.reason === 'Collecting history: no usable completed candles')
     )
   })
   const detail = assessment?.details as Record<string, unknown> | undefined
@@ -71,6 +72,11 @@ export default function CandleProgress({ row, clock }: { row: MonitorStrategy; c
           <p className="mt-2 text-sm">
             {typeof detail?.reason === 'string' ? detail.reason : 'Recorded candle history'}
           </p>
+          {history.length === 0 && (
+            <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+              Current usable candle count is unavailable. Earlier counts do not show current progress.
+            </p>
+          )}
           <ul className="mt-3 space-y-2 text-sm">
             {history.map((item, index) => {
               const required =
@@ -105,7 +111,8 @@ export default function CandleProgress({ row, clock }: { row: MonitorStrategy; c
       )}
       <p className="mt-3 text-xs text-muted-foreground">
         Counts alone do not confirm readiness: candles must be contiguous and fresh; the signal,
-        option data and risk checks must also pass. Sandbox uses market signals for simulated fills.
+        option data and risk checks must also pass.
+        {row.mode === 'sandbox' && ' Sandbox uses market signals for simulated fills.'}
       </p>
     </section>
   )

@@ -89,6 +89,14 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('labels retained entry rejection as historical without claiming it is resolved', async () => {
+    setup({ ...strategy, last_risk_rejection: {
+      at: '2026-09-28T06:23:52Z', message: 'Capital policy refused entry: contract metadata required',
+      details: { code: 'contract_metadata_required' },
+    } } as typeof strategy)
+    await screen.findByText('Capital policy refused entry: contract metadata required')
+    expect(screen.getByText(/Past attempt.*current readiness check/)).toBeInTheDocument()
+  })
   it('explains ordinary receiver polls without hiding genuine expired-signal failures', async () => {
     const reason = 'Signal expired; waiting for the next receiver candle'
     const row = {

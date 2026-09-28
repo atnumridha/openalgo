@@ -155,3 +155,36 @@ saved readiness watch explicitly prohibits automatic collector restarts, so
 that deployment step needs a separate user decision. Monitoring now checks
 every five minutes and reports meaningful order/fill evidence or new blockers;
 it never forces entries, changes risk settings or renews live permission.
+
+## Candle assessment follow-up, 18:58–19:05 IST
+
+The review panel skipped newer empty-history failures and retained older warm-up
+counts. For GOLDM this left the 18:45 count of three five-minute candles visible
+after newer checks reported unavailable history. It now recognizes the receiver's
+five-minute, fifteen-minute and empty-completed-history failures as assessments.
+An empty assessment explicitly reports that the current usable count is unknown;
+it does not reuse earlier counts or invent zero candles. Routine between-candle
+polls still preserve the last actual assessment, with its timestamp and age.
+Past entry rejections are labelled as past attempts whose blocker may still apply.
+Live panels no longer append the Sandbox-fill explanation.
+
+At 19:00 CRUDEOILM had 22 completed five-minute and seven fifteen-minute candles.
+Its strong, expanded candle did not close beyond the required six-bar range, so
+there was no entry setup. At 19:05 it had 23 and seven candles respectively and
+still no setup. Its 18:15 option-history rejection remains relevant historical
+evidence; the collector retention fix still requires the pending backend restart.
+GOLDM reported unavailable five-minute history at 19:00, then one five-minute
+candle and unavailable fifteen-minute history at 19:05. Earlier repeated usable
+coverage resets are not explained merely by an enabled monitor or fresh quotes.
+
+A separate passive 180-second quote observation recorded 190 GOLDM, 192 SILVERM
+and 188 CRUDEOILM future packets. Maximum native trade ages were 12, 25 and seven
+seconds respectively. No missing native timestamps, stale volume flags, native
+time reversals, over-60-second trade gaps, volume decreases or collector coverage
+changes were observed in that interval. This did not reproduce or establish the
+cause of the earlier interruptions. No data-quality checks were weakened, and
+no collector restart or trading action was performed.
+
+Validation: regressions reproduced the skipped-assessment cases before the fix;
+all 2,835 frontend tests, the production build and independent focused review
+passed. The change is frontend-only and does not load the pending collector fix.

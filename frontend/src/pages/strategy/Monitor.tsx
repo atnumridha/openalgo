@@ -464,6 +464,10 @@ export default function Monitor() {
               {current.last_risk_rejection && (
                 <section className="rounded-lg border border-amber-500/30 p-3 text-sm">
                   <h3 className="font-medium">Latest entry rejection · {stamp(current.last_risk_rejection.at)}</h3>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Past attempt — this is not a current readiness check; the blocker may still apply.
+                    Review the latest assessment timestamps and setup checks.
+                  </p>
                   <p className="mt-2">{current.last_risk_rejection.message}</p>
                   <details className="mt-2">
                     <summary className="cursor-pointer">Rejection details</summary>
