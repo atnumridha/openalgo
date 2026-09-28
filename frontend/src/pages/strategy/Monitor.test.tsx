@@ -89,6 +89,25 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('explains ordinary receiver polls without hiding genuine expired-signal failures', async () => {
+    const reason = 'Signal expired; waiting for the next receiver candle'
+    const row = {
+      ...strategy,
+      reason,
+      configuration: { profile: 'receiver_momentum', exchange: 'MCX' },
+      evaluation: { ...strategy.evaluation, reason, evaluated_at: '2026-09-28T18:12:06+05:30' },
+    }
+    const view = setup(row as typeof strategy)
+    await screen.findAllByText(/Waiting for the next 5-minute candle close/)
+    expect(screen.queryByText(reason)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/18:15:00 IST/).length).toBeGreaterThan(0)
+    view.unmount()
+    const expired = 'Signal expired while fetching receiver history'
+    setup({ ...row, reason: expired, evaluation: { ...row.evaluation, reason: expired } } as typeof strategy)
+    await screen.findAllByText(expired)
+    expect(screen.queryByText(/Waiting for the next 5-minute candle close/)).not.toBeInTheDocument()
+  })
+
   it('shows retained MCX candle progress while the latest poll waits for the next close', async () => {
     api.logs.mockResolvedValue({ items: [{
       id: 20, kind: 'signal_evaluation', at: new Date().toISOString(),

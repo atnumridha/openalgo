@@ -407,7 +407,8 @@ class KotakMcxStreamCollector:
     """One bounded Quote subscription collector for one pinned connection."""
 
     MAX_QUEUE = 4096
-    MAX_SYMBOLS = 16
+    # Four roots: one future and two recently selected CE/PE pairs per root.
+    MAX_SYMBOLS = 20
 
     def __init__(
         self, connection_id, api_key, store: McxCandleStore, *, ws_factory=None,
@@ -422,6 +423,7 @@ class KotakMcxStreamCollector:
         self._ws = None
         self._symbols: set[str] = set()
         self._option_pairs: dict[str, set[str]] = {}
+        self._option_pair_order: dict[str, list[frozenset[str]]] = {}
         self._symbol_epochs: dict[str, int] = {}
         self._subscription_epoch = 0
         self._owns_ws = ws_factory is None
@@ -473,6 +475,7 @@ class KotakMcxStreamCollector:
         self._ws = None
         self._symbols.clear()
         self._option_pairs.clear()
+        self._option_pair_order.clear()
         self._symbol_epochs.clear()
         self._detach_client(ws)
         for symbol in subscribed:
@@ -527,6 +530,7 @@ class KotakMcxStreamCollector:
                     self._ws = ws
                     self._symbols.clear()
                     self._option_pairs.clear()
+                    self._option_pair_order.clear()
                     self._symbol_epochs.clear()
                 result = ws.subscribe([{"symbol": symbol, "exchange": "MCX"}], mode="Quote")
                 if result.get("status") != "success":
@@ -543,7 +547,12 @@ class KotakMcxStreamCollector:
                     self._detach_client(ws)
 
     def warm_options(self, symbols: list[str], contracts: list[tuple]) -> str:
-        """Rotate one exact CE/PE pair, retaining the future and other roots."""
+        """Keep two recent ATM pairs warm without changing the entry contract.
+
+        Crossing a strike boundary must not repeatedly destroy premium history.
+        Eviction still invalidates coverage and queued ticks; retained contracts
+        remain subject to the same native-time, volume and continuity checks.
+        """
         root = contracts[0][0]
         desired = set(symbols)
         if not self._connection_check(self.api_key, self.connection_id):
@@ -551,9 +560,17 @@ class KotakMcxStreamCollector:
         with self._lock:
             self._retire_stopped_client()
             old = self._option_pairs.get(root, set()).copy()
-            if len((self._symbols - old) | desired) > self.MAX_SYMBOLS:
+            recent = [pair for pair in self._option_pair_order.get(root, [])
+                      if pair != desired and all(self._current_contract(s) for s in pair)]
+            pairs = [frozenset(desired), *recent[:1]]
+            keep = set().union(*pairs)
+            # Prefer current ATM coverage when the global ceiling leaves no
+            # room for a retained pair; never evict another root's symbols.
+            if len((self._symbols - old) | keep) > self.MAX_SYMBOLS:
+                pairs, keep = [frozenset(desired)], desired
+            if len((self._symbols - old) | keep) > self.MAX_SYMBOLS:
                 return "Risk blocked"
-            for symbol in sorted(old - desired):
+            for symbol in sorted(old - keep):
                 if self._ws is None:
                     return "Data unavailable"
                 try:
@@ -569,11 +586,12 @@ class KotakMcxStreamCollector:
                 if not self._option_pairs[root]:
                     del self._option_pairs[root]
                 self.store.mark_interrupted(self.connection_id, symbol)
-            for symbol in symbols:
+            for symbol in sorted(keep):
                 readiness = self.ensure(symbol)
                 if readiness != "Collecting history":
                     return readiness
                 self._option_pairs.setdefault(root, set()).add(symbol)
+            self._option_pair_order[root] = pairs
         return "Collecting history"
 
     def _on_market_data(self, packet):
@@ -635,6 +653,7 @@ class KotakMcxStreamCollector:
             self._ws = None
             self._symbols.clear()
             self._option_pairs.clear()
+            self._option_pair_order.clear()
             self._symbol_epochs.clear()
         try:
             if ws is not None:

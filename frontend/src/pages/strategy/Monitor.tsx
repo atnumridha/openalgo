@@ -101,6 +101,20 @@ function stamp(value: string | null | undefined) {
 function pretty(value: string) {
   return value.replaceAll('_', ' ')
 }
+function explainReceiverWait(reason: string, row: MonitorStrategy) {
+  // Only this legacy message denotes the routine pre-evaluation timing gate.
+  // Genuine expiry during history/stop processing must remain visible.
+  if (
+    !String(row.configuration.profile ?? '').startsWith('receiver_') ||
+    reason !== 'Signal expired; waiting for the next receiver candle'
+  ) return reason
+  const evaluated = Date.parse(row.evaluation?.evaluated_at ?? row.last_check_at ?? '')
+  const next = Number.isFinite(evaluated)
+    ? new Date((Math.floor(evaluated / 300000) + 1) * 300000).toISOString()
+    : null
+  return `Waiting for the next 5-minute candle close${next ? ` at ${stamp(next)}` : ''}. ` +
+    'The worker checks every minute; entry rules are evaluated just after each candle closes.'
+}
 function Json({ value }: { value: unknown }) {
   return (
     <pre className="max-h-96 overflow-auto rounded-md bg-muted/50 p-3 text-xs leading-relaxed whitespace-pre-wrap break-all">
@@ -418,7 +432,7 @@ export default function Monitor() {
                   {current.monitor_status === 'data_unavailable' &&
                   current.evaluation?.technical?.data_ready === false
                     ? current.evaluation.reason || 'Signal data is not ready.'
-                    : current.reason}
+                    : explainReceiverWait(current.reason, current)}
                 </p>
                 <dl className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <Fact label="Last check">{stamp(current.last_check_at)}</Fact>
@@ -448,13 +462,14 @@ export default function Monitor() {
                   <CandleProgress key={`${current.id}-${current.mode}`} row={current} clock={clock} />
                 )}
               {current.last_risk_rejection && (
-                <details className="rounded-lg border border-amber-500/30 p-3 text-sm">
-                  <summary className="cursor-pointer font-medium">
-                    Latest entry rejection · {stamp(current.last_risk_rejection.at)}
-                  </summary>
+                <section className="rounded-lg border border-amber-500/30 p-3 text-sm">
+                  <h3 className="font-medium">Latest entry rejection · {stamp(current.last_risk_rejection.at)}</h3>
                   <p className="mt-2">{current.last_risk_rejection.message}</p>
-                  <Json value={current.last_risk_rejection.details} />
-                </details>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer">Rejection details</summary>
+                    <Json value={current.last_risk_rejection.details} />
+                  </details>
+                </section>
               )}
               <div className="flex flex-wrap gap-2 border-b pb-2">
                 <Button
@@ -584,7 +599,7 @@ function Decision({
           </Fact>
         </dl>
         {row.activity_reason && (
-          <p className="mt-3 text-sm text-muted-foreground">{row.activity_reason}</p>
+          <p className="mt-3 text-sm text-muted-foreground">{explainReceiverWait(row.activity_reason, row)}</p>
         )}
         {row.live_readiness && (
           <div className="mt-5">
@@ -650,7 +665,7 @@ function Decision({
           </p>
         ) : (
           <>
-            <p className="mt-3 text-sm">{evaluation.reason}</p>
+            <p className="mt-3 text-sm">{explainReceiverWait(evaluation.reason, row)}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Recorded {stamp(evaluation.recorded_at)} · stage: {pretty(evaluation.stage)}
               {evaluation.signal_age_seconds !== undefined

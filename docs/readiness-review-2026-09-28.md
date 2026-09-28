@@ -106,3 +106,52 @@ Refresh disabled indefinitely. These frontend changes need no collector restart.
 
 Validation: 45 focused UI tests passed; production TypeScript/Vite build passed
 with the existing bundle-size warning.
+
+## Live MCX diagnosis, 18:06–18:27 IST
+
+All four MCX strategies were saved in Live mode with live permission and armed
+monitoring at 18:06:56. The refreshed dashboard showed ₹10,000 available. At
+18:27 the scheduler was running, with four Live and twelve Sandbox monitors;
+there were no managed Live runs or orders recorded.
+
+The repeated “Signal expired; waiting for the next receiver candle” message is
+the receiver's routine timing gate. The scheduler checks every minute, while
+entry rules are evaluated during the first 55 seconds after each five-minute
+close. It does not mean a qualifying entry was found and lost on every check.
+The review UI now displays the next five-minute close instead, preserving
+genuine expiry warnings during history fetching or order preparation. The
+latest entry rejection is visible without expanding raw details.
+
+At 18:15, CRUDEOILM produced a confirmed bearish/PE setup. Entry was rejected
+before order submission because three completed one-minute option candles were
+unavailable for its protective stop. The collector had repeatedly switched
+between the 9,100 and 9,150 ATM pairs, unsubscribing the previous pair and
+invalidating its coverage on every switch. Funds did not cause this rejection.
+
+The collector fix retains the two most recently requested pairs per root, with
+a twenty-symbol total bound across four roots and their futures. A third pair
+evicts the oldest, invalidating its coverage and queued packets. The selected
+entry contract and native timestamp, volume, continuity, expiry, quote, cash
+and risk checks are unchanged. No candles are fabricated or recovered across
+an actual subscription interruption.
+
+At 18:25, CRUDEOILM, SILVERM and NATGASMINI had sufficient data to evaluate but
+no qualifying setup; GOLDM reported unavailable five-minute market history.
+Silver had therefore recovered from its earlier warm-up. These are recorded
+observations, not a promise of an entry on the next candle.
+
+Validation: the new retention regressions failed before the fix; 171 related
+backend tests and all 2,831 frontend tests passed afterward. The frontend suite
+requires `NODE_OPTIONS=--no-experimental-webstorage` with the installed Node 26
+runtime so its native localStorage does not shadow JSDOM. Production build and
+independent code review passed. The reviewer also exercised 2,000 rotations
+with injected subscription failures and verified bounded subscription state.
+
+Deployment: the frontend build can be served without restarting collectors.
+The collector correction takes effect only after a backend restart; the
+currently running collector has not been restarted by this review. A restart
+will invalidate active coverage and require fresh native candle warm-up. The
+saved readiness watch explicitly prohibits automatic collector restarts, so
+that deployment step needs a separate user decision. Monitoring now checks
+every five minutes and reports meaningful order/fill evidence or new blockers;
+it never forces entries, changes risk settings or renews live permission.

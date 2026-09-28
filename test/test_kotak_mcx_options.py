@@ -16,6 +16,8 @@ CALL = "SILVERM26NOV26125000CE"
 PUT = "SILVERM26NOV26125000PE"
 NEXT_CALL = "SILVERM26NOV26125500CE"
 NEXT_PUT = "SILVERM26NOV26125500PE"
+THIRD_CALL = "SILVERM26NOV26126000CE"
+THIRD_PUT = "SILVERM26NOV26126000PE"
 
 
 def at(minute, second=0):
@@ -73,7 +75,8 @@ def contracts(tmp_path, monkeypatch):
     monkeypatch.setattr(symbols, "engine", engine)
     with engine.begin() as connection:
         for name, strike, side in ((CALL, 125000, "CE"), (PUT, 125000, "PE"),
-                                  (NEXT_CALL, 125500, "CE"), (NEXT_PUT, 125500, "PE")):
+                                  (NEXT_CALL, 125500, "CE"), (NEXT_PUT, 125500, "PE"),
+                                  (THIRD_CALL, 126000, "CE"), (THIRD_PUT, 126000, "PE")):
             connection.execute(symbols.SymToken.__table__.insert().values(
                 symbol=name, name="SILVERM", exchange="MCX", brexchange="mcx_fo",
                 brsymbol=name, token=name, expiry="26-NOV-26", strike=strike,
@@ -149,6 +152,8 @@ def test_collector_owns_socket_without_touching_shared_consumers(tmp_path, contr
 
 def test_warmup_rotates_exact_pair_preserving_future_and_subscription_bound(collector, monkeypatch):
     stream, ws = collector
+    # With room for only one pair, eviction must still honor the hard ceiling.
+    monkeypatch.setattr(stream, "MAX_SYMBOLS", 3)
     monkeypatch.setattr(mcx, "_collectors", {"pin": stream})
     assert stream.ensure(FUTURE) == "Collecting history"
     first = mcx.warm_kotak_mcx_options("key", "pin", [CALL, PUT])
@@ -167,6 +172,40 @@ def test_warmup_rotates_exact_pair_preserving_future_and_subscription_bound(coll
         assert ws.subscriptions == {FUTURE, *pair}
         assert len(stream._symbols) == 3
         assert len(stream.store._active_keys) <= 3
+
+
+def test_atm_oscillation_keeps_observed_option_candles_ready(collector, monkeypatch):
+    stream, ws = collector
+    monkeypatch.setattr(mcx, "_collectors", {"pin": stream})
+    stream.ensure(FUTURE)
+    for pair in ([CALL, PUT], [NEXT_CALL, NEXT_PUT]):
+        mcx.warm_kotak_mcx_options("key", "pin", pair)
+    for minute in range(5):
+        pair = [CALL, PUT] if minute % 2 else [NEXT_CALL, NEXT_PUT]
+        mcx.warm_kotak_mcx_options("key", "pin", pair)
+        for symbol in tuple(ws.subscriptions):
+            ws.callbacks["market_data"](packet(symbol, minute))
+        stream.drain_once()
+    # Switching ATM back must not reset three completed native premium bars.
+    for pair in ([CALL, PUT], [NEXT_CALL, NEXT_PUT]):
+        result = mcx.warm_kotak_mcx_options("key", "pin", pair)
+        assert result["readiness"] == "Ready"
+        assert result["symbols"] == pair
+    assert ws.subscriptions == {FUTURE, CALL, PUT, NEXT_CALL, NEXT_PUT}
+
+
+def test_third_atm_pair_evicts_oldest_and_discards_queued_old_ticks(collector, monkeypatch):
+    stream, ws = collector
+    monkeypatch.setattr(mcx, "_collectors", {"pin": stream})
+    stream.ensure(FUTURE)
+    for pair in ([CALL, PUT], [NEXT_CALL, NEXT_PUT]):
+        mcx.warm_kotak_mcx_options("key", "pin", pair)
+    ws.callbacks["market_data"](packet(CALL, 0))
+    mcx.warm_kotak_mcx_options("key", "pin", [THIRD_CALL, THIRD_PUT])
+    stream.drain_once()
+    assert ws.subscriptions == {FUTURE, NEXT_CALL, NEXT_PUT, THIRD_CALL, THIRD_PUT}
+    assert stream.store.history("pin", CALL, "1m", "2026-09-25", "2026-09-25", at(4))["data"] == []
+    assert len(stream._symbols) == 5
 
 
 def test_warmup_ready_requires_three_recent_closed_candles_for_both_options(collector, monkeypatch):
@@ -215,6 +254,7 @@ def test_mismatched_warmup_pair_is_rejected_without_subscriptions(collector, mon
 
 def test_refused_pair_unsubscribe_does_not_grow_subscriptions(collector, monkeypatch):
     stream, ws = collector
+    monkeypatch.setattr(stream, "MAX_SYMBOLS", 2)
     monkeypatch.setattr(mcx, "_collectors", {"pin": stream})
     mcx.warm_kotak_mcx_options("key", "pin", [CALL, PUT])
     ws.refused_unsubscribe.update((CALL, PUT))
@@ -319,6 +359,7 @@ def test_option_queue_overflow_discards_coverage(collector):
 
 def test_rotating_back_cannot_reuse_queued_packets_from_previous_subscription(collector, monkeypatch):
     stream, ws = collector
+    monkeypatch.setattr(stream, "MAX_SYMBOLS", 2)
     monkeypatch.setattr(mcx, "_collectors", {"pin": stream})
     mcx.warm_kotak_mcx_options("key", "pin", [CALL, PUT])
     for minute in range(5):
