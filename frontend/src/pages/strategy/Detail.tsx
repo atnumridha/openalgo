@@ -40,6 +40,8 @@ import {
   useBrokerBook,
   useStrategyLive,
 } from '@/api/strategy_module'
+import { StrategyLiveChart } from '@/components/strategy/StrategyLiveChart'
+import { StrategyPayoffChart } from '@/components/strategy/StrategyPayoffChart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -426,6 +428,14 @@ function LiveTab({
 
   return (
     <div className="space-y-4">
+      <StrategyLiveChart
+        strategyId={strategy.id}
+        underlying={strategy.underlying}
+        underlyingExchange={strategy.underlying_exchange}
+        scalpProfile={strategy.scalp_profile}
+        orders={orders}
+        legs={live.legs}
+      />
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>
@@ -718,6 +728,8 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
           />
         </CardContent>
       </Card>
+
+      <StrategyPayoffChart strategy={strategy} />
 
       <Card>
         <CardHeader>

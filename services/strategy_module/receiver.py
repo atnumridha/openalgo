@@ -155,6 +155,8 @@ def prepare(strategy, owner, api_key, mode):
             "direction": signal["direction"],
             "signal_at": at.isoformat(),
             "deadline": deadline.isoformat(),
+            "execution_id": origin["execution_id"],
+            "workflow_id": origin["workflow_id"],
             "exit_basis": "option_premium",
             "profile": profile,
             "rule_version": receiver_rules.RULE_VERSION,
@@ -171,15 +173,6 @@ def prepare(strategy, owner, api_key, mode):
         )
         if not 0 <= (datetime.now(scalping.IST) - at.to_pydatetime()).total_seconds() <= 55:
             raise scalping.WaitingForSignal("Signal expired while fetching receiver history")
-        claim = flow_db.claim_execution_bar(
-            origin["execution_id"], origin["workflow_id"], at.to_pydatetime()
-        )
-        if claim != "claimed":
-            raise scalping.WaitingForSignal(
-                "This signal was already evaluated"
-                if claim == "duplicate"
-                else "Signal claim unavailable"
-            )
         audit.update(stage="signal_found", reason=signal["reason"])
         return context
     except scalping.WaitingForSignal as exc:

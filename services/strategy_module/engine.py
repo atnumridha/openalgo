@@ -538,6 +538,27 @@ def start_run(
             admission.release()
         raise
 
+    if scalp_context:
+        from database import flow_db
+
+        claim = flow_db.claim_execution_bar(
+            scalp_context["execution_id"],
+            scalp_context["workflow_id"],
+            datetime.fromisoformat(scalp_context["signal_at"]),
+        )
+        if claim != "claimed":
+            if admission is not None:
+                admission.release()
+            store.release_strategy(strategy_id)
+            return StartResult(
+                ok=False,
+                error=(
+                    "This signal was already evaluated"
+                    if claim == "duplicate"
+                    else "Signal claim unavailable"
+                ),
+            )
+
     run_id: int | None = None
     placement_progress: dict[str, set[str]] = {"dispatch_attempted": set()}
     try:

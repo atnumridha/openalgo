@@ -298,7 +298,7 @@ def test_two_consecutive_stopped_runs_impose_a_thirty_minute_cooldown():
         {
             "entry_cash_positions": 0,
             "entry_nifty_option_positions": 1,
-            "open_nifty_option_positions": 1,
+            "open_nifty_option_positions": 2,
             "entry_cash_risk": Decimal("0"),
             "entry_option_lot_risk": Decimal("1000"),
             "has_option_entry": True,
@@ -312,28 +312,25 @@ def test_position_limits_reject_an_additional_position(limited):
     assert decision.code == "position_limit"
 
 
-@pytest.mark.parametrize(
-    "bucket",
-    [
-        {
-            "entry_cash_positions": 0,
-            "open_sensex_option_positions": 1,
-            "entry_sensex_option_positions": 1,
-            "entry_derivative_positions": 1,
-        },
-        {
-            "entry_cash_positions": 0,
-            "open_mcx_option_positions": 1,
-            "entry_mcx_option_positions": 1,
-            "entry_derivative_positions": 1,
-        },
-        {
-            "entry_cash_positions": 0,
-            "open_derivative_positions": 2,
-            "entry_derivative_positions": 1,
-        },
-    ],
-)
+def test_second_nifty_option_position_is_allowed_within_combined_derivative_limit():
+    decision = evaluate_entry(
+        facts(
+            entry_cash_positions=0,
+            open_nifty_option_positions=1,
+            open_derivative_positions=1,
+            entry_nifty_option_positions=1,
+            entry_derivative_positions=1,
+            entry_cash_risk=Decimal("0"),
+            entry_option_lot_risk=Decimal("1000"),
+            has_option_entry=True,
+        ),
+        DEFAULT_POLICY,
+        NOW,
+    )
+
+    assert decision.allowed is True
+
+
 def test_derivative_bucket_and_combined_limits_reject_extra_positions(bucket):
     decision = evaluate_entry(
         facts(

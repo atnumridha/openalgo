@@ -91,7 +91,8 @@ def signals_for_profile(profile, *, five=None, minute=None, bank=None, daily=Non
             raise WaitingForSignal("Research rules need 35 completed five-minute candles")
         return rule_signals(five, profile)
     if profile == "ema915":
-        return signals(indicators(five), indicators(bank))
+        nifty = indicators(five)
+        return signals(nifty, nifty)
     if profile == "regime50200":
         if len(five) < 200:
             raise WaitingForSignal("EMA 50/200 needs 200 completed five-minute candles")
@@ -151,9 +152,7 @@ def latest_signal(profile, client, now, *, audit=None):
     else:
         five = history("NIFTY", "5m", 30)
         extra = {}
-        if profile == "ema915":
-            extra["bank"] = history("BANKNIFTY", "5m", 30)
-        elif profile == "regime50200":
+        if profile == "regime50200":
             extra["daily"] = history("NIFTY", "D", 600)
         elif profile == "ema5":
             extra["minute"] = history("NIFTY", "1m", 2)
@@ -321,19 +320,12 @@ def prepare(strategy, owner, api_key, mode):
         strategy["id"], mode, signal["timestamp"], "15:20", pacing=context["pacing"]
     )
     context["automation_epoch"] = strategy.get("automation_state_updated_at")
+    context["execution_id"] = origin["execution_id"]
+    context["workflow_id"] = origin["workflow_id"]
     if datetime.fromisoformat(context["deadline"]).strftime("%H:%M") > "15:20":
         raise WaitingForSignal("Too late for a complete 15-minute scalp")
     if (datetime.now(IST) - datetime.fromisoformat(context["signal_at"])).total_seconds() > 55:
         raise WaitingForSignal("Signal expired while fetching market data")
-    claim = flow_db.claim_execution_bar(
-        origin["execution_id"], origin["workflow_id"], datetime.fromisoformat(context["signal_at"])
-    )
-    if claim != "claimed":
-        raise WaitingForSignal(
-            "This signal was already evaluated"
-            if claim == "duplicate"
-            else "Signal claim unavailable"
-        )
     return context
 
 

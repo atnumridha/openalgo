@@ -118,10 +118,11 @@ def on_position_closed(event):
     if event.mode == "analyze":
         _emit_analyzer_update(event)
     else:
+        status = (event.response_data or {}).get("status", "success")
         socketio.emit(
             "close_position_event",
             {
-                "status": "success",
+                "status": status,
                 "message": event.message or "All Open Positions Squared Off",
                 "mode": "live",
             },

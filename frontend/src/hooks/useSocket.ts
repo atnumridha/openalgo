@@ -202,7 +202,7 @@ export function useSocket() {
     // Close position notification
     socket.on('close_position_event', (data: ClosePositionEventData) => {
       playAlertSound('orders')
-      showCategoryToast('success', data.message || 'All Open Positions Squared Off', 'positions')
+      showCategoryToast(data.status === 'success' ? 'success' : 'error', data.message || 'Close position result unavailable', 'positions')
     })
 
     // Order placement notification

@@ -155,13 +155,16 @@ def close_position_with_auth(
         ))
         return False, error_response, 500
 
-    if status_code == 200:
-        response_data = {"status": "success", "message": "All Open Positions Squared Off"}
+    if (status_code == 200 and isinstance(response_code, dict)
+            and response_code.get("status", "success") == "success"):
+        response_data = {"status": "success", **response_code}
+        message = response_data.get("message", "Close orders submitted; verify fills and remaining positions")
+        response_data["message"] = message
         bus.publish(PositionClosedEvent(
             mode="live", api_type=API_TYPE,
             symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
             product=position_data.get("product_type", "") or position_data.get("product", ""),
-            orderid="", message="All Open Positions Squared Off",
+            orderid="", message=message,
             request_data=position_request_data, response_data=response_data,
             api_key=original_data.get("apikey", ""),
         ))
@@ -173,6 +176,10 @@ def close_position_with_auth(
             else "Failed to close positions"
         )
         error_response = {"status": "error", "message": message}
+        if isinstance(response_code, dict):
+            for key in ("submitted_order_ids", "failed_count", "failures"):
+                if key in response_code:
+                    error_response[key] = response_code[key]
         bus.publish(PositionClosedEvent(
             mode="live", api_type=API_TYPE,
             symbol=position_data.get("symbol", ""), exchange=position_data.get("exchange", ""),
@@ -181,7 +188,7 @@ def close_position_with_auth(
             request_data=position_request_data, response_data=error_response,
             api_key=original_data.get("apikey", ""),
         ))
-        return False, error_response, status_code
+        return False, error_response, status_code if status_code != 200 else 502
 
 
 def close_position(

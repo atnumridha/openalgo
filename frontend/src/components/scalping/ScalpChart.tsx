@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
 import { priceDecimals } from '@/lib/scalpingPrice'
+import { plausibleHistoryTail } from '@/lib/strategyChartOverlays'
 import { useThemeStore } from '@/stores/themeStore'
 
 // Matches the IST shift the backend bakes into bar times so live bars line up
@@ -146,9 +147,12 @@ export function ScalpChart({
     })
     const vol = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
-      priceScaleId: '',
+      priceScaleId: 'volume',
     })
-    vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
+    vol.priceScale().applyOptions({
+      scaleMargins: { top: 0.82, bottom: 0 },
+      visible: false,
+    })
 
     chartRef.current = chart
     candleRef.current = candle
@@ -226,7 +230,13 @@ export function ScalpChart({
       const ts = chart.timeScale()
       const range = preserveRange ? ts.getVisibleLogicalRange() : null
       candle.setData(
-        arr.map((k) => ({ time: k.time as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close }))
+        arr.map((k) => ({
+          time: k.time as UTCTimestamp,
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+        }))
       )
       vol.setData(
         arr.map((k) => ({
@@ -258,7 +268,11 @@ export function ScalpChart({
           tradingDateRef.current || undefined
         )
         if (disposed || d.status !== 'success') return
-        const fetched = d.candles || []
+        const fetched = plausibleHistoryTail(
+          d.candles || [],
+          0.25,
+          data.get(`${exchange}:${symbol}`)?.data?.ltp ?? null
+        )
         if (!fetched.length) return
         const cur = currentBucketRef.current
         const completed = cur == null ? fetched : fetched.filter((k) => k.time < cur)
@@ -302,7 +316,11 @@ export function ScalpChart({
           schedule()
           return
         }
-        const candles = d.candles || []
+        const candles = plausibleHistoryTail(
+          d.candles || [],
+          0.25,
+          data.get(`${exchange}:${symbol}`)?.data?.ltp ?? null
+        )
         tradingDateRef.current = d.date || null
         if (!candles.length) {
           // No broker history (e.g. TradeSmart serves none for the CDS segment).
@@ -366,7 +384,9 @@ export function ScalpChart({
     if (!candle || !vol || !readyRef.current || ltp == null || !Number.isFinite(ltp)) return
 
     const parsed = ts ? Date.parse(ts) : Number.NaN
-    const epochUtc = Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+    const epochUtc = Number.isNaN(parsed)
+      ? Math.floor(Date.now() / 1000)
+      : Math.floor(parsed / 1000)
     const sec = intervalSecRef.current
     const bucket = Math.floor((epochUtc + IST_OFFSET) / sec) * sec
     const cur = currentBucketRef.current
@@ -408,7 +428,13 @@ export function ScalpChart({
     }
 
     const color = bar.close >= bar.open ? VOL_UP : VOL_DOWN
-    candle.update({ time: bar.time as UTCTimestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
+    candle.update({
+      time: bar.time as UTCTimestamp,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+    })
     vol.update({ time: bar.time as UTCTimestamp, value: bar.volume, color })
     renderLegendRef.current()
     // Clear the live-only "waiting for ticks" placeholder once a bar exists.

@@ -28,8 +28,8 @@ RULES = {
     ],
     "ema915": [
         "5-minute NIFTY: EMA 9 above/below EMA 15; both 3-bar slopes at least +0.10 / at most −0.10 ATR per bar.",
-        "Candle intersects the EMA band and closes bullish above EMA 9 for CE, bearish below EMA 9 for PE. Full body ≥60%, big bar ≥1.5 prior ATR with body ≥50%, or pin wick ≥2× body and close in outer 25%.",
-        "Same-bar Bank Nifty trend and both slopes must confirm; no resistance/support within 0–0.5 ATR (previous 20 bars). At least 75 candles and three consecutive 5-minute intervals.",
+        "Candle intersects the EMA band and closes bullish above EMA 9 for CE, bearish below EMA 9 for PE.",
+        "At least 75 candles and three consecutive 5-minute intervals are required for indicator warm-up and data integrity.",
     ],
     "macd200": [
         "5-minute MACD (12,26,9) must cross its signal now: upward below zero for CE; downward above zero for PE.",
@@ -135,62 +135,23 @@ def explain(profile, inputs, result, expected):
         )
         check("Both", "Three consecutive 5-minute intervals and indicator warm-up", f.ready)
         if profile == "ema915":
-            bank = indicators(inputs["bank"]).reindex(f.index)
-            values(
-                bank,
-                ["close", "ema9", "ema15", "slope9", "slope15", "atr", "prior_high", "prior_low"],
-                "bank_",
-            )
-            body, span = f.close - f.open, f.high - f.low
-            full = body.abs() >= 0.6 * span
-            big = (span >= 1.5 * f.prior_atr) & (body.abs() >= 0.5 * span)
+            body = f.close - f.open
             touch = (f.low <= f[["ema9", "ema15"]].max(axis=1)) & (
                 f.high >= f[["ema9", "ema15"]].min(axis=1)
             )
             for side in ["CE", "PE"]:
                 up = side == "CE"
-                pin = (
-                    (
-                        (f[["open", "close"]].min(axis=1) - f.low >= 2 * body.abs())
-                        & (f.close >= f.low + 0.75 * span)
-                    )
-                    if up
-                    else (
-                        (f.high - f[["open", "close"]].max(axis=1) >= 2 * body.abs())
-                        & (f.close <= f.low + 0.25 * span)
-                    )
-                )
                 trend = (
                     (f.ema9 > f.ema15) & (f.slope9 >= 0.1) & (f.slope15 >= 0.1)
                     if up
                     else (f.ema9 < f.ema15) & (f.slope9 <= -0.1) & (f.slope15 <= -0.1)
                 )
-                bank_trend = (
-                    (bank.ema9 > bank.ema15) & (bank.slope9 >= 0.1) & (bank.slope15 >= 0.1)
-                    if up
-                    else (bank.ema9 < bank.ema15) & (bank.slope9 <= -0.1) & (bank.slope15 <= -0.1)
-                )
-                distance = bank.prior_high - bank.close if up else bank.close - bank.prior_low
                 check(side, "EMA alignment and both slopes meet 0.10 ATR threshold", trend)
                 check(
                     side,
                     "Touches EMA band, matching body and close beyond EMA 9",
                     touch
                     & ((body > 0) & (f.close > f.ema9) if up else (body < 0) & (f.close < f.ema9)),
-                )
-                check(side, "Full body, big bar or qualifying pin bar", full | big | pin)
-                check(
-                    side,
-                    "Bank Nifty ready and confirms trend",
-                    bank.ready.eq(True)
-                    & bank.prior_high.notna()
-                    & bank.prior_low.notna()
-                    & bank_trend,
-                )
-                check(
-                    side,
-                    "Bank Nifty has room before resistance/support",
-                    ~distance.between(0, 0.5 * bank.atr) & distance.notna(),
                 )
         else:
             support = (

@@ -381,61 +381,69 @@ def _place_smartorder_locked_kotak(data, auth_token, symbol, exchange, product):
 
 
 def close_all_positions(current_api_key, auth_token):
-    # Fetch the current open positions
     positions_response = get_positions(auth_token)
-    # logger.debug(f"{positions_response}")
-    # Check if the positions data is null or empty
-    if positions_response["data"] is None or not positions_response["data"]:
-        return {"message": "No Open Positions Found"}, 200
+    if (not isinstance(positions_response, dict)
+            or positions_response.get("stat") != "Ok"
+            or not isinstance(positions_response.get("data"), (list, type(None)))):
+        return {"status": "error", "message": "Could not read broker positions; no close orders submitted"}, 502
 
-    if positions_response["data"]:
-        # Loop through each position to close
-        for position in positions_response["data"]:
-            # Skip if net quantity is zero
+    submitted_order_ids = []
+    failures = []
+    for position in positions_response.get("data") or []:
+        try:
             net_qty = (int(position.get("flBuyQty", 0)) - int(position.get("flSellQty", 0))) + (
                 int(position.get("cfBuyQty", 0)) - int(position.get("cfSellQty", 0))
             )
             if net_qty == 0:
                 continue
 
-            # Determine action based on net quantity
-            action = "SELL" if net_qty > 0 else "BUY"
-            quantity = abs(net_qty)
-
-            # get openalgo symbol to send to placeorder function
-            symboltoken = position["tok"]
             exchange = map_exchange(position["exSeg"])
-            position["exSeg"] = exchange
+            symbol = get_symbol(position["tok"], exchange)
+            product = reverse_map_product_type(position["prod"])
+            if not symbol or not exchange or not product:
+                raise ValueError("Position could not be mapped to an order")
 
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol = get_symbol(symboltoken, exchange)
-
-            logger.debug(f"The Symbol is {symbol}")
-
-            # Prepare the order payload
-            place_order_payload = {
+            payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
                 "symbol": symbol,
-                "action": action,
-                "exchange": position["exSeg"],
+                "action": "SELL" if net_qty > 0 else "BUY",
+                "exchange": exchange,
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position["prod"]),
-                "quantity": str(quantity),
+                "product": product,
+                "quantity": str(abs(net_qty)),
             }
+            res, response, orderid = place_order_api(payload, auth_token)
+            if (getattr(res, "status", None) == 200
+                    and isinstance(response, dict)
+                    and response.get("stat") == "Ok"
+                    and orderid):
+                submitted_order_ids.append(str(orderid))
+            else:
+                failures.append({"symbol": symbol, "reason": "Close order acknowledgement was not confirmed"})
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            failures.append({"symbol": position.get("trdSym", "") if isinstance(position, dict) else "",
+                             "reason": str(exc)})
+        except Exception:
+            logger.exception("Unexpected Kotak close-order failure")
+            failures.append({"symbol": position.get("trdSym", "") if isinstance(position, dict) else "",
+                             "reason": "Close order could not be submitted"})
 
-            logger.debug(f"{place_order_payload}")
-
-            # Place the order to close the position
-            res, response, orderid = place_order_api(place_order_payload, auth_token)
-
-            # logger.debug(f"{res}")
-            logger.debug(f"{response}")
-            # logger.debug(f"{orderid}")
-
-            # Note: Ensure place_order_api handles any errors and logs accordingly
-
-    return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
+    if failures:
+        return {
+            "status": "error",
+            "message": f"{len(failures)} close order(s) unconfirmed; {len(submitted_order_ids)} submitted. Verify broker orders and remaining positions.",
+            "submitted_order_ids": submitted_order_ids,
+            "failed_count": len(failures),
+            "failures": failures,
+        }, 502
+    if submitted_order_ids:
+        return {
+            "status": "success",
+            "message": "Close orders submitted; verify fills and remaining positions",
+            "submitted_order_ids": submitted_order_ids,
+        }, 200
+    return {"status": "success", "message": "No Open Positions Found", "submitted_order_ids": []}, 200
 
 
 def cancel_order(orderid, auth_token):

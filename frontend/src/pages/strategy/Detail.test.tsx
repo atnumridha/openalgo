@@ -36,6 +36,13 @@ vi.mock('@/api/strategy_module', async () => {
 })
 
 vi.mock('@/utils/toast', () => ({ showToast: toast }))
+vi.mock('@/components/strategy/StrategyPayoffChart', () => ({
+  StrategyPayoffChart: () => null,
+}))
+vi.mock('@/components/strategy/StrategyLiveChart', () => ({
+  StrategyLiveChart: ({ underlying }: { underlying?: string | null }) =>
+    underlying ? <div data-testid="strategy-live-chart">{underlying}</div> : null,
+}))
 
 import {
   fetchStrategyOrderbook,
@@ -193,6 +200,11 @@ describe('live stop price and its gross P&L', () => {
     )
     renderDetail()
   }
+
+  it('renders the live chart for a strategy with an underlying', async () => {
+    mockStopLeg()
+    expect(await screen.findByTestId('strategy-live-chart')).toHaveTextContent('NIFTY')
+  })
 
   it('distinguishes the stop price from the profit protected at that price', async () => {
     mockStopLeg()

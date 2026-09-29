@@ -34,8 +34,8 @@ def test_listing_uninstalled_templates_never_creates_strategies(owner):
     from services.strategy_module import template_library as library
 
     catalog = library.catalog(owner)
-    assert len(catalog) == 11
-    assert len({item["id"] for item in catalog}) == 11
+    assert len(catalog) == 27
+    assert len({item["id"] for item in catalog}) == 27
     assert all(item["installed_strategy_id"] is None for item in catalog)
     assert not store.list_strategies(owner)
     assert {item["underlying"] for item in catalog} == {
@@ -46,6 +46,8 @@ def test_listing_uninstalled_templates_never_creates_strategies(owner):
         "SILVERM",
         "NATGASMINI",
     }
+    baskets = [item for item in catalog if item["id"] == "buy-call"]
+    assert baskets and baskets[0]["provenance"] == "screenshot-detail"
 
 
 def test_retrying_old_receiver_install_does_not_silently_switch_its_rules(owner):
@@ -93,6 +95,22 @@ def test_one_template_install_creates_only_one_stopped_sandbox_pair_and_is_repea
     assert len(flow_db.get_workflows_for_strategy(row.id)) == 1
     catalog = library.catalog(owner)
     assert sum(c["installed_strategy_id"] is not None for c in catalog) == 1
+    assert not store.list_user_runs(owner)
+
+
+def test_install_basket_is_inert(owner):
+    from services.strategy_module import template_library as library
+
+    result = library.install(owner, "buy-call")
+    row = store.get_strategy(result["strategy_id"], owner)
+    assert result["created"] is True and result["workflow_id"] is None
+    assert row.name == "Kotak Buy Call"
+    assert row.status == "stopped" and row.automation_state == "disabled" and not row.live_enabled
+    assert row.scheduler is None
+    assert [leg["position"] for leg in row.legs] == ["B"]
+    assert not flow_db.get_workflows_for_strategy(row.id)
+    assert library.install(owner, "buy-call") == result | {"created": False}
+    assert len(store.list_strategies(owner)) == 1
     assert not store.list_user_runs(owner)
 
 

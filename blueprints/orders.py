@@ -678,12 +678,7 @@ def close_all_positions():
 
         # Format the response for UI
         if success and status_code == 200:
-            return jsonify(
-                {
-                    "status": "success",
-                    "message": response_data.get("message", "All Open Positions Squared Off"),
-                }
-            ), 200
+            return jsonify(response_data), 200
         else:
             return jsonify(response_data), status_code
 

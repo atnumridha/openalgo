@@ -11,6 +11,10 @@ vi.mock('@/api/automation_monitor', () => ({
   emergencyStopAutomation: api.stop,
 }))
 vi.mock('@/api/strategy_module', () => ({ disableStrategyAutomation: api.one }))
+vi.mock('@/components/strategy/StrategyLiveChart', () => ({
+  StrategyLiveChart: ({ underlying }: { underlying?: string | null }) =>
+    underlying ? <div data-testid="strategy-live-chart">{underlying}</div> : null,
+}))
 
 import Monitor from './Monitor'
 
@@ -33,7 +37,7 @@ const strategy = {
   live_enabled: false,
   entry_time: '09:35',
   exit_time: '15:20',
-  configuration: { profile: 'ema915' },
+  configuration: { profile: 'ema915', underlying: 'NIFTY', exchange: 'NSE_INDEX' },
   rules: ['Both EMA slopes must meet 0.10 ATR'],
   evaluation: {
     recorded_at: new Date().toISOString(),
@@ -89,6 +93,10 @@ beforeEach(() => {
   })
 })
 describe('Automation review', () => {
+  it('renders the live chart for a selected strategy with an underlying', async () => {
+    setup()
+    expect(await screen.findByTestId('strategy-live-chart')).toHaveTextContent('NIFTY')
+  })
   it('labels retained entry rejection as historical without claiming it is resolved', async () => {
     setup({ ...strategy, last_risk_rejection: {
       at: '2026-09-28T06:23:52Z', message: 'Capital policy refused entry: contract metadata required',

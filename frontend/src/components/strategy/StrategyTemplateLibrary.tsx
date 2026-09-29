@@ -45,7 +45,11 @@ export function StrategyTemplateLibrary() {
           <li key={template.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-3">
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">{template.name}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{template.underlying} · Intraday</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {template.underlying} · Intraday
+                {template.category ? ` · ${template.category}` : ''}
+                {template.provenance === 'conventional-inference' ? ' · inferred layout' : ''}
+              </p>
             </div>
             {template.installed_strategy_id ? (
               <Button variant="outline" size="sm" asChild>

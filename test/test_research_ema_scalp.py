@@ -48,7 +48,7 @@ def test_features_and_signals_do_not_change_when_future_is_appended():
     )
 
 
-def test_bullish_pin_rejection_mirrors_bearish_and_missing_confirmation_blocks():
+def test_bullish_signal_is_not_blocked_by_optional_banknifty_room_filter():
     f = pd.DataFrame(
         [
             {
@@ -72,9 +72,9 @@ def test_bullish_pin_rejection_mirrors_bearish_and_missing_confirmation_blocks()
     assert signals(f, f, slope=0.1, confirm=True).iloc[0].direction == "CE"
     missing = f.iloc[:0]
     assert signals(f, missing, slope=0.1, confirm=True).iloc[0].direction == ""
-    blocked = f.copy()
-    blocked["prior_high"] = 105.0
-    assert signals(f, blocked, slope=0.1, confirm=True).iloc[0].direction == ""
+    near_resistance = f.copy()
+    near_resistance["prior_high"] = 105.0
+    assert signals(f, near_resistance, slope=0.1, confirm=True).iloc[0].direction == "CE"
     reflected = f.copy()
     for a, b in (
         ("open", "open"),

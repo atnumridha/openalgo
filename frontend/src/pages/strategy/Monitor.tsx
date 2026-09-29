@@ -23,6 +23,7 @@ import {
   type StopResult,
 } from '@/api/automation_monitor'
 import { disableStrategyAutomation } from '@/api/strategy_module'
+import { StrategyLiveChart } from '@/components/strategy/StrategyLiveChart'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -580,6 +581,13 @@ function Decision({
   const plan = row.entry_plan?.details?.context?.structure
   return (
     <div className="space-y-4">
+      <StrategyLiveChart
+        strategyId={row.id}
+        underlying={typeof row.configuration.underlying === 'string' ? row.configuration.underlying : null}
+        underlyingExchange={typeof row.configuration.exchange === 'string' ? row.configuration.exchange : null}
+        scalpProfile={typeof row.configuration.profile === 'string' ? row.configuration.profile : null}
+        compact
+      />
       <div className="rounded-xl border bg-card p-5">
         <h3 className="font-semibold">When will it place a real-money order?</h3>
         <p className="mt-2 text-sm leading-relaxed">

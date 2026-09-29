@@ -43,7 +43,7 @@ def indicators(frame):
     f["atr"] = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
     f["prior_atr"] = f.atr.shift()
     for length in (9, 15):
-        f[f"ema{length}"] = f.close.ewm(span=length, adjust=False, min_periods=75).mean()
+        f[f"ema{length}"] = f.close.ewm(span=length, adjust=False, min_periods=15).mean()
         f[f"slope{length}"] = f[f"ema{length}"].diff(3) / (3 * f.atr)
     f["prior_high"] = f.high.shift().rolling(20).max()
     f["prior_low"] = f.low.shift().rolling(20).min()
@@ -69,25 +69,21 @@ def signals(nifty, bank, *, slope=0.1, confirm=True):
     )
     up = (f.ema9 > f.ema15) & (f.slope9 >= slope) & (f.slope15 >= slope)
     down = (f.ema9 < f.ema15) & (f.slope9 <= -slope) & (f.slope15 <= -slope)
-    buy = up & touch & (body > 0) & (f.close > f.ema9) & (full | big | bullish_pin)
-    sell = down & touch & (body < 0) & (f.close < f.ema9) & (full | big | bearish_pin)
+    buy = up & touch & (body > 0) & (f.close > f.ema9)
+    sell = down & touch & (body < 0) & (f.close < f.ema9)
     if confirm:
-        resistance = other.prior_high - other.close
-        support = other.close - other.prior_low
-        bank_ready = other.ready.eq(True) & other.prior_high.notna() & other.prior_low.notna()
+        bank_ready = other.ready.eq(True)
         buy &= (
             bank_ready
             & (other.ema9 > other.ema15)
             & (other.slope9 >= slope)
             & (other.slope15 >= slope)
-            & ~resistance.between(0, 0.5 * other.atr)
         )
         sell &= (
             bank_ready
             & (other.ema9 < other.ema15)
             & (other.slope9 <= -slope)
             & (other.slope15 <= -slope)
-            & ~support.between(0, 0.5 * other.atr)
         )
     out = f[["open", "high", "low", "close", "ema9", "ema15", "slope9", "slope15", "atr"]].copy()
     out["direction"] = np.where(buy & f.ready, "CE", np.where(sell & f.ready, "PE", ""))

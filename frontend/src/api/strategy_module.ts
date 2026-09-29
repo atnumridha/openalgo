@@ -1958,6 +1958,8 @@ export interface StrategyTemplate {
   underlying: string
   installed_strategy_id: number | null
   installation_pending: boolean
+  category?: string
+  provenance?: string
 }
 
 export async function getStrategyTemplates(): Promise<StrategyTemplate[]> {
@@ -1966,9 +1968,9 @@ export async function getStrategyTemplates(): Promise<StrategyTemplate[]> {
 }
 
 export async function installStrategyTemplate(id: string): Promise<{
-  created: boolean; strategy_id: number; workflow_id: number
+  created: boolean; strategy_id: number; workflow_id: number | null
 }> {
-  const response = await webClient.post<{ created: boolean; strategy_id: number; workflow_id: number }>(
+  const response = await webClient.post<{ created: boolean; strategy_id: number; workflow_id: number | null }>(
     `${BASE}/templates/${encodeURIComponent(id)}/install`
   )
   return response.data

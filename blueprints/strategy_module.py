@@ -2702,12 +2702,12 @@ def automation_emergency_stop():
 @check_session_validity
 @_api_limit
 def install_strategy_template(template_id):
-    from services.strategy_module.template_library import TEMPLATES, install
+    from services.strategy_module.template_library import BASKET_TEMPLATES, TEMPLATES, install
 
     username = _current_user()
     if not username:
         return _error('Not authenticated', 401)
-    if template_id not in TEMPLATES:
+    if template_id not in TEMPLATES and template_id not in BASKET_TEMPLATES:
         return _error('Unknown strategy template', 404)
     try:
         result = install(username, template_id)

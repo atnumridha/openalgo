@@ -36,7 +36,7 @@ _reservation_cash_baselines: dict[str, Decimal] = {}
 @dataclass(frozen=True, slots=True)
 class GovernorPolicy:
     max_cash_positions: int = 2
-    max_nifty_option_positions: int = 1
+    max_nifty_option_positions: int = 2
     max_sensex_option_positions: int = 1
     max_mcx_option_positions: int = 1
     max_derivative_positions: int = 2
@@ -1119,6 +1119,33 @@ def evaluate_entry(
             False, "position_limit", "The portfolio position limit is reached", metrics
         )
 
+    # MCX-specific live entry safety: broker session and data freshness required
+    if facts.mode == "live" and facts.entry_mcx_option_positions > 0:
+        if "MCX" not in facts.entry_exchanges:
+            return _decision(
+                False, "mcx_missing",
+                "MCX option entry but no MCX exchange in scope", metrics
+            )
+        try:
+            from services.strategy_module.live_protection import _active_kotak_pin
+            from database import auth_db
+            api_key = auth_db.get_api_key_for_tradingview(
+                getattr(facts, "_strategy_owner", None) or ""
+            )
+            connection_id = getattr(facts, "_broker_connection_id", None)
+            if not api_key or not connection_id or not _active_kotak_pin(api_key, str(connection_id)):
+                return _decision(
+                    False, "mcx_broker_unavailable",
+                    "MCX live entry requires an active Kotak connection pinned to the strategy",
+                    metrics
+                )
+        except Exception as e:
+            return _decision(
+                False, "mcx_broker_check_failed",
+                f"Could not verify Kotak session for MCX: {str(e)}",
+                metrics
+            )
+
     return _decision(True, "entry_allowed", "The entry is within every governor limit", metrics)
 
 
@@ -2073,19 +2100,28 @@ def acquire_entry_admission(
     try:
         if mode == "sandbox":
             from database import sandbox_reset_journal
+            from services.strategy_module import sandbox_reset
 
             try:
                 sandbox_reset_journal.assert_recovered(str(user_id))
-            except Exception:
-                _release_admission_lock(scope, lock)
-                return (
-                    GovernorDecision(
-                        allowed=False,
-                        code="sandbox_reset_recovery_required",
-                        message="Sandbox reset recovery is required before new entries",
-                    ),
-                    None,
-                )
+            except RuntimeError as exc:
+                try:
+                    latest = sandbox_reset_journal.latest(str(user_id))
+                    state = (latest.payload or {}).get("state") if latest else None
+                    if state not in {"prepared", "recovery_required"}:
+                        raise exc
+                    sandbox_reset.recover(str(user_id))
+                    sandbox_reset_journal.assert_recovered(str(user_id))
+                except Exception:
+                    _release_admission_lock(scope, lock)
+                    return (
+                        GovernorDecision(
+                            allowed=False,
+                            code="sandbox_reset_recovery_required",
+                            message="Sandbox reset recovery is required before new entries",
+                        ),
+                        None,
+                    )
         if authorization_check is not None:
             authorized, error = authorization_check()
             if not authorized:
