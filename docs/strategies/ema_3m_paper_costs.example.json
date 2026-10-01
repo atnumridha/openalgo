@@ -1,0 +1,15 @@
+{
+  "schedule_id": "nfo-2026-research-10rupee-10bps",
+  "source": "Illustrative model, not account fees. NSE levies: https://www.nseindia.com/static/invest/first-time-investor-sebi-turnover-fees-stt-other-levies ; exchange+IPFT assumptions explained in docs/strategies/ema_3m_scalper.md",
+  "effective_from": "2026-04-01",
+  "effective_to": "2026-12-31",
+  "broker": "kotak",
+  "exchange": "NFO",
+  "brokerage_per_order": 10,
+  "exchange_rate": 0.0003553,
+  "sebi_rate": 0.000001,
+  "gst_rate": 0.18,
+  "stamp_buy_rate": 0.00003,
+  "stt_sell_rate": 0.0015,
+  "slippage_bps": 10
+}
