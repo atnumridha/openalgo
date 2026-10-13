@@ -64,6 +64,17 @@ def _retest(bars, points):
 def evaluate_setup(bars, preset):
     if len(bars) < max(201, preset.entry_length + 2):
         return None
+
+    if any(
+        b.time.tzinfo is None
+        or not all(
+            isinstance(v, D) and v.is_finite() and v > 0 for v in (b.open, b.high, b.low, b.close)
+        )
+        or b.low > min(b.open, b.close)
+        or b.high < max(b.open, b.close)
+        for b in bars
+    ):
+        return None
     b, prev = bars[-1], bars[-2]
     if b.time.tzinfo is None or any(x.time >= y.time for x, y in zip(bars, bars[1:], strict=False)):
         return None
@@ -155,4 +166,27 @@ def evaluate_setup(bars, preset):
         b.close - sign * risk,
         b.close + sign * risk * preset.reward_risk,
         cur.atr,
+        structure_stop=structure,
     )
+
+
+def anchor_setup(setup, reference):
+    """Execution uses a fresh index snapshot; chart previews retain the bar close."""
+    from dataclasses import replace
+
+    reference = D(str(reference))
+    if not reference.is_finite() or reference <= 0:
+        return None
+    sign = D(1) if setup.direction == "CE" else D(-1)
+    if setup.structure_stop is not None:
+        risk = (reference - setup.structure_stop) * sign
+        if not 0 < risk <= setup.atr * 2:
+            return None
+        risk = (risk / D(".1")).to_integral_value(rounding=ROUND_CEILING) * D(".1")
+    else:
+        risk = abs(setup.index_reference - setup.initial_stop)
+    stop = reference - sign * risk
+    target = reference + sign * risk * 6
+    if risk <= 0 or min(stop, target) <= 0:
+        return None
+    return replace(setup, index_reference=reference, initial_stop=stop, target=target)

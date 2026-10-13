@@ -43,6 +43,7 @@ class Setup:
     initial_stop: Decimal
     target: Decimal
     atr: Decimal
+    structure_stop: Decimal | None = None
 
     @property
     def key(self):
@@ -68,12 +69,20 @@ class Quote:
     bid_qty: int
     ask_qty: int
     received_at: datetime
-    exchange_time: datetime
+    exchange_time: datetime | None
+    verified_depth_snapshot: bool = False
 
     def fresh(self, now):
+        if (
+            now.tzinfo is None
+            or self.received_at.tzinfo is None
+            or not 0 <= (now - self.received_at).total_seconds() <= 5
+        ):
+            return False
+        if self.exchange_time is None:
+            return self.verified_depth_snapshot
         return (
-            all(t.tzinfo is not None for t in (now, self.received_at, self.exchange_time))
-            and 0 <= (now - self.received_at).total_seconds() <= 5
+            self.exchange_time.tzinfo is not None
             and 0 <= (now - self.exchange_time).total_seconds() <= 5
         )
 

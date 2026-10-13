@@ -95,6 +95,13 @@ def get_margin_data(auth_token):
             "utiliseddebits": f"{float(margin_data.get('MarginUsed', 0)):.2f}",
         }
 
+        # Preserve the broker's explicit Net limit separately from its cash field.
+        if margin_data.get("Net") is not None:
+            from decimal import Decimal
+
+            limit = Decimal(str(margin_data["Net"]))
+            if limit.is_finite():
+                processed_margin_data["availabletradinglimit"] = f"{limit:.2f}"
         logger.info(f"Successfully fetched margin data: {processed_margin_data}")
         return processed_margin_data
 

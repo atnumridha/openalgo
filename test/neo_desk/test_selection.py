@@ -58,3 +58,18 @@ def test_controlled_profile_requires_five_recent_option_minutes():
     assert not select_contract(
         [c], {c.symbol: q}, get_preset("orb_controls"), D(10000), when(), direction="CE"
     ).ok
+
+
+def test_equal_premiums_choose_strike_nearest_the_current_index():
+    a = contract(symbol="A-far", strike=D(23000))
+    b = contract(symbol="Z-near", strike=D(22500))
+    selected = select_contract(
+        [a, b],
+        {a.symbol: quote(a), b.symbol: quote(b)},
+        get_preset("orb_trail"),
+        D(10000),
+        when(),
+        direction="CE",
+        index_reference=D(22500),
+    )
+    assert selected.contract == b

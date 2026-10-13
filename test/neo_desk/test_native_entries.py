@@ -18,11 +18,19 @@ from services.strategy_module.symbol_resolver import ResolvedLeg
 OWNER = "neo_fixture_owner"
 
 
+def clear_owner():
+    desk.db_session.query(desk.NeoRunProtection).filter_by(owner=OWNER).delete()
+    desk.db_session.query(desk.NeoClaim).filter_by(owner=OWNER).delete()
+    desk.db_session.query(desk.NeoDesk).filter_by(owner=OWNER).delete()
+    desk.db_session.commit()
+    desk.db_session.remove()
+
+
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
     native.init_db()
     desk.init_db()
-    desk.clear_owner(OWNER)
+    clear_owner()
     for s in native.list_strategies(OWNER):
         if s["current_run_id"]:
             state.clear_run_state(s["current_run_id"])
@@ -33,7 +41,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(engine, "_broker_for", lambda *a: "sandbox")
     monkeypatch.setattr(engine, "_subscribe_run", lambda *a: None)
     yield
-    desk.clear_owner(OWNER)
+    clear_owner()
 
 
 def prepare(side):
@@ -85,6 +93,7 @@ def test_put_setup_buys_put(monkeypatch, side):
     assert orders[0]["pricetype"] == "LIMIT" and D(str(orders[0]["price"])) == D("50.70")
     assert orders[0]["symbol"].endswith(side) and int(orders[0]["quantity"]) == 65
     assert len(native.list_orders(result.run_id)) == 1
+    assert D(str(native.list_orders(result.run_id)[0]["price"])) == D("50.70")
 
 
 def test_duplicate_signal_claim(monkeypatch):
@@ -137,3 +146,30 @@ def test_native_resolver_mismatch_never_dispatches(monkeypatch):
     result = submit_setup(OWNER, s, c, "sandbox", now=when())
     assert not result.ok and orders == []
     assert "differs" in result.error
+
+
+def test_same_confirmed_bar_cannot_trade_again_after_a_profile_switch(monkeypatch):
+    from services.neo_desk.lifecycle import manage_once
+
+    orders = []
+    boundary(monkeypatch, "CE", orders)
+    s, c = prepare("CE")
+    first = submit_setup(OWNER, s, c, "sandbox", now=when())
+    assert first.ok
+    engine.apply_fill(first.run_id, 1, 50, True, filled_qty=65)
+    engine.apply_fill(first.run_id, 1, 52, False, filled_qty=65)
+    manage_once(OWNER, now=when(), quote_provider=lambda *a: D(50))
+    desk.configure(OWNER, profile="orb_controls", activation="Active")
+    second = submit_setup(OWNER, replace(s, profile="orb_controls"), c, "sandbox", now=when())
+    assert not second.ok and len(orders) == 1
+
+
+def test_native_manual_start_cannot_bypass_confirmed_provider_setup(monkeypatch):
+    from services.neo_desk.service import NeoDeskService
+
+    orders = []
+    boundary(monkeypatch, "CE", orders)
+    sid = NeoDeskService()._native_strategy(OWNER, desk.view(OWNER))
+    result = engine.start_run(sid, OWNER, "sandbox")
+    assert not result.ok and "confirmed" in result.error.lower()
+    assert orders == []

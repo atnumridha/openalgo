@@ -25,10 +25,10 @@ def bars(profile="orb_trail", direction="CE", last="09:30"):
         warm = [
             Candle(
                 start - timedelta(minutes=15 * (300 - i)),
-                D(100) + D(sign) * D(i) / 2,
-                D(101) + D(sign) * D(i) / 2,
-                D(99) + D(sign) * D(i) / 2,
-                D(100) + D(sign) * D(i) / 2,
+                D(1000) + D(sign) * D(i) / 2,
+                D(1001) + D(sign) * D(i) / 2,
+                D(999) + D(sign) * D(i) / 2,
+                D(1000) + D(sign) * D(i) / 2,
             )
             for i in range(300)
         ]

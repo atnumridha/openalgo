@@ -298,6 +298,8 @@ def start_run(
         )
 
     strategy = store.strategy_to_dict(strategy_row)
+    if any(leg.get("neo_provider") for leg in strategy.get("legs",[])) and trigger_source!="neo_confirmed_setup":
+        return StartResult(ok=False,error="Neo Desk entries require a fresh confirmed provider setup.")
     api_key = _api_key_for(user_id)
     if not api_key:
         return StartResult(ok=False, error="No API key is configured for this user")
@@ -753,6 +755,7 @@ def _place_entries(
                 # translates the product to the venue, so these can differ.
                 "product": order.get("product"),
                 "pricetype": strategy.get("pricetype", "MARKET"),
+                "price": order.get("price", 0),
                 "status": "pending",
                 "position_ref": leg.get("position_ref"),
             },

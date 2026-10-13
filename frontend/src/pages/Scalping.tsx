@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import { NeoStrategyControls } from '@/components/scalping/NeoStrategyControls'
 import { ScalpChart } from '@/components/scalping/ScalpChart'
 import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
@@ -122,7 +123,8 @@ function loadArmed(): boolean {
 // opt-in) — a missing key reads as off.
 function loadShowCharts(): boolean {
   try {
-    return localStorage.getItem(CHARTS_STORAGE_KEY) === '1'
+    const saved = localStorage.getItem(CHARTS_STORAGE_KEY)
+    return saved === null ? import.meta.env.VITE_NEO_DESK_ENABLED === 'true' : saved === '1'
   } catch {
     return false
   }
@@ -1042,6 +1044,7 @@ export default function Scalping() {
 
   return (
     <div className="space-y-4 p-4">
+      <NeoStrategyControls />
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>
         <div className="flex items-center gap-3">

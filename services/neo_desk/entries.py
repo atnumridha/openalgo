@@ -50,6 +50,7 @@ def submit_setup(owner_id, setup, selection, mode, *, now=None):
     leg = {
         "id": 1,
         "segment": "options",
+        "neo_provider": True,
         "expiry": c.expiry.strftime("%d-%b-%y").upper(),
         "lots": 1,
         "position": "B",

@@ -45,6 +45,7 @@ def provision(source: Path, target: Path):
     }
     for key, value in values.items():
         set_key(env_file, key, value)
+    (target / "frontend" / ".env.local").write_text("VITE_NEO_DESK_ENABLED=true\n")
     load_dotenv(env_file, override=True)
     from database.sandbox_db import init_db as init_sandbox
     from database.sandbox_db import set_config

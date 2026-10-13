@@ -17,8 +17,12 @@ owner_locks = KeyedLocks(name="neo-owner-controls", reentrant=True)
 
 def _owned(owner, trade_id):
     config = desk.view(owner)
-    rid = config.get("run_id")
-    if not rid or str(rid) != str(trade_id):
+    try:
+        rid = int(trade_id)
+    except (TypeError, ValueError):
+        raise ValueError("This is not the terminal-owned trade.") from None
+    protection = desk.get_run_protection(owner, rid)
+    if protection is None:
         raise ValueError("This is not the terminal-owned trade.")
     row = native.get_run(rid)
     if not row or not native.get_strategy(row.strategy_id, owner) or row.stopped_at is not None:
@@ -26,17 +30,19 @@ def _owned(owner, trade_id):
     snap = state.get_run_state(rid)
     if not snap:
         raise ValueError("Native run recovery is incomplete. Reconcile before changing protection.")
-    return config, snap
+    return {**config, "protection": protection}, snap
 
 
 def evaluate_schedule(now, owned_state, config=None):
     if now.tzinfo is None:
         raise ValueError("Square-off requires a timezone-aware clock.")
+    if not owned_state or not owned_state.get("legs"):
+        return False
     clock = now.astimezone(IST)
-    return (
-        bool(owned_state and (owned_state.get("legs") or {}))
-        and clock.hour * 60 + clock.minute >= 929
-    )
+    entered = config.get("execute_at") if isinstance(config, dict) else None
+    day = datetime.fromisoformat(entered).astimezone(IST) if entered else clock
+    deadline = day.replace(hour=15, minute=29, second=0, microsecond=0)
+    return clock >= deadline
 
 
 def request_owned_exit(owner_id, trade_id, reason, request_id):
@@ -62,13 +68,22 @@ def request_owned_exit(owner_id, trade_id, reason, request_id):
 def observed_price(owner, symbol, exchange):
     from database.auth_db import get_auth_token
     from services.quotes_service import get_quotes
+    from services.depth_service import get_depth
+    from time import monotonic
 
     auth = get_auth_token(owner)
     if not auth:
         return None
-    ok, response, _ = get_quotes(symbol, exchange, auth_token=auth, broker="kotak")
-    data = response.get("data", {}) if ok else {}
-    value = data.get("bid") if exchange == "NFO" else data.get("ltp")
+    started = monotonic()
+    if exchange == "NFO":
+        ok, response, _ = get_depth(symbol, exchange, auth_token=auth, broker="kotak")
+        bids = response.get("data", {}).get("bids", []) if ok else []
+        value = bids[0].get("price") if bids and bids[0].get("quantity", 0) > 0 else None
+    else:
+        ok, response, _ = get_quotes(symbol, exchange, auth_token=auth, broker="kotak")
+        value = response.get("data", {}).get("ltp") if ok else None
+    if monotonic() - started > 5:
+        return None
     # Broker reads are used only inside the cash session; a last-known quote after close is not live.
     now = datetime.now(IST)
     if now.weekday() >= 5 or not 555 <= now.hour * 60 + now.minute < 930:
@@ -145,9 +160,8 @@ def update_protection(owner_id, trade_id, changes, *, quote_provider=None, now=N
             p[key] = str(v)
         if D(p.get("cash_activation", "1000")) <= D(p.get("cash_distance", "250")):
             raise ValueError("Cash trailing activation must exceed its distance.")
-        desk.configure(
-            owner_id, protection=p, status="Manual protection saved; exits remain managed."
-        )
+        desk.save_run_protection(owner_id, int(trade_id), p)
+        desk.configure(owner_id, status="Manual protection saved; exits remain managed.")
         return p
 
 
@@ -182,20 +196,22 @@ def day_performance(owner, day, mode=None):
     return net, count
 
 
-def run_schedule_once(owner_id, *, now=None):
+def run_schedule_once(owner_id, *, now=None, run_id=None):
     now = now or datetime.now(IST)
     config = desk.view(owner_id)
-    rid = config.get("run_id")
-    if rid and evaluate_schedule(now, state.get_run_state(rid)):
+    rid = run_id or config.get("run_id")
+    if rid and evaluate_schedule(
+        now, state.get_run_state(rid), desk.get_run_protection(owner_id, rid)
+    ):
         return request_owned_exit(
             owner_id, str(rid), "15:29 IST intraday square-off", f"schedule-{rid}"
         )
 
 
-def manage_once(owner_id, *, now=None, quote_provider=None):
+def manage_once(owner_id, *, now=None, quote_provider=None, run_id=None):
     now = now or datetime.now(IST)
     config = desk.view(owner_id)
-    rid = config.get("run_id")
+    rid = run_id or config.get("run_id")
     if not rid:
         return
     row = native.get_run(rid)
@@ -209,8 +225,8 @@ def manage_once(owner_id, *, now=None, quote_provider=None):
                     status="Owned run is flat; awaiting the next confirmed setup.",
                 )
         return
-    if evaluate_schedule(now, state.get_run_state(rid)):
-        return run_schedule_once(owner_id, now=now)
+    if evaluate_schedule(now, state.get_run_state(rid), desk.get_run_protection(owner_id, rid)):
+        return run_schedule_once(owner_id, now=now, run_id=rid)
     snap = state.get_run_state(rid)
     if not snap:
         desk.configure(
@@ -234,8 +250,7 @@ def manage_once(owner_id, *, now=None, quote_provider=None):
         fresh = state.get_run_state(rid)
         leg = (fresh or {}).get("legs", {}).get("1", {})
         if (
-            current.get("run_id") != rid
-            or not fresh
+            not fresh
             or fresh.get("stopping")
             or leg.get("position_ref") != position_ref
             or not leg.get("qty")
@@ -249,16 +264,69 @@ def manage_once(owner_id, *, now=None, quote_provider=None):
         net, _ = day_performance(owner_id, now.astimezone(IST).date(), mode=str(row.mode))
         # Current open entry costs are included once in running net by the core.
         net += estimate("BUY", D(str(leg["entry_avg"])), int(leg["qty"]))
-        p, reason = evaluate(current["protection"], leg, index, bid, net)
+        protection = desk.get_run_protection(owner_id, rid)
+        if protection is None:
+            return
+        p, reason = evaluate(protection, leg, index, bid, net)
         p["observed_at"] = now.isoformat()
         p["option_bid"] = str(bid) if bid is not None else None
-        desk.configure(owner_id, protection=p)
+        desk.save_run_protection(owner_id, rid, p)
         if reason:
             return request_owned_exit(owner_id, str(rid), reason, f"risk-{rid}")
 
 
+def manage_all_owned(owner_id, *, now=None, quote_provider=None, schedule_only=False):
+    c = desk.view(owner_id)
+    managed = desk.managed_run_ids(owner_id)
+    if any(rid != c.get("run_id") for rid in managed):
+        desk.configure(
+            owner_id,
+            activation="Stopped",
+            status="An older owned run requires reconciliation; new entries stopped, exact exits remain managed.",
+        )
+    for rid in managed:
+        if schedule_only:
+            run_schedule_once(owner_id, now=now, run_id=rid)
+        else:
+            manage_once(owner_id, now=now, quote_provider=quote_provider, run_id=rid)
+    # Clear a closed current pointer even when no active protection row remains.
+    if c.get("run_id") and c["run_id"] not in managed:
+        manage_once(owner_id, now=now, quote_provider=quote_provider)
+
+
 def recover_provider():
     for (owner,) in desk.db_session.query(desk.NeoDesk.owner).all():
+        c = desk.view(owner)
+        if c.get("pending") and not c.get("run_id") and c.get("strategy_id"):
+            strategy = native.get_strategy(c["strategy_id"], owner)
+            rid = strategy.current_run_id if strategy else None
+            row = native.get_run(rid) if rid else None
+            p = c.get("protection") or {}
+            claims = desk.db_session.query(desk.NeoClaim).filter_by(owner=owner, run_id=None).all()
+            matches = [
+                claim
+                for claim in claims
+                if claim.setup.get("execute_at") == p.get("execute_at")
+                and claim.setup.get("profile") == p.get("profile")
+            ]
+            orders = native.list_orders(rid) if rid else []
+            entries = [o for o in orders if o.get("kind") == "entry"]
+            exact = (
+                len(entries) == 1
+                and entries[0].get("symbol") == p.get("symbol")
+                and entries[0].get("exchange") == p.get("exchange")
+                and entries[0].get("action") == "BUY"
+                and int(entries[0].get("qty") or 0) == p.get("quantity")
+            )
+            if (
+                row
+                and row.stopped_at is None
+                and row.trigger_source == "neo_confirmed_setup"
+                and row.mode == p.get("mode")
+                and len(matches) == 1
+                and exact
+            ):
+                desk.bind(owner, matches[0].signal_key, rid, p)
         desk.configure(
             owner,
             activation="Stopped",
@@ -271,15 +339,10 @@ def management_pass(schedule_only=False):
     from utils.logging import get_logger
 
     try:
-        owners = [
-            owner
-            for (owner,) in desk.db_session.query(desk.NeoDesk.owner)
-            .filter(desk.NeoDesk.run_id.isnot(None))
-            .all()
-        ]
+        owners = [owner for (owner,) in desk.db_session.query(desk.NeoDesk.owner).all()]
         for owner in owners:
             try:
-                (run_schedule_once if schedule_only else manage_once)(owner)
+                manage_all_owned(owner, schedule_only=schedule_only)
             except Exception:
                 get_logger(__name__).exception("Neo Desk protection pass failed")
                 desk.db_session.rollback()
@@ -289,6 +352,10 @@ def management_pass(schedule_only=False):
                     status="Protection check failed. Inspect the native run and broker position immediately.",
                 )
     finally:
+        from .views import publish_owner
+
+        for owner in locals().get("owners", []):
+            publish_owner(owner)
         remove_all_scoped_sessions()
 
 

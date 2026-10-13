@@ -5,12 +5,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 from database.engine_factory import create_db_engine
-from utils.db_sessions import register_scoped_session
 
 engine = create_db_engine()
 db_session = scoped_session(sessionmaker(bind=engine))
 Base = declarative_base()
-register_scoped_session(__name__)
 
 
 class NeoDesk(Base):
@@ -35,6 +33,46 @@ class NeoClaim(Base):
     signal_key = Column(String(160), nullable=False)
     run_id = Column(Integer)
     setup = Column(JSON, nullable=False)
+
+
+class NeoRunProtection(Base):
+    """Original and ratcheted rules remain attached to the exact native run."""
+
+    __tablename__ = "neo_run_protection"
+    run_id = Column(Integer, primary_key=True)
+    owner = Column(String(100), nullable=False, index=True)
+    protection = Column(JSON, nullable=False)
+
+
+def get_run_protection(owner, run_id):
+    row = db_session.query(NeoRunProtection).filter_by(owner=owner, run_id=run_id).first()
+    return dict(row.protection) if row else None
+
+
+def save_run_protection(owner, run_id, protection):
+    row = db_session.get(NeoRunProtection, run_id)
+    if row and row.owner != owner:
+        raise ValueError("Run protection belongs to a different owner.")
+    if row:
+        row.protection = dict(protection)
+    else:
+        db_session.add(NeoRunProtection(run_id=run_id, owner=owner, protection=dict(protection)))
+    db_session.query(NeoDesk).filter_by(owner=owner, run_id=run_id).update(
+        {"protection": dict(protection)}
+    )
+    db_session.commit()
+
+
+def managed_run_ids(owner):
+    from database.strategy_module_db import SmStrategyRun
+
+    return [
+        rid
+        for (rid,) in db_session.query(NeoRunProtection.run_id)
+        .join(SmStrategyRun, SmStrategyRun.id == NeoRunProtection.run_id)
+        .filter(NeoRunProtection.owner == owner, SmStrategyRun.stopped_at.is_(None))
+        .all()
+    ]
 
 
 def init_db():
@@ -78,6 +116,17 @@ def claim(owner, key, setup, profile, mode):
         if changed != 1:
             db_session.rollback()
             return False
+        already = (
+            db_session.query(NeoClaim.id)
+            .filter(
+                NeoClaim.owner == owner,
+                NeoClaim.setup["execute_at"].as_string() == setup["execute_at"],
+            )
+            .first()
+        )
+        if already:
+            db_session.rollback()
+            return False
         db_session.add(NeoClaim(owner=owner, signal_key=key, setup=setup))
         db_session.commit()
         return True
@@ -96,11 +145,14 @@ def bind(owner, key, run_id, protection, error=None):
             "status": error or "Native entry submitted; awaiting execution facts.",
         }
     )
+    if run_id is not None:
+        row = db_session.get(NeoRunProtection, run_id)
+        if row and row.owner != owner:
+            raise ValueError("Native run is already bound to another owner.")
+        if row:
+            row.protection = dict(protection)
+        else:
+            db_session.add(
+                NeoRunProtection(run_id=run_id, owner=owner, protection=dict(protection))
+            )
     db_session.commit()
-
-
-def clear_owner(owner):
-    db_session.query(NeoClaim).filter_by(owner=owner).delete()
-    db_session.query(NeoDesk).filter_by(owner=owner).delete()
-    db_session.commit()
-    db_session.remove()

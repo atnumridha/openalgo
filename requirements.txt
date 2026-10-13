@@ -160,3 +160,5 @@ openscript==0.8.1
 litellm==1.104.0
 agno==3.0.5
 ddgs>=9.16.0
+
+gunicorn>=25.0,<26

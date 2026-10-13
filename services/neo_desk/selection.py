@@ -14,6 +14,7 @@ def select_contract(
     now,
     *,
     direction=None,
+    index_reference=None,
     recent_bars=None,
     brokerage=D(0),
 ):
@@ -78,12 +79,13 @@ def select_contract(
             (
                 abs(q.ask - 50),
                 q.ask - q.bid,
+                abs(c.strike - D(str(index_reference))) if index_reference is not None else D(0),
                 c.symbol,
                 Selection(True, c, q, c.lot_size, limit, cost, stop),
             )
         )
     return (
-        min(candidates, key=lambda x: x[:3])[-1]
+        min(candidates, key=lambda x: x[:4])[-1]
         if candidates
         else Selection(
             False, error="No option fits fresh premium, depth, lot, risk and trading-limit checks."

@@ -178,3 +178,37 @@ def test_quote_read_cannot_block_independent_squareoff(monkeypatch):
         finally:
             release.set()
         pending.result()
+
+
+def test_overdue_prior_session_squareoff_does_not_wait_until_today_afternoon():
+    from datetime import timedelta
+
+    assert evaluate_schedule(
+        when("09:15") + timedelta(days=1),
+        {"legs": {"1": {"qty": 65}}},
+        {"execute_at": when("09:45").isoformat()},
+    )
+
+
+def test_option_protection_requires_actual_bid_depth_not_ltp(monkeypatch):
+    from services.neo_desk.lifecycle import observed_price
+    import services.neo_desk.lifecycle as module
+
+    monkeypatch.setattr("database.auth_db.get_auth_token", lambda owner: "fixture")
+    monkeypatch.setattr(
+        "services.depth_service.get_depth",
+        lambda *a, **k: (True, {"data": {"bids": [], "ltp": 55}}, 200),
+    )
+
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return when("10:00")
+
+    monkeypatch.setattr(module, "datetime", Clock)
+    assert observed_price(OWNER, "OPTION", "NFO") is None
+    monkeypatch.setattr(
+        "services.depth_service.get_depth",
+        lambda *a, **k: (True, {"data": {"bids": [{"price": 54, "quantity": 65}], "ltp": 55}}, 200),
+    )
+    assert observed_price(OWNER, "OPTION", "NFO") == D(54)

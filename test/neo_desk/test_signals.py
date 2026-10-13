@@ -48,3 +48,33 @@ def test_donchian_repaired_trend_rejects():
     rows = bars("donchian_controls")
     rows[-3] = replace(rows[-3], repaired=True)
     assert evaluate_setup(rows, get_preset("donchian_controls")) is None
+
+
+def test_nonpositive_index_prices_never_form_a_setup():
+    rows = [
+        replace(b, open=b.open - 200, high=b.high - 200, low=b.low - 200, close=b.close - 200)
+        for b in bars()
+    ]
+    assert evaluate_setup(rows, get_preset("orb_trail")) is None
+
+
+def test_execution_bracket_anchors_to_fresh_index_reference():
+    from services.neo_desk.signals import anchor_setup
+
+    s = evaluate_setup(bars(), get_preset("orb_trail"))
+    risk = abs(s.index_reference - s.initial_stop)
+    anchored = anchor_setup(s, D(110))
+    assert anchored.index_reference == 110 and anchored.initial_stop == 110 - risk
+    assert anchored.target == 110 + risk * 6
+
+
+def test_retest_execution_recomputes_structural_risk_and_rejects_chasing():
+    from services.neo_desk.signals import anchor_setup
+
+    s = evaluate_setup(bars("price_retest"), get_preset("price_retest"))
+    anchored = anchor_setup(s, s.index_reference + D(".05"))
+    assert anchored.structure_stop == s.structure_stop
+    assert abs(anchored.target - anchored.index_reference) == 6 * abs(
+        anchored.initial_stop - anchored.index_reference
+    )
+    assert anchor_setup(s, D(110)) is None
