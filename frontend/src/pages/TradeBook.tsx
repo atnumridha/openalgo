@@ -1,3 +1,4 @@
+import { RecordedTradeHistory } from '@/components/neo-desk/RecordedTradeHistory'
 import {
   ArrowDown,
   ArrowUp,
@@ -293,6 +294,7 @@ export default function TradeBook() {
 
   return (
     <div className="space-y-6">
+      <RecordedTradeHistory />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

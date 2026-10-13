@@ -107,3 +107,34 @@ def unsubscribe_desk(_data=None):
     if owner:
         leave_room(room_for_owner(owner))
     return {"ok": True}
+
+@neo_desk_bp.get('/history')
+@authenticated
+def history():
+    from services.neo_desk.history import history_page
+    return jsonify(history_page(session['user'],request.args.get('symbol',''),request.args.get('start'),request.args.get('end'),request.args.get('cursor',0)))
+
+@neo_desk_bp.post('/history/import')
+@authenticated
+def history_import():
+    from services.neo_desk.history import import_csv
+    return jsonify(import_csv(session['user'],(request.get_json(silent=True) or {}).get('csv','')))
+
+@neo_desk_bp.post('/history/refresh')
+@authenticated
+def history_refresh():
+    from services.neo_desk.history import refresh_history
+    return jsonify(refresh_history(session['user']))
+
+@neo_desk_bp.get('/history/export')
+@authenticated
+def history_export():
+    from flask import Response
+    from services.neo_desk.history import export_csv
+    return Response(export_csv(session['user'],request.args.get('symbol',''),request.args.get('start'),request.args.get('end')),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=recorded-executions.csv'})
+
+@neo_desk_bp.get('/history/template')
+@authenticated
+def history_template():
+    from flask import Response
+    return Response('fill_id,order_id,symbol,exchange,product,side,quantity,price,time,fees\n',mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=execution-template.csv'})

@@ -7,7 +7,7 @@ from services.risk.index_options import IndexOptionRisk, evaluate_index_option
 from services.risk.option_costs import FeeSchedule, estimate_option_fees
 
 
-def evaluate(protection, leg, index_price, option_bid, day_net, brokerage=D(0)):
+def evaluate(protection, leg, index_price, option_bid, day_net, brokerage=D(10)):
     p = protection
     avg = D(str(leg["entry_avg"]))
     qty = int(leg["qty"])

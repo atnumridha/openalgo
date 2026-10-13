@@ -1,3 +1,4 @@
+import { RecordedTradeHistory } from '@/components/neo-desk/RecordedTradeHistory'
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -461,6 +462,7 @@ export default function PnLTracker() {
 
   return (
     <div className="container mx-auto py-6 px-4">
+      <RecordedTradeHistory />
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
