@@ -5,7 +5,6 @@ import { useSocketContext } from '@/components/socket/SocketProvider'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 
 function message(error: unknown) {
@@ -39,7 +38,6 @@ function EnabledNeoControls() {
 
   const busy = useRef(false)
   const [error, setError] = useState<string | null>(null)
-  const [confirmed, setConfirmed] = useState(false)
   const query = useQuery({
     queryKey: ['neo-desk'],
     queryFn: neoDeskApi.state,
@@ -47,7 +45,7 @@ function EnabledNeoControls() {
   })
   const change = useMutation({
     mutationFn: ({ action, profile }: { action?: string; profile?: string }) =>
-      profile ? neoDeskApi.settings(profile) : neoDeskApi.command(action || 'stop', confirmed),
+      profile ? neoDeskApi.settings(profile) : neoDeskApi.command(action || 'stop', query.data?.mode === 'live' && action === 'start'),
     onSuccess: (data) => {
       client.setQueryData(['neo-desk'], data)
       setError(null)
@@ -135,22 +133,10 @@ function EnabledNeoControls() {
                 Owned run <strong>{d.run_id ?? 'Flat'}</strong>
               </span>
             </div>
-            {d.mode === 'live' && d.activation !== 'Active' ? (
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="neo-confirm-live"
-                  checked={confirmed}
-                  onCheckedChange={(v) => setConfirmed(v === true)}
-                />
-                <Label htmlFor="neo-confirm-live">
-                  Allow new real option orders under these controls
-                </Label>
-              </div>
-            ) : null}
             <div className="flex flex-wrap gap-2">
               <Button
                 disabled={
-                  change.isPending || d.activation === 'Active' || (d.mode === 'live' && !confirmed)
+                  change.isPending || d.activation === 'Active'
                 }
                 variant={d.mode === 'live' ? 'destructive' : 'default'}
                 onClick={() => command('start')}
@@ -169,6 +155,7 @@ function EnabledNeoControls() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
+              {d.mode === 'live' ? 'Start Live authorizes new real option orders under the displayed controls. ' : ''}
               Stopping entries keeps owned stops and scheduled exits managed. Trading allowance
               comes from the broker; chart choices do not change the 15-minute execution rules.
             </p>
