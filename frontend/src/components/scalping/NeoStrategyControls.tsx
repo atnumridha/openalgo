@@ -80,6 +80,11 @@ function EnabledNeoControls() {
             </Button>
           </div>
         ) : null}
+        {d?.management && !d.management.ready ? (
+          <p role="alert" className="text-destructive">
+            {d.management.message}
+          </p>
+        ) : null}
         {d ? (
           <>
             <div className="flex flex-wrap items-center gap-2">

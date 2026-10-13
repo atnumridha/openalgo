@@ -47,6 +47,14 @@ def run_replay(dataset, request):
     cash = request.initial_cash
     trades = []
     skipped = []
+    discovered_gaps = set()
+    if not dataset.calendar:
+        discovered_gaps.add("No recorded trading dates in this dataset.")
+    else:
+        if request.start < min(dataset.calendar):
+            discovered_gaps.add("Requested dates begin before the recorded archive: " + min(dataset.calendar).isoformat())
+        if request.end > max(dataset.calendar):
+            discovered_gaps.add("Requested dates end after the recorded archive: " + max(dataset.calendar).isoformat())
     equity = []
     drawdown = D(0)
     peak = cash
@@ -70,6 +78,7 @@ def run_replay(dataset, request):
             continue
         next_index = lookup.get(now)
         if not next_index or next_index.repaired:
+            discovered_gaps.add("Missing/repaired current index observation at " + now.isoformat())
             skipped.append({"time": now.isoformat(), "reason": "Missing current index observation"})
             continue
         setup = anchor_setup(setup, next_index.open)
@@ -83,16 +92,23 @@ def run_replay(dataset, request):
                 or c.expiry < day
                 or c.option_type != setup.direction
                 or c.lot_size != 65
-                or not b
-                or b.repaired
-                or abs(b.open - 50) > 5
             ):
+                continue
+            if not b or b.repaired:
+                discovered_gaps.add(
+                    "Missing/repaired option entry observations at " + now.isoformat()
+                )
+                continue
+            if abs(b.open - 50) > 5:
                 continue
             if preset.controlled and any(
                 (now - timedelta(minutes=n)) not in dataset.options[symbol]
                 or dataset.options[symbol][now - timedelta(minutes=n)].repaired
                 for n in range(1, 6)
             ):
+                discovered_gaps.add(
+                    "Missing/repaired recent option observations at " + now.isoformat()
+                )
                 continue
             entry = ((b.open + D(".50")) / c.tick_size).to_integral_value(
                 rounding=ROUND_CEILING
@@ -158,19 +174,10 @@ def run_replay(dataset, request):
             "status": "open",
             "entry_fees": str(estimate("BUY", entry, qty)),
             "trail": [],
-            "option_bars": [
-                {
-                    "time": int(first.time.timestamp()),
-                    "open": float(first.open),
-                    "high": float(first.high),
-                    "low": float(first.low),
-                    "close": float(first.close),
-                    "volume": float(first.volume),
-                }
-            ],
+            "option_bars": [],
             "index_bars": [],
         }
-        stamp = now + timedelta(minutes=1)
+        stamp = now
         deadline = now.replace(hour=15, minute=29)
         latest_index = setup.index_reference
         resolved = False
@@ -182,7 +189,7 @@ def run_replay(dataset, request):
                 blocked = True
                 break
             finished_index = lookup.get(stamp - timedelta(minutes=15))
-            if finished_index and not finished_index.repaired:
+            if stamp > now and finished_index and not finished_index.repaired:
                 latest_index = finished_index.close
             trade["option_bars"].append(
                 {
@@ -267,6 +274,7 @@ def run_replay(dataset, request):
         and request.start >= min(dataset.calendar)
         and request.end <= max(dataset.calendar)
         and not dataset.gaps
+        and not discovered_gaps
     )
     return {
         "dataset": dataset.identity,
@@ -288,7 +296,7 @@ def run_replay(dataset, request):
             "complete": complete,
             "dates": [d.isoformat() for d in covered],
             "source": dataset.source,
-            "gaps": dataset.gaps,
+            "gaps": dataset.gaps + sorted(discovered_gaps),
         },
         "assumptions": [
             "OHLC observations proxy execution; buy open + ₹0.50, sell conservative observed low/open - ₹0.50. Historical bid/ask, depth and exact execution order are unavailable.",

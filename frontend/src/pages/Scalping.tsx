@@ -1,3 +1,4 @@
+import { activeExpiries, nearestExpiry, underlyingPriceExchange } from '@/lib/neoOptionSelection'
 import { MarketOverview } from '@/components/neo-desk/MarketOverview'
 import { ExecutionFeedback } from '@/components/neo-desk/ExecutionFeedback'
 import { OwnedTradeControls } from '@/components/neo-desk/OwnedTradeControls'
@@ -401,10 +402,10 @@ export default function Scalping() {
     queryFn: () => scalpingApi.getExpiry(underlying, exchange, 'options'),
     enabled: optionsMode && !!underlying,
   })
-  const expiries = expiryResp?.data ?? []
+  const expiries = useMemo(() => activeExpiries(expiryResp?.data ?? []), [expiryResp])
   useEffect(() => {
-    if (optionsMode && underlying && !expiry && expiries.length > 0) {
-      setExpiry(expiries[0]) // nearest expiry
+    if (optionsMode && underlying && !expiries.includes(expiry) && expiries.length > 0) {
+      setExpiry(nearestExpiry(expiries)) // nearest active expiry, independent of display order
     }
   }, [expiries, underlying, expiry, optionsMode])
 
@@ -418,7 +419,7 @@ export default function Scalping() {
   const foExchange = chainResp?.fo_exchange ?? exchange
   // Underlying ticker subscription target (index/stock spot, or the future for MCX/CDS).
   const underlyingSym = chainResp?.underlying_symbol ?? underlying
-  const underlyingExch = chainResp?.underlying_exchange ?? exchange
+  const underlyingExch = underlyingPriceExchange(underlying, exchange, chainResp?.underlying_exchange)
 
   // Futures contracts (per expiry) for the derivative underlying.
   const { data: futResp } = useQuery({
@@ -828,7 +829,7 @@ export default function Scalping() {
     async (leg: SelectedLeg | null, action: ScalpingAction) => {
       const s = stateRef.current
       if (!s.armed) {
-        showToast.error('One-Click is disarmed — enable it to trade', 'orders')
+        showToast.error('One-Click is off. Switch it on to place manual orders.', 'orders')
         return
       }
       if (!leg) {
@@ -1058,7 +1059,7 @@ export default function Scalping() {
             <span className="font-mono text-xs text-muted-foreground">order {lastLatencyMs}ms</span>
           )}
           <Badge variant={armed ? 'destructive' : 'secondary'}>
-            One-Click {armed ? 'ARMED' : 'off'}
+            One-Click {armed ? 'ON' : 'off'}
           </Badge>
           <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>
         </div>
@@ -1195,7 +1196,7 @@ export default function Scalping() {
               <div className="space-y-1">
                 <label className="text-sm text-muted-foreground">Expiry</label>
                 <Select value={expiry} onValueChange={setExpiry} disabled={!underlying}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="NIFTY expiry">
                     <SelectValue placeholder="Select expiry" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1211,7 +1212,7 @@ export default function Scalping() {
               <div className="space-y-1">
                 <label className="text-sm text-muted-foreground">Call Strike</label>
                 <Select value={ceStrike} onValueChange={setCeStrike} disabled={chain.length === 0}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="CE strike">
                     <SelectValue placeholder="CE strike" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1227,7 +1228,7 @@ export default function Scalping() {
               <div className="space-y-1">
                 <label className="text-sm text-muted-foreground">Put Strike</label>
                 <Select value={peStrike} onValueChange={setPeStrike} disabled={chain.length === 0}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="PE strike">
                     <SelectValue placeholder="PE strike" />
                   </SelectTrigger>
                   <SelectContent>

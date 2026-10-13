@@ -1,3 +1,4 @@
+import { useThemeStore } from '@/stores/themeStore'
 import { useQuery } from '@tanstack/react-query'
 import { neoOverviewApi } from '@/api/neoOverview'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -6,8 +7,9 @@ export function ExecutionFeedback() {
   return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? <EnabledFeedback /> : null
 }
 function EnabledFeedback() {
+  const mode = useThemeStore(s => s.appMode)
   const q = useQuery({
-      queryKey: ['neo-health'],
+      queryKey: ['neo-health', mode],
       queryFn: neoOverviewApi.health,
       refetchInterval: 15000,
     }),

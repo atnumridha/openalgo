@@ -93,6 +93,12 @@ def _execute(owner, identity, request):
 
 
 def submit_job(owner, body):
+    from utils.runtime import worker_class
+
+    if worker_class() == "eventlet":
+        raise ValueError(
+            "Native backtests require the gthread worker; replay refused to preserve protection responsiveness."
+        )
     request = parse_request(body)
     db.init_db()
     identity = sha256((owner + "\0" + body["request_id"]).encode()).hexdigest()
@@ -111,7 +117,14 @@ def submit_job(owner, body):
     except IntegrityError:
         db.db_session.rollback()
         slots.release()
-        return get_job(owner, identity)
+        result = get_job(owner, identity)
+        if result["request"] != body:
+            raise ValueError("Request identity conflicts with a different replay.") from None
+        return result
+    except Exception:
+        db.db_session.rollback()
+        slots.release()
+        raise
     try:
         pool.submit(_execute, owner, identity, request)
     except Exception:

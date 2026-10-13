@@ -88,3 +88,10 @@ def test_replay_prefers_two_lots_and_never_exceeds_two(compound):
 def test_unresolved_trade_keeps_actual_entry_observation_for_chart():
     report = run_replay(fixture(missing=True), request())
     assert report["trades"][0]["option_bars"][0]["time"] == int(when().timestamp())
+
+
+def test_one_year_missing_date_coverage_is_explicit_in_result():
+    report = run_replay(fixture(), replace(request(), start=date(2025, 10, 14)))
+    assert not report["coverage"]["complete"]
+    assert report["net_complete"] is None
+    assert any("Requested dates begin before" in g for g in report["coverage"]["gaps"])

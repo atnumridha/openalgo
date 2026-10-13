@@ -3,6 +3,8 @@ export interface NeoDeskView {
   profile: string
   activation: string
   mode: string
+  originating_mode?: string
+  management?: { ready: boolean; message: string | null }
   status: string
   can_edit: boolean
   run_id: number | null

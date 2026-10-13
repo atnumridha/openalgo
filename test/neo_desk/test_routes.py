@@ -150,3 +150,20 @@ def test_optional_provider_routes_are_disabled_in_a_normal_instance(client, monk
         ).status_code
         == 404
     )
+
+
+@pytest.mark.parametrize("profile", ["orb_trail", "orb_controls", "donchian_controls"])
+def test_supported_live_presets_start_via_authenticated_native_controls_without_placing_an_order(client, monkeypatch, profile):
+    c, headers = client
+    desk.configure(OWNER, profile=profile, activation="Stopped")
+    monkeypatch.setattr("services.neo_desk.service.get_analyze_mode", lambda: False)
+    sent = []
+    monkeypatch.setattr("services.strategy_module.order_dispatch.dispatch_order", lambda **kwargs: sent.append(kwargs))
+    refused = c.post("/neodesk/api/execution/start", json={"request_id": "live-unconfirmed"}, headers=headers)
+    assert refused.status_code == 400 and desk.view(OWNER)["activation"] == "Stopped"
+    response = c.post("/neodesk/api/execution/start", json={"request_id": "live-start-confirmed", "confirm_live": True}, headers=headers)
+    assert response.status_code == 200
+    assert response.json["mode"] == "live" and response.json["activation"] == "Active"
+    assert sent == []
+    stopped = c.post("/neodesk/api/execution/stop", json={"request_id": "live-stop"}, headers=headers)
+    assert stopped.status_code == 200 and stopped.json["activation"] == "Stopped"

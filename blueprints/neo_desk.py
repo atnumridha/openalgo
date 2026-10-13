@@ -122,6 +122,7 @@ def history():
             request.args.get("start"),
             request.args.get("end"),
             request.args.get("cursor", 0),
+            request.args.get("cost_plan", "trade_free"),
         )
     )
 

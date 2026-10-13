@@ -69,8 +69,8 @@ function EnabledControls() {
         {rid && leg ? (
           <>
             <p className="text-sm">
-              {String(p.symbol || leg.symbol)} · {d.mode} · {String(leg.qty || 0)} confirmed units ·
-              run {rid}
+              {String(p.symbol || leg.symbol)} · {d.originating_mode || d.mode} ·{' '}
+              {String(leg.qty || 0)} confirmed units · run {rid}
             </p>
             <div className="flex flex-wrap gap-6">
               <p>

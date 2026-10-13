@@ -136,6 +136,21 @@ export default function NeoBacktests() {
               />
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={!chosen} onClick={() => {
+              if (!chosen) return
+              const end = new Date(chosen.end + 'T12:00:00Z')
+              end.setUTCDate(end.getUTCDate()-29)
+              setStart(end.toISOString().slice(0,10));setEnd(chosen.end)
+            }}>Last 30 archive days</Button>
+            <Button variant="outline" disabled={!chosen} onClick={() => {
+              if (!chosen) return
+              const end = new Date(chosen.end + 'T12:00:00Z')
+              end.setUTCFullYear(end.getUTCFullYear()-1);end.setUTCDate(end.getUTCDate()+1)
+              setStart(end.toISOString().slice(0,10));setEnd(chosen.end)
+            }}>Last year ending at archive date</Button>
+          </div>
+          {chosen && (start < chosen.start || end > chosen.end) ? <p role="status" className="text-sm">The selected range extends beyond the archive. Only recorded dates can replay; this will be an incomplete result.</p> : null}
           <p>Initial research capital ₹10,000 · up to two whole lots per entry</p>
           <label className="flex gap-2 text-sm">
             <input
@@ -203,6 +218,19 @@ export default function NeoBacktests() {
               {report.unresolved_count} unresolved trades. Incomplete P&L cannot establish a winning
               strategy.
             </p>
+            {report.coverage.gaps.length ? (
+              <details>
+                <summary>Data gaps ({report.coverage.gaps.length})</summary>
+                <ul className="list-disc pl-5 text-xs">
+                  {report.coverage.gaps.slice(0, 20).map((g) => (
+                    <li key={g}>{g}</li>
+                  ))}
+                </ul>
+                {report.coverage.gaps.length > 20 ? (
+                  <p>Showing the first 20 gaps. Complete-period P&amp;L remains unavailable.</p>
+                ) : null}
+              </details>
+            ) : null}
             <ul className="list-disc pl-5 text-xs text-muted-foreground">
               {report.assumptions.map((s) => (
                 <li key={s}>{s}</li>

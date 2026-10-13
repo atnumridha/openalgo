@@ -3,11 +3,12 @@
 import csv
 import io
 import json
+from decimal import Decimal as D
 from hashlib import sha256
 
 from database import neo_history_db as db
 
-from .fees import FeePlan, estimate_charges
+from .fees import FeePlan, estimate_charges, fill_key
 from .history_accounting import IMMUTABLE, MAX_BYTES, MAX_ROWS, TradeArchive, _normalized
 
 
@@ -65,7 +66,9 @@ class NativeAccounting(TradeArchive):
         )
 
 
-def history_page(owner_id, symbol="", start=None, end=None, cursor=0):
+def history_page(owner_id, symbol="", start=None, end=None, cursor=0, cost_plan="trade_free"):
+    if cost_plan not in ("free_offer", "trade_free"):
+        raise ValueError("Choose the free-offer or Trade Free fee plan estimate.")
     account = NativeAccounting(owner_id)
     result = account.page(offset=int(cursor), symbol=symbol, start=start, end=end)
     summary = result["summary"]
@@ -80,7 +83,24 @@ def history_page(owner_id, symbol="", start=None, end=None, cursor=0):
         and (not start or f["trade_date"] >= start)
         and (not end or f["trade_date"] <= end)
     ]
-    estimate = estimate_charges(fills, None, FeePlan())
+    plan = FeePlan(brokerage=D(0) if cost_plan == "free_offer" else D(10))
+    # Pairing retains the full archive even when the exit-date filter excludes entry fills.
+    all_fills = account.fills()
+    estimate = estimate_charges(fills, None, plan)
+    all_estimate = estimate_charges(all_fills, None, plan)
+    by_id = {fill_key(f): f for f in all_fills}
+    allocated = all_estimate.get("per_fill", {})
+    for row in result["rows"]:
+        portions = []
+        for side in ("entry", "exit"):
+            key = "|".join(str(row[k]) for k in (side + "_trade_date", "exchange", side + "_fill_id"))
+            f = by_id.get(key)
+            if f and key in allocated:
+                portions.append(D(allocated[key]) * row["quantity"] / f["quantity"])
+        charge = sum(portions) if len(portions) == 2 else None
+        row["estimated_fees"] = str(charge) if charge is not None else None
+        row["estimated_net_pnl"] = str(D(row["gross_pnl"]) - charge) if row["gross_pnl"] is not None and charge is not None else None
+    estimate["cost_plan"] = cost_plan
     summary["estimated_fees"] = estimate["total"] if n else None
     result["fee_estimate"] = estimate
     if not n:

@@ -1,7 +1,8 @@
 """Owner partitioned execution facts, using native engine/session lifecycle."""
 
-from sqlalchemy import Column, String, JSON
+from sqlalchemy import JSON, Column, String
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
+
 from database.engine_factory import create_db_engine
 
 engine = create_db_engine()

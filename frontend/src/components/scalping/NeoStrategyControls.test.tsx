@@ -75,3 +75,19 @@ describe('native preset controls', () => {
     expect(screen.getByRole('button', { name: 'Start Sandbox' })).toBeEnabled()
   })
 })
+
+
+it('offers plain Start Live, enables it after real-order consent and displays the authoritative Active result', async () => {
+  vi.stubEnv('VITE_NEO_DESK_ENABLED','true')
+  vi.mocked(neoDeskApi.state).mockResolvedValue({...data,mode:'live'})
+  vi.mocked(neoDeskApi.command).mockResolvedValue({...data,mode:'live',activation:'Active'})
+  mount()
+  const start = await screen.findByRole('button',{name:'Start Live'})
+  expect(start).toBeDisabled()
+  fireEvent.click(screen.getByRole('checkbox',{name:'Allow new real option orders under these controls'}))
+  expect(start).toBeEnabled()
+  fireEvent.click(start)
+  await waitFor(() => expect(neoDeskApi.command).toHaveBeenCalledWith('start',true))
+  await waitFor(() => expect(screen.getByRole('button',{name:'Stop entries'})).toBeEnabled())
+  expect(screen.queryByText(/arming|armed/i)).not.toBeInTheDocument()
+})

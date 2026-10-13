@@ -14,10 +14,19 @@ function EnabledHistory() {
     [end, setEnd] = useState(''),
     [cursor, setCursor] = useState(0),
     [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+    [busy, setBusy] = useState(false),
+    [costPlan, setCostPlan] = useState(() => {
+      try {
+        return localStorage.getItem('neo.history.costPlan') === 'trade_free'
+          ? 'trade_free'
+          : 'free_offer'
+      } catch {
+        return 'free_offer'
+      }
+    })
   const q = useQuery({
-    queryKey: ['neo-history', symbol, start, end, cursor],
-    queryFn: () => neoReportsApi.history(symbol, start, end, cursor),
+    queryKey: ['neo-history', symbol, start, end, cursor, costPlan],
+    queryFn: () => neoReportsApi.history(symbol, start, end, cursor, costPlan),
   })
   const d = q.data
   async function action(fn: () => Promise<unknown>) {
@@ -87,6 +96,48 @@ function EnabledHistory() {
               className="h-10 rounded border bg-background px-3"
             />
           </div>
+          <div>
+            <Label htmlFor="history-plan">Charge estimate plan</Label>
+            <select
+              id="history-plan"
+              className="h-10 rounded border bg-background px-3"
+              value={costPlan}
+              onChange={(e) => {
+                setCostPlan(e.target.value)
+                try {
+                  localStorage.setItem('neo.history.costPlan', e.target.value)
+                } catch {
+                  /* Browser storage may be disabled. */
+                }
+              }}
+            >
+              <option value="free_offer">Active free-brokerage offer · estimate</option>
+              <option value="trade_free">Trade Free · ₹10 per executed order</option>
+            </select>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => {
+              const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(
+                new Date()
+              )
+              setStart(today)
+              setEnd(today)
+              setCursor(0)
+            }}
+          >
+            Today
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setStart('')
+              setEnd('')
+              setCursor(0)
+            }}
+          >
+            All recorded dates
+          </Button>
           <Button disabled={busy} onClick={() => action(neoReportsApi.refresh)}>
             Refresh broker fills
           </Button>
@@ -115,7 +166,15 @@ function EnabledHistory() {
               ].map(([label, value]) => (
                 <div key={label!} className="rounded border p-3">
                   <p className="text-xs text-muted-foreground">{label}</p>
-                  <strong className="font-mono">{amount(value)}</strong>
+                  <strong className="font-mono">
+                    {value != null
+                      ? amount(value)
+                      : label === 'Actual fees paid'
+                        ? 'Not reported by Kotak'
+                        : label === 'Net P&L after actual fees'
+                          ? 'Waiting for paid charges'
+                          : 'No resolved values'}
+                  </strong>
                 </div>
               ))}
             </div>
@@ -123,6 +182,20 @@ function EnabledHistory() {
               {d.summary.gross_known_count ?? 0} / {d.summary.closed_count ?? 0} matched closes have
               resolved gross P&L; {d.summary.fees_known_fill_count} / {d.summary.fill_count} fills
               have reported paid charges.
+            </p>
+            <p className="text-sm">
+              Estimate covers {d.fee_estimate.fill_count ?? d.summary.fill_count} executions in{' '}
+              {d.fee_estimate.executed_order_count ?? 'the recorded'} executed orders
+              {d.fee_estimate.recorded_dates?.length
+                ? ` · ${d.fee_estimate.recorded_dates.join(' to ')}`
+                : ''}
+              . Zero-fill cancelled orders are excluded; filled portions of cancelled orders remain
+              included.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Gross P&L excludes fees. The table's estimated net subtracts estimated charges; actual
+              paid fees and actual net require broker reports. Same-second fills at different prices
+              need execution sequence to establish exact FIFO P&L.
             </p>
             <FeeBreakdown {...d.fee_estimate} />
             <div className="overflow-auto">
@@ -139,8 +212,9 @@ function EnabledHistory() {
                       'Qty',
                       'Prices',
                       'Gross P&L',
-                      'Actual fees',
-                      'Net P&L',
+                      'Estimated charges',
+                      'Estimated net P&L',
+                      'Actual paid fees',
                     ].map((h) => (
                       <th key={h} className="p-2 text-left">
                         {h}
@@ -154,7 +228,15 @@ function EnabledHistory() {
                       <td className="p-2">
                         {row.symbol}
                         <br />
-                        <span className="text-xs text-muted-foreground">{row.status}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {row.status === 'ambiguous_execution_order'
+                            ? 'Execution sequence unresolved'
+                            : row.status === 'unresolved_opening_inventory'
+                              ? 'Opening inventory missing'
+                              : row.status === 'partial_close'
+                                ? 'Partial close'
+                                : 'Closed'}
+                        </span>
                       </td>
                       <td className="p-2">
                         {new Date(row.entry_time).toLocaleString('en-IN', {
@@ -169,9 +251,32 @@ function EnabledHistory() {
                       <td>
                         {row.entry_price} → {row.exit_price}
                       </td>
-                      <td>{amount(row.gross_pnl)}</td>
-                      <td>{amount(row.fees)}</td>
-                      <td>{amount(row.net_pnl)}</td>
+                      <td>
+                        {row.gross_pnl == null
+                          ? row.status === 'ambiguous_execution_order'
+                            ? 'Needs fill sequence'
+                            : 'Needs opening inventory'
+                          : amount(row.gross_pnl)}
+                      </td>
+                      <td>
+                        {row.estimated_fees == null
+                          ? 'Needs fee estimate'
+                          : amount(row.estimated_fees)}
+                      </td>
+                      <td>
+                        {row.estimated_net_pnl == null
+                          ? 'Needs resolved gross P&L'
+                          : amount(row.estimated_net_pnl)}
+                      </td>
+                      <td>
+                        {row.fees == null ? (
+                          <span title="The Trade API does not report paid charges">
+                            Not reported
+                          </span>
+                        ) : (
+                          amount(row.fees)
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

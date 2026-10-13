@@ -80,3 +80,9 @@ def contract(side="CE", **kw):
 def quote(c=None, **kw):
     c = c or contract()
     return replace(Quote(c.symbol, D("49.8"), D("50.2"), 65, 65, when(), when()), **kw)
+
+
+@pytest.fixture(autouse=True)
+def healthy_management_fixture(monkeypatch):
+    # Unit tests isolate the market/host boundary; management failure has dedicated regressions.
+    monkeypatch.setattr("services.neo_desk.service.management_ready", lambda: True)

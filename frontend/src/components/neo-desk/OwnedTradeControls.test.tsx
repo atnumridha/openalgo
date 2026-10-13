@@ -5,14 +5,12 @@ import { OwnedTradeControls } from './OwnedTradeControls'
 import { neoDeskApi } from '@/api/neoDesk'
 vi.mock('@/api/neoDesk', () => ({
   neoDeskApi: {
-    state: vi
-      .fn()
-      .mockResolvedValue({
-        run_id: 5,
-        mode: 'sandbox',
-        protection: { symbol: 'PE', gross_open: '300', net_open_estimate: '270' },
-        owned: { legs: [{ qty: 20, entry_avg: 50 }] },
-      }),
+    state: vi.fn().mockResolvedValue({
+      run_id: 5,
+      mode: 'sandbox',
+      protection: { symbol: 'PE', gross_open: '300', net_open_estimate: '270' },
+      owned: { legs: [{ qty: 20, entry_avg: 50 }] },
+    }),
     close: vi.fn().mockResolvedValue({ ok: true }),
     protection: vi.fn().mockRejectedValue(new Error('Stop cannot loosen')),
   },
@@ -38,4 +36,23 @@ it('requires explicit owned square-off and keeps premium edits tied to exact tra
     5,
     expect.objectContaining({ option_stop: '45' })
   )
+})
+
+it('labels the immutable Live position mode when new entries use Sandbox', async () => {
+  vi.stubEnv('VITE_NEO_DESK_ENABLED', 'true')
+  vi.mocked(neoDeskApi.state).mockResolvedValueOnce({
+    run_id: 7,
+    mode: 'sandbox',
+    originating_mode: 'live',
+    protection: { symbol: 'PE' },
+    owned: { legs: [{ qty: 65 }] },
+  } as unknown as Awaited<ReturnType<typeof neoDeskApi.state>>)
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <OwnedTradeControls />
+    </QueryClientProvider>
+  )
+  expect(await screen.findByText(/PE.*live.*65 confirmed units/)).toBeVisible()
 })

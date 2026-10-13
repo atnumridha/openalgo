@@ -55,7 +55,10 @@ def request_owned_exit(owner_id, trade_id, reason, request_id):
             return {"ok": False, "error": str(e)}
         # stop_run cancels working entry remainders and claims only exact confirmed exposure.
         # Its native claim and originating-mode dispatcher handle duplicate/refused/late fills.
-        result = engine.stop_run(int(trade_id), owner_id, reason=reason)
+    result = engine.stop_run(int(trade_id), owner_id, reason=reason)
+    with owner_locks.hold(owner_id):
+        if desk.view(owner_id).get("run_id") != int(trade_id):
+            return result
         desk.configure(
             owner_id,
             status=reason
@@ -271,8 +274,8 @@ def manage_once(owner_id, *, now=None, quote_provider=None, run_id=None):
         p["observed_at"] = now.isoformat()
         p["option_bid"] = str(bid) if bid is not None else None
         desk.save_run_protection(owner_id, rid, p)
-        if reason:
-            return request_owned_exit(owner_id, str(rid), reason, f"risk-{rid}")
+    if reason:
+        return request_owned_exit(owner_id, str(rid), reason, f"risk-{rid}")
 
 
 def manage_all_owned(owner_id, *, now=None, quote_provider=None, schedule_only=False):
@@ -330,6 +333,9 @@ def recover_provider():
         desk.configure(
             owner,
             activation="Stopped",
+            settings={
+                k: v for k, v in c["settings"].items() if k not in ("host_command", "host_action")
+            },
             status="Application restarted; owned exits restored, new entries require Start.",
         )
 
@@ -356,10 +362,64 @@ def management_pass(schedule_only=False):
 
         for owner in locals().get("owners", []):
             publish_owner(owner)
+        from time import monotonic
+
+        _management_beats[
+            "neo-independent-squareoff" if schedule_only else "neo-owned-protection"
+        ] = monotonic()
         remove_all_scoped_sessions()
 
 
+_management_initialized = False
+_management_error = None
+_management_beats = {}
+
+
+def management_ready():
+    from time import monotonic
+
+    from services.strategy_module.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+    if not _management_initialized or scheduler is None or scheduler.state != 1:
+        return False
+    for name in ("neo-owned-protection", "neo-independent-squareoff"):
+        job = scheduler.get_job(name)
+        if job is None or job.func is not management_pass or job.next_run_time is None:
+            return False
+        if monotonic() - _management_beats.get(name, 0) > 10:
+            return False
+    return True
+
+
+def management_status():
+    ready = management_ready()
+    return {
+        "ready": ready,
+        "message": None
+        if ready
+        else (
+            _management_error
+            or "Owned protection jobs unavailable. Entries must remain stopped; inspect any broker exposure."
+        ),
+    }
+
+
 def start_management():
+    global _management_initialized, _management_error
+    _management_initialized = False
+    _management_error = "Owned protection did not initialize. Check native logs and restart the service before new entries."
+    _register_management()
+    from time import monotonic
+
+    _management_beats.update(
+        {name: monotonic() for name in ("neo-owned-protection", "neo-independent-squareoff")}
+    )
+    _management_initialized = True
+    _management_error = None
+
+
+def _register_management():
     from services.strategy_module.scheduler import get_scheduler
 
     desk.init_db()

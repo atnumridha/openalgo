@@ -1,3 +1,4 @@
+import { NeoTradingTools } from '@/components/neo-desk/NeoTradingTools'
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
@@ -1436,6 +1437,7 @@ function TradingWorkspace({ account }: { account: string | null }) {
           )}
         </div>
         <div ref={setToolbarHost} className="min-w-0 shrink-0" data-workspace-toolbar />
+        {import.meta.env.VITE_NEO_DESK_ENABLED === 'true' && apiKey && wsUrl && <NeoTradingTools target={panelTarget} revision={chartRevision} />}
         <main className="flex min-h-0 flex-1" inert={workspace.pending ? true : undefined}>
           {showRail && apiKey && wsUrl && (
             <DrawingRail

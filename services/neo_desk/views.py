@@ -17,6 +17,7 @@ def desk_view(owner, host):
         **{k: v for k, v in c.items() if k != "owner"},
         "can_edit": not c["run_id"]
         and not c["pending"]
+        and not c["settings"].get("host_command")
         and c["activation"] == "Stopped"
         and not desk.managed_run_ids(owner),
         "entries_today": count,

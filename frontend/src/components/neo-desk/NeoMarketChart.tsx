@@ -60,6 +60,7 @@ export function NeoMarketChart({
   }, [enabled])
   useEffect(() => {
     if (!host.current || !symbol) return
+    setError('')
     let disposed = false
     let instance: Chart | null = null
     let inflight = false

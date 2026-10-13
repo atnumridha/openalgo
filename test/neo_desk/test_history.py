@@ -87,3 +87,35 @@ def test_broker_fill_time_takes_precedence_over_order_exchange_time():
     raw = {"flDt": "13-Oct-2026", "flTm": "14:56:32", "exTm": "13-Oct-2026 14:55:40"}
     assert broker_rows([raw])[0]["time"] == "13-Oct-2026 14:56:32"
     assert "exTm" not in broker_rows([raw])[0]
+
+
+def test_free_offer_estimate_has_zero_brokerage_but_keeps_taxes_and_does_not_claim_paid_fees():
+    ingest_fills(OWNER, [fill("offer-buy", fees=None), fill("offer-sell", "SELL", price="60", fees=None, time="2026-10-09T11:00:00+05:30")])
+    result = history_page(OWNER, cost_plan="free_offer")
+    assert D(result["fee_estimate"]["breakdown"]["brokerage"]) == 0
+    assert D(result["summary"]["estimated_fees"]) > 0
+    assert result["summary"]["actual_fees"] is None
+    assert "assum" in result["fee_estimate"]["assumption"].lower()
+    assert not result["fee_estimate"]["promotion_verified"]
+    assert D(result["rows"][0]["estimated_net_pnl"]) == D("650") - D(result["rows"][0]["estimated_fees"])
+    assert result["rows"][0]["net_pnl"] is None
+
+
+def test_per_trade_estimate_allocates_split_order_brokerage_by_fill_quantity():
+    ingest_fills(OWNER, [fill("part-a", qty=20, fees=None) | {"order_id": "buy"}, fill("part-b", qty=45, fees=None) | {"order_id": "buy"}, fill("exit", "SELL", fees=None, price="60", time="2026-10-09T11:00:00+05:30")])
+    result = history_page(OWNER, cost_plan="trade_free")
+    assert D(result["fee_estimate"]["breakdown"]["brokerage"]) == 20
+    assert sum(D(row["estimated_fees"]) for row in result["rows"]) == D(result["summary"]["estimated_fees"])
+
+
+def test_date_scope_charges_and_matching_are_explicit_and_cancelled_unfilled_orders_excluded():
+    ingest_fills(OWNER, [fill("yesterday", fees=None, time="2026-10-08T11:00:00+05:30"), fill("today", fees=None), fill("cancelled", qty=0, fees=None)])
+    result = history_page(OWNER, start="2026-10-09", end="2026-10-09", cost_plan="free_offer")
+    assert result["fee_estimate"]["fill_count"] == 1
+    assert result["fee_estimate"]["executed_order_count"] == 1
+    assert result["fee_estimate"]["recorded_dates"] == ["2026-10-09"]
+
+
+def test_unknown_fee_plan_is_rejected():
+    with pytest.raises(ValueError, match="fee plan"):
+        history_page(OWNER, cost_plan="made_up")

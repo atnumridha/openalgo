@@ -27,7 +27,12 @@ def account_refresh(previous, ok, data, now, error=None):
 
 
 def execution_feedback(owner):
-    existing = cache.get(owner)
+    from database.settings_db import get_analyze_mode
+
+    config = desk.view(owner)
+    mode = "sandbox" if get_analyze_mode() else "live"
+    key = (owner, mode, config["activation"], config["run_id"], config["pending"])
+    existing = cache.get(key)
     if existing:
         return existing
     from database.auth_db import get_auth_token
@@ -43,10 +48,14 @@ def execution_feedback(owner):
         data = response.get("data", {}) if ok else {}
     account = account_refresh(last.get(owner), ok, data, datetime.now(IST))
     last[owner] = account
-    config = desk.view(owner)
     local = now.astimezone(IST)
     minute = local.hour * 60 + local.minute
     blockers = []
+    from .lifecycle import management_status
+
+    management = management_status()
+    if not management["ready"]:
+        blockers.append(management["message"])
     if not auth:
         blockers.append("Kotak session expired or disconnected; reconnect with TOTP.")
     if not ok or data.get("availabletradinglimit") is None:
@@ -59,7 +68,7 @@ def execution_feedback(owner):
         blockers.append("Owned exposure is managed; no replacement entry.")
     result = {
         "activation": config["activation"],
-        "mode": config["mode"],
+        "mode": mode,
         "waiting_reason": config["status"],
         "account": account,
         "proxy": proxy_status(),
@@ -67,5 +76,5 @@ def execution_feedback(owner):
         "observed_at": now.isoformat(),
         "note": "A connected transport does not prove fresh broker ticks; see the chart feed timestamps. Stopping entries keeps owned exits managed.",
     }
-    cache[owner] = result
+    cache[key] = result
     return result

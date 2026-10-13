@@ -1,3 +1,4 @@
+import { nextLiveBar } from '@/components/neo-desk/liveBars'
 /**
  * Framework-agnostic controller for the charting terminal.
  *
@@ -6443,7 +6444,12 @@ export class TradingTerminal {
     // follows that candle's direction rather than sitting amber forever.
     if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
     if (this.tradeBtns && !this.depthActive) this.tradeBtns.setMark(e.ltp)
-    if (this.builder) {
+    const cashSessionQuote =
+      import.meta.env.VITE_NEO_DESK_ENABLED === 'true' &&
+      ['NSE','BSE','NFO','BFO','NSE_INDEX','BSE_INDEX'].includes(this.sym.exchange)
+    // A last-reported after-hours quote updates the readout, never creates a candle.
+    const mayBuild = !cashSessionQuote || nextLiveBar(undefined, e.ltp, (e.timeSec || nowSec()) * 1000, '1m', Date.now()) != null
+    if (this.builder && mayBuild) {
       const u = this.builder.onTick({ time: e.timeSec || nowSec(), price: e.ltp, ltq: e.ltq })
       if (u) {
         this.liveBucket = u.bar.time
