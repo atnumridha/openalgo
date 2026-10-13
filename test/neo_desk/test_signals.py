@@ -2,10 +2,10 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
-from conftest import bars, when
 
 from services.neo_desk.presets import get_preset
 from services.neo_desk.signals import evaluate_setup
+from test.neo_desk.conftest import bars, when
 
 
 @pytest.mark.parametrize(

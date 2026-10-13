@@ -1,14 +1,17 @@
 """Bounded native research jobs; pure replay never shares an order pipe."""
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import BoundedSemaphore
 from datetime import date
 from decimal import Decimal as D
 from hashlib import sha256
-from database import neo_history_db as db
+from threading import BoundedSemaphore
+
 from sqlalchemy.exc import IntegrityError
+
+from database import neo_history_db as db
 from utils.db_sessions import remove_all_scoped_sessions
 from utils.logging import get_logger
+
 from .datasets import load_dataset
 from .replay import ReplayRequest, run_replay
 
@@ -54,9 +57,13 @@ def get_job(owner, identity):
     row = db.db_session.query(db.NeoResearchJob).filter_by(owner=owner, id=identity).first()
     if not row:
         raise ValueError("Research job was not found for this owner.")
-    return dict(
-        id=row.id, status=row.status, request=row.request, result=row.result, error=row.error
-    )
+    return {
+        "id": row.id,
+        "status": row.status,
+        "request": row.request,
+        "result": row.result,
+        "error": row.error,
+    }
 
 
 def _execute(owner, identity, request):
@@ -70,13 +77,13 @@ def _execute(owner, identity, request):
             {"status": "complete", "result": report}
         )
         db.db_session.commit()
-    except Exception:
+    except Exception as error:
         db.db_session.rollback()
         get_logger(__name__).exception("Neo historical replay failed")
         db.db_session.query(db.NeoResearchJob).filter_by(id=identity, owner=owner).update(
             {
                 "status": "failed",
-                "error": "Replay failed; verify source checksums, coverage and native logs.",
+                "error": public_error(error),
             }
         )
         db.db_session.commit()
@@ -123,3 +130,17 @@ def recover_jobs():
         db.NeoResearchJob.status.in_(["queued", "running"])
     ).update({"status": "failed", "error": "Application restarted; submit a new research request."})
     db.db_session.commit()
+
+
+def public_error(error):
+    text = str(error)
+    if isinstance(error, ValueError):
+        messages = {
+            "Index 15-minute and option 1-minute observations are required.": "This archive lacks verified 15-minute NIFTY and 1-minute option observations. Choose the verified NIFTY 13-Oct archive.",
+            "Dataset checksum mismatch; replay refused.": "Dataset checksum mismatch. Restore the verified archive before replaying.",
+            "Choose a preserved real dataset.": "This dataset is unavailable or incompatible. Refresh the dataset list and choose a verified archive.",
+            "Invalid observed OHLC.": "The archive contains invalid OHLC observations. Replay stopped; source repair is required.",
+        }
+        if text in messages:
+            return messages[text]
+    return "Replay failed; verify source checksums, coverage and native logs."

@@ -3,10 +3,9 @@ from datetime import timedelta
 from decimal import Decimal as D
 from types import SimpleNamespace
 
-from conftest import contract, quote, when
-
 from services.neo_desk.presets import get_preset
 from services.neo_desk.selection import select_contract
+from test.neo_desk.conftest import contract, quote, when
 
 
 def test_server_observed_depth_snapshot_does_not_invent_exchange_time():

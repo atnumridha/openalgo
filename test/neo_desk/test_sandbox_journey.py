@@ -1,14 +1,16 @@
 """Real native Sandbox persistence/dispatch, synthetic market boundary only."""
 
-from types import SimpleNamespace
 from decimal import Decimal as D
-from conftest import when
-from test_native_entries import OWNER, isolated, prepare, boundary
+from types import SimpleNamespace
+
+from test_native_entries import OWNER, boundary, isolated, prepare
+
 from database import sandbox_db as sb
 from database import strategy_module_db as native
 from services.neo_desk.entries import submit_setup
 from services.neo_desk.lifecycle import manage_once, update_protection
 from services.strategy_module import engine, order_events, state
+from test.neo_desk.conftest import when
 
 
 def test_native_sandbox_entry_fill_trail_exit_and_flat(monkeypatch):

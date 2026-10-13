@@ -1,10 +1,122 @@
-import type {Chart} from 'openalgo-charts'
-import {useEffect,useRef,useState} from 'react'
-import type {ReplayTrade} from '@/api/neoResearch'
-import {useThemeStore} from '@/stores/themeStore'
-import {Button} from '@/components/ui/button'
-export function ReplayChart({trade}:{trade:ReplayTrade}){
- const host=useRef<HTMLDivElement>(null),[show,setShow]=useState<'option'|'index'>('option'),mode=useThemeStore(s=>s.mode),appMode=useThemeStore(s=>s.appMode),[error,setError]=useState('')
- useEffect(()=>{let disposed=false,instance:Chart|null=null;async function draw(){try{const [core,theme]=await Promise.all([import('openalgo-charts'),import('@/lib/trading/chartTheme')]);if(disposed||!host.current)return;instance=core.createChart(host.current,{theme:theme.buildChartTheme(mode,appMode),timezone:'Asia/Kolkata',shortcuts:false,timeNavigator:false,branding:false,ariaLabel:'Historical '+show+' trade chart'});const bars=show==='option'?trade.option_bars:trade.index_bars;const price=instance.addSeries('candlestick');price.priceScale().setOptions({minMove:.01});price.setData(bars);const levels=show==='option'?[[Number(trade.entry_price),'BUY '+trade.direction],[Number(trade.exit_price),'Exit']]:[[Number(trade.index_reference),'Index entry'],[Number(trade.initial_index_stop),'Initial index SL'],[Number(trade.index_target),'Index 6R target']];for(const [value,label] of levels)if(Number.isFinite(value))instance.addPriceLine({id:String(label),price:Number(value),color:String(label).includes('SL')?'#ef5350':'#3b82f6',label:String(label),leftLabel:String(label),extentFromRight:.3});const trail=instance.addSeries('line',{style:{color:'#ef5350'}});trail.setData(trade.trail.filter(t=>show==='index'||t.option_stop!=null).map(t=>({time:t.time,value:Number(show==='index'?t.index_stop:t.option_stop)})));const markers=price.createMarkers();markers.setMarkers([{time:Date.parse(trade.entry_time)/1000,position:'atPrice',price:Number(show==='option'?trade.entry_price:trade.index_reference),shape:'labelUp',size:'small',color:'#26a69a',text:'BUY '+trade.direction},...(show==='option'&&trade.exit_time&&trade.exit_price?[{time:Date.parse(trade.exit_time)/1000,position:'atPrice' as const,price:Number(trade.exit_price),shape:'labelDown' as const,size:'small' as const,color:'#ef5350',text:'EXIT'}]:[])]);instance.fitContent();setError('')}catch(e){if(!disposed)setError((e as Error).message)}}void draw();return()=>{disposed=true;instance?.destroy()}},[trade,show,mode,appMode])
- return <div className="rounded border p-3"><div className="flex gap-2"><Button variant={show==='option'?'default':'outline'} onClick={()=>setShow('option')}>Option premium</Button><Button variant={show==='index'?'default':'outline'} onClick={()=>setShow('index')}>NIFTY index</Button></div><div ref={host} className="h-[380px]"/>{error?<p role="alert">{error}</p>:null}<p className="text-xs text-muted-foreground">{trade.symbol} · {trade.status}. Entry/exit markers show modelled observations; red segments show the effective SL on this instrument's scale.</p></div>
+import type { Chart } from 'openalgo-charts'
+import { useEffect, useRef, useState } from 'react'
+import type { ReplayTrade } from '@/api/neoResearch'
+import { useThemeStore } from '@/stores/themeStore'
+import { Button } from '@/components/ui/button'
+export function ReplayChart({ trade }: { trade: ReplayTrade }) {
+  const host = useRef<HTMLDivElement>(null),
+    [show, setShow] = useState<'option' | 'index'>('option'),
+    mode = useThemeStore((s) => s.mode),
+    appMode = useThemeStore((s) => s.appMode),
+    [error, setError] = useState('')
+  useEffect(() => {
+    let disposed = false,
+      instance: Chart | null = null
+    async function draw() {
+      try {
+        const [core, theme] = await Promise.all([
+          import('openalgo-charts'),
+          import('@/lib/trading/chartTheme'),
+        ])
+        if (disposed || !host.current) return
+        instance = core.createChart(host.current, {
+          theme: theme.buildChartTheme(mode, appMode),
+          timezone: 'Asia/Kolkata',
+          shortcuts: false,
+          timeNavigator: false,
+          branding: false,
+          ariaLabel: 'Historical ' + show + ' trade chart',
+        })
+        const bars = show === 'option' ? trade.option_bars : trade.index_bars
+        const price = instance.addSeries('candlestick')
+        price.priceScale().setOptions({ minMove: 0.01 })
+        price.setData(bars)
+        const levels =
+          show === 'option'
+            ? [
+                [Number(trade.entry_price), 'BUY ' + trade.direction],
+                [Number(trade.exit_price), 'Exit'],
+              ]
+            : [
+                [Number(trade.index_reference), 'Index entry'],
+                [Number(trade.initial_index_stop), 'Initial index SL'],
+                [Number(trade.index_target), 'Index 6R target'],
+              ]
+        for (const [value, label] of levels)
+          if (Number.isFinite(value))
+            instance.addPriceLine({
+              id: String(label),
+              price: Number(value),
+              color: String(label).includes('SL') ? '#ef5350' : '#3b82f6',
+              label: String(label),
+              leftLabel: String(label),
+              extentFromRight: 0.3,
+            })
+        const trail = instance.addSeries('line', { style: { color: '#ef5350' } })
+        trail.setData(
+          trade.trail
+            .filter((t) => show === 'index' || t.option_stop != null)
+            .map((t) => ({
+              time: t.time,
+              value: Number(show === 'index' ? t.index_stop : t.option_stop),
+            }))
+        )
+        const markers = price.createMarkers()
+        markers.setMarkers([
+          {
+            time: Date.parse(trade.entry_time) / 1000,
+            position: 'atPrice',
+            price: Number(show === 'option' ? trade.entry_price : trade.index_reference),
+            shape: 'labelUp',
+            size: 'small',
+            color: '#26a69a',
+            text: 'BUY ' + trade.direction,
+          },
+          ...(show === 'option' && trade.exit_time && trade.exit_price
+            ? [
+                {
+                  time: Date.parse(trade.exit_time) / 1000,
+                  position: 'atPrice' as const,
+                  price: Number(trade.exit_price),
+                  shape: 'labelDown' as const,
+                  size: 'small' as const,
+                  color: '#ef5350',
+                  text: 'EXIT',
+                },
+              ]
+            : []),
+        ])
+        instance.fitContent()
+        setError('')
+      } catch (e) {
+        if (!disposed) setError((e as Error).message)
+      }
+    }
+    void draw()
+    return () => {
+      disposed = true
+      instance?.destroy()
+    }
+  }, [trade, show, mode, appMode])
+  return (
+    <div className="rounded border p-3">
+      <div className="flex gap-2">
+        <Button
+          variant={show === 'option' ? 'default' : 'outline'}
+          onClick={() => setShow('option')}
+        >
+          Option premium
+        </Button>
+        <Button variant={show === 'index' ? 'default' : 'outline'} onClick={() => setShow('index')}>
+          NIFTY index
+        </Button>
+      </div>
+      <div ref={host} className="h-[380px]" />
+      {error ? <p role="alert">{error}</p> : null}
+      <p className="text-xs text-muted-foreground">
+        {trade.symbol} · {trade.status}. Entry/exit markers show modelled observations; red segments
+        show the effective SL on this instrument's scale.
+      </p>
+    </div>
+  )
 }

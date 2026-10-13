@@ -1,10 +1,13 @@
 """Read-only source migration, private backups and public reconciliation metadata."""
 
-from pathlib import Path
+import json
+import shutil
+import sqlite3
 from hashlib import sha256
-import json, sqlite3, shutil
-from .history import ingest_fills, history_page
-from .history_accounting import _normalized, TradeArchive
+from pathlib import Path
+
+from .history import history_page, ingest_fills
+from .history_accounting import TradeArchive, _normalized
 
 
 def migrate_archive(source, owner_id, dry_run=False):
@@ -27,14 +30,14 @@ def migrate_archive(source, owner_id, dry_run=False):
         }
         for f in raw
     ]
-    manifest = dict(
-        schema_version=1,
-        source_sha256=sha256(source.read_bytes()).hexdigest(),
-        source_schema=version,
-        source_fills=len(rows),
-        source_quantity=sum(f["quantity"] for f in rows),
-        dry_run=dry_run,
-    )
+    manifest = {
+        "schema_version": 1,
+        "source_sha256": sha256(source.read_bytes()).hexdigest(),
+        "source_schema": version,
+        "source_fills": len(rows),
+        "source_quantity": sum(f["quantity"] for f in rows),
+        "dry_run": dry_run,
+    }
     if not dry_run:
         manifest.update(ingest_fills(owner_id, rows, source="preserved_archive"))
     manifest["destination_fills"] = history_page(owner_id)["coverage"]["fill_count"]
@@ -59,11 +62,11 @@ def backup_runtime(source, destination):
             src.backup(dst)
         target.chmod(0o600)
         manifest.append(
-            dict(
-                path=name,
-                sha256=sha256(target.read_bytes()).hexdigest(),
-                size=target.stat().st_size,
-            )
+            {
+                "path": name,
+                "sha256": sha256(target.read_bytes()).hexdigest(),
+                "size": target.stat().st_size,
+            }
         )
     for name in ("data", "reports"):
         if (source / name).exists():
@@ -73,12 +76,12 @@ def backup_runtime(source, destination):
             if file.is_file():
                 file.chmod(0o600)
                 manifest.append(
-                    dict(
-                        path=str(file.relative_to(destination)),
-                        sha256=sha256(file.read_bytes()).hexdigest(),
-                        size=file.stat().st_size,
-                    )
+                    {
+                        "path": str(file.relative_to(destination)),
+                        "sha256": sha256(file.read_bytes()).hexdigest(),
+                        "size": file.stat().st_size,
+                    }
                 )
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2))
     (destination / "manifest.json").chmod(0o600)
-    return dict(files=len(manifest), bytes=sum(f["size"] for f in manifest))
+    return {"files": len(manifest), "bytes": sum(f["size"] for f in manifest)}

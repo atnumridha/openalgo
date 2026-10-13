@@ -1,8 +1,7 @@
 from datetime import timedelta
 
-from conftest import when
-
 from services.neo_desk.runner import closed_bars, should_evaluate
+from test.neo_desk.conftest import when
 
 
 def test_runner_uses_closed_bars_and_never_catches_up():
@@ -33,8 +32,8 @@ def test_unordered_or_uncertain_history_is_refused():
 
 
 def test_hosted_runner_defaults_to_the_configured_instance_not_port_5000():
-    from pathlib import Path
     import ast
+    from pathlib import Path
 
     tree = ast.parse(Path("blueprints/python_strategy.py").read_text())
     # Exercise the actual host-environment expression without starting a subprocess.

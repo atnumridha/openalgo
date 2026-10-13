@@ -1,18 +1,19 @@
 from datetime import date
 from decimal import Decimal as D
-from services.neo_desk.fees import estimate_charges, PromotionWindow, FeePlan
+
+from services.neo_desk.fees import FeePlan, PromotionWindow, estimate_charges
 
 
 def row(id="a", qty=65, day="2026-10-09"):
-    return dict(
-        fill_id=id,
-        order_id="order",
-        side="BUY",
-        quantity=qty,
-        price="50",
-        trade_date=day,
-        exchange="NFO",
-    )
+    return {
+        "fill_id": id,
+        "order_id": "order",
+        "side": "BUY",
+        "quantity": qty,
+        "price": "50",
+        "trade_date": day,
+        "exchange": "NFO",
+    }
 
 
 def test_literal_plan_and_promotion_fees():

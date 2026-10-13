@@ -2,13 +2,16 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from decimal import Decimal as D, ROUND_CEILING, ROUND_FLOOR
-from .types import IST
-from .presets import get_preset
-from .signals import evaluate_setup, anchor_setup
-from .serialization import public_setup
-from .risk_adapter import evaluate
+from decimal import ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal as D
+
 from .fees import estimate
+from .presets import get_preset
+from .risk_adapter import evaluate
+from .serialization import public_setup
+from .signals import anchor_setup, evaluate_setup
+from .sizing import size_entry
+from .types import IST
 
 
 @dataclass(frozen=True)
@@ -63,11 +66,11 @@ def run_replay(dataset, request):
         if active_until and now <= active_until:
             continue
         if day_count.get(day, 0) >= 3 or day_net.get(day, D(0)) <= -1000:
-            skipped.append(dict(time=now.isoformat(), reason="Daily entry/loss guard"))
+            skipped.append({"time": now.isoformat(), "reason": "Daily entry/loss guard"})
             continue
         next_index = lookup.get(now)
         if not next_index or next_index.repaired:
-            skipped.append(dict(time=now.isoformat(), reason="Missing current index observation"))
+            skipped.append({"time": now.isoformat(), "reason": "Missing current index observation"})
             continue
         setup = anchor_setup(setup, next_index.open)
         if not setup:
@@ -94,25 +97,14 @@ def run_replay(dataset, request):
             entry = ((b.open + D(".50")) / c.tick_size).to_integral_value(
                 rounding=ROUND_CEILING
             ) * c.tick_size
-            qty = (
-                65 * whole_lots(cash, entry, 65, estimate("BUY", entry, 65))
-                if request.compound
-                else 65
-            )
             stop = (
                 (entry * D(".90") / c.tick_size).to_integral_value(rounding=ROUND_FLOOR)
                 * c.tick_size
                 if preset.controlled
                 else None
             )
-            if stop is not None:
-                while qty and (entry - stop + D(".50")) * qty + estimate(
-                    "BUY", entry, qty
-                ) + estimate("SELL", max(c.tick_size, stop - D(".50")), qty) > min(
-                    D(500), cash * D(".05")
-                ):
-                    qty -= 65
-            cost = entry * qty + estimate("BUY", entry, qty) if qty else D(0)
+            sizing_cash = cash if request.compound else min(cash, request.initial_cash)
+            qty, cost = size_entry(sizing_cash, entry, c.lot_size, stop)
             if qty and cost <= cash:
                 choices.append(
                     (
@@ -129,10 +121,10 @@ def run_replay(dataset, request):
                 )
         if not choices:
             skipped.append(
-                dict(
-                    time=now.isoformat(),
-                    reason="No observed near-₹50 option fits metadata, recent-data, risk and cash checks",
-                )
+                {
+                    "time": now.isoformat(),
+                    "reason": "No observed near-₹50 option fits metadata, recent-data, risk and cash checks",
+                }
             )
             continue
         _, _, symbol, c, first, entry, qty, stop, cost = min(choices, key=lambda x: x[:3])
@@ -153,22 +145,31 @@ def run_replay(dataset, request):
             "cash_activation": "1000",
             "cash_distance": "250",
         }
-        trade = dict(
-            symbol=symbol,
-            direction=setup.direction,
-            profile=request.profile,
-            entry_time=now.isoformat(),
-            entry_price=str(entry),
-            quantity=qty,
-            index_reference=str(setup.index_reference),
-            initial_index_stop=str(setup.initial_stop),
-            index_target=str(setup.target),
-            status="open",
-            entry_fees=str(estimate("BUY", entry, qty)),
-            trail=[],
-            option_bars=[],
-            index_bars=[],
-        )
+        trade = {
+            "symbol": symbol,
+            "direction": setup.direction,
+            "profile": request.profile,
+            "entry_time": now.isoformat(),
+            "entry_price": str(entry),
+            "quantity": qty,
+            "index_reference": str(setup.index_reference),
+            "initial_index_stop": str(setup.initial_stop),
+            "index_target": str(setup.target),
+            "status": "open",
+            "entry_fees": str(estimate("BUY", entry, qty)),
+            "trail": [],
+            "option_bars": [
+                {
+                    "time": int(first.time.timestamp()),
+                    "open": float(first.open),
+                    "high": float(first.high),
+                    "low": float(first.low),
+                    "close": float(first.close),
+                    "volume": float(first.volume),
+                }
+            ],
+            "index_bars": [],
+        }
         stamp = now + timedelta(minutes=1)
         deadline = now.replace(hour=15, minute=29)
         latest_index = setup.index_reference
@@ -184,14 +185,14 @@ def run_replay(dataset, request):
             if finished_index and not finished_index.repaired:
                 latest_index = finished_index.close
             trade["option_bars"].append(
-                dict(
-                    time=int(stamp.timestamp()),
-                    open=float(b.open),
-                    high=float(b.high),
-                    low=float(b.low),
-                    close=float(b.close),
-                    volume=float(b.volume),
-                )
+                {
+                    "time": int(stamp.timestamp()),
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": float(b.volume),
+                }
             )
             # Evaluate pre-existing protection at the observed low first. No high-created trail is backdated.
             updated, reason = evaluate(
@@ -222,33 +223,33 @@ def run_replay(dataset, request):
                 )
                 peak = max(peak, cash)
                 drawdown = min(drawdown, cash - peak)
-                equity.append(dict(time=stamp.isoformat(), cash=str(cash)))
+                equity.append({"time": stamp.isoformat(), "cash": str(cash)})
                 resolved = True
                 break
             p, _ = evaluate(
                 p, {"entry_avg": entry, "qty": qty}, latest_index, b.close, day_net.get(day, D(0))
             )
             trade["trail"].append(
-                dict(
-                    time=int(stamp.timestamp()),
-                    option_stop=p.get("option_stop"),
-                    index_stop=p["index_stop"],
-                    index_target=p["target"],
-                )
+                {
+                    "time": int(stamp.timestamp()),
+                    "option_stop": p.get("option_stop"),
+                    "index_stop": p["index_stop"],
+                    "index_target": p["target"],
+                }
             )
             stamp += timedelta(minutes=1)
         if not resolved and trade["status"] == "open":
             trade["status"] = "unresolved_option_gap"
             blocked = True
         trade["index_bars"] = [
-            dict(
-                time=int(b.time.timestamp()),
-                open=float(b.open),
-                high=float(b.high),
-                low=float(b.low),
-                close=float(b.close),
-                volume=float(b.volume),
-            )
+            {
+                "time": int(b.time.timestamp()),
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": float(b.volume),
+            }
             for b in dataset.index
             if now - timedelta(minutes=60) <= b.time <= stamp
         ]
@@ -267,32 +268,32 @@ def run_replay(dataset, request):
         and request.end <= max(dataset.calendar)
         and not dataset.gaps
     )
-    return dict(
-        dataset=dataset.identity,
-        profile=request.profile,
-        initial_cash=str(request.initial_cash),
-        trades=trades,
-        skipped=skipped,
-        equity=equity,
-        known_realized_net=str(known),
-        net_complete=str(known) if complete else None,
-        fees_estimate=str(fees),
-        ending_cash=str(cash) if complete else None,
-        available_cash_model=str(cash),
-        wins=sum(D(t["net"]) > 0 for t in closed),
-        closed_count=len(closed),
-        unresolved_count=len(unresolved),
-        drawdown=str(drawdown),
-        coverage=dict(
-            complete=complete,
-            dates=[d.isoformat() for d in covered],
-            source=dataset.source,
-            gaps=dataset.gaps,
-        ),
-        assumptions=[
+    return {
+        "dataset": dataset.identity,
+        "profile": request.profile,
+        "initial_cash": str(request.initial_cash),
+        "trades": trades,
+        "skipped": skipped,
+        "equity": equity,
+        "known_realized_net": str(known),
+        "net_complete": str(known) if complete else None,
+        "fees_estimate": str(fees),
+        "ending_cash": str(cash) if complete else None,
+        "available_cash_model": str(cash),
+        "wins": sum(D(t["net"]) > 0 for t in closed),
+        "closed_count": len(closed),
+        "unresolved_count": len(unresolved),
+        "drawdown": str(drawdown),
+        "coverage": {
+            "complete": complete,
+            "dates": [d.isoformat() for d in covered],
+            "source": dataset.source,
+            "gaps": dataset.gaps,
+        },
+        "assumptions": [
             "OHLC observations proxy execution; buy open + ₹0.50, sell conservative observed low/open - ₹0.50. Historical bid/ask, depth and exact execution order are unavailable.",
             "Stop-first intrabar evaluation; new trails apply after their confirming observation. No forward filling across missing option minutes.",
             "Index protection observes confirmed 15-minute closes; tick-level intrabar behaviour cannot be reproduced.",
-            "Estimated ₹10 executed-order brokerage; a dated free-promotion window has not been verified. Live retains one lot; research whole-lot sizing also respects cash and controlled-profile risk guards.",
+            "Estimated ₹10 executed-order brokerage; a dated free-promotion window has not been verified. Live and research allow up to two whole lots, with affordability, current depth (Live) and controlled-profile risk guards. Stops can slip beyond their threshold.",
         ],
-    )
+    }

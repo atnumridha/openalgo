@@ -6,10 +6,9 @@ from database import strategy_module_db as native
 from services.strategy_module.signals import start_provider_run
 
 from .presets import get_preset
+from .serialization import public_setup
 from .types import IST, EntryResult
 
-
-from .serialization import public_setup
 
 def submit_setup(owner_id, setup, selection, mode, *, now=None):
     now = now or datetime.now(IST)
@@ -30,7 +29,8 @@ def submit_setup(owner_id, setup, selection, mode, *, now=None):
         or not selection.quote
         or not selection.quote.fresh(now)
         or selection.contract.option_type != setup.direction
-        or selection.quantity != 65
+        or selection.quantity not in (65, 130)
+        or min(selection.quote.bid_qty, selection.quote.ask_qty) < selection.quantity
         or selection.contract.lot_size != 65
     ):
         return EntryResult(False, error=selection.error or "Option selection is invalid or stale.")
@@ -46,14 +46,14 @@ def submit_setup(owner_id, setup, selection, mode, *, now=None):
         "segment": "options",
         "neo_provider": True,
         "expiry": c.expiry.strftime("%d-%b-%y").upper(),
-        "lots": 1,
+        "lots": selection.quantity // c.lot_size,
         "position": "B",
         "option_type": c.option_type,
         "strike_mode": "strike",
         "strike": float(c.strike),
         "entry_price": float(selection.limit_price),
         "expected_symbol": c.symbol,
-        "expected_quantity": 65,
+        "expected_quantity": selection.quantity,
     }
     cfg = {
         "name": "Neo Desk · " + p.label,
@@ -84,7 +84,7 @@ def submit_setup(owner_id, setup, selection, mode, *, now=None):
         "option_target": None,
         "entry_limit": str(selection.limit_price),
         "tick_size": str(c.tick_size),
-        "quantity": 65,
+        "quantity": selection.quantity,
         "controlled": p.controlled,
         "index_peak": str(setup.index_reference),
         "index_stop": str(setup.initial_stop),

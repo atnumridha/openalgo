@@ -13,7 +13,7 @@ from utils.thread_safe_cache import LockedTTLCache
 
 from .runner import closed_bars, should_evaluate
 from .selection import select_contract
-from .signals import evaluate_setup, anchor_setup
+from .signals import anchor_setup, evaluate_setup
 from .types import IST, Contract, Quote
 
 

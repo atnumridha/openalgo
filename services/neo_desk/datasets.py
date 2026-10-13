@@ -1,12 +1,15 @@
 """Preserved real observations; no expired-option synthesis or forward fills."""
 
+import csv
+import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal as D
-from pathlib import Path
 from hashlib import sha256
-import csv, json, re
-from .types import Candle, Contract
+from pathlib import Path
+
+from .types import IST, Candle, Contract
 
 ROOT = Path("runtime/neo_desk/migration-20261013/backup/data")
 
@@ -34,17 +37,46 @@ def list_datasets():
                 for k in ("calendar_start", "calendar_end", "contracts", "files", "expiry_calendar")
             ):
                 continue
-            result.append(
-                dict(
-                    id=path.parent.name,
-                    source=m["source"],
-                    start=m["calendar_start"],
-                    end=m["calendar_end"],
-                    expiries=m["expiry_calendar"],
-                    gaps=m.get("gaps", []),
+            if any(
+                not c.get("symbol", "").startswith("NIFTY")
+                or c.get("exchange") not in ("nse_fo", "NFO")
+                for c in m["contracts"]
+            ):
+                continue
+            if not {"index_15m", "option_1m"}.issubset({f.get("kind") for f in m["files"]}):
+                continue
+            required_files = {"index_15m": "index.csv", "option_1m": "options.csv"}
+            if not all(
+                any(
+                    f.get("kind") == kind
+                    and f.get("path") == filename
+                    and re.fullmatch(r"[0-9a-f]{64}", str(f.get("sha256", "")))
+                    and (path.parent / filename).is_file()
+                    and (path.parent / filename).stat().st_size > 0
+                    for f in m["files"]
                 )
+                for kind, filename in required_files.items()
+            ):
+                continue
+            if not m["contracts"] or any(
+                not c.get("valid_from")
+                or not c.get("valid_to")
+                or c["valid_from"] > m["calendar_end"]
+                or c["valid_to"] < m["calendar_start"]
+                for c in m["contracts"]
+            ):
+                continue
+            result.append(
+                {
+                    "id": path.parent.name,
+                    "source": m["source"],
+                    "start": m["calendar_start"],
+                    "end": m["calendar_end"],
+                    "expiries": m["expiry_calendar"],
+                    "gaps": m.get("gaps", []),
+                }
             )
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError, OSError):
             continue
     return result
 
@@ -114,6 +146,18 @@ def load_dataset(identity):
                 if b.time in options[symbol]:
                     raise ValueError("Duplicate option minute; replay refused.")
                 options[symbol][b.time] = b
+    bounds = {
+        c["symbol"]: (date.fromisoformat(c["valid_from"]), date.fromisoformat(c["valid_to"]))
+        for c in m["contracts"]
+    }
+    for symbol, minutes in options.items():
+        lower, upper = bounds[symbol]
+        options[symbol] = {
+            time: bar
+            for time, bar in minutes.items()
+            if lower <= time.astimezone(IST).date() <= upper
+            and time.astimezone(IST).date() <= contracts[symbol].expiry
+        }
     index.sort(key=lambda b: b.time)
     if len({b.time for b in index}) != len(index):
         raise ValueError("Duplicate index bar; replay refused.")

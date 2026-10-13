@@ -1,11 +1,11 @@
 from decimal import Decimal as D
 
-from conftest import when
 from test_native_entries import OWNER, isolated
 from test_ownership import owned
 
 from database import neo_desk_db as desk
 from services.neo_desk.lifecycle import manage_once, recover_provider
+from test.neo_desk.conftest import when
 
 
 def test_restart_stops_entries_and_preserves_protection(monkeypatch):
@@ -47,8 +47,8 @@ def test_run_protection_survives_a_later_profile_and_trade(monkeypatch):
 
 def test_restored_older_run_is_visible_and_stops_replacement_entries(monkeypatch):
     from database import strategy_module_db as native
-    from services.strategy_module import engine, state
     from services.neo_desk.lifecycle import manage_all_owned
+    from services.strategy_module import engine, state
 
     rid, orders = owned(monkeypatch)
     old = state.get_run_state(rid)

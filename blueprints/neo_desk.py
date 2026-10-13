@@ -82,8 +82,9 @@ def close():
     return jsonify(result), 200 if result.get("ok") else 409
 
 
-from extensions import socketio
 from flask_socketio import join_room, leave_room
+
+from extensions import socketio
 from services.neo_desk.views import room_for_owner
 
 
@@ -108,57 +109,119 @@ def unsubscribe_desk(_data=None):
         leave_room(room_for_owner(owner))
     return {"ok": True}
 
-@neo_desk_bp.get('/history')
+
+@neo_desk_bp.get("/history")
 @authenticated
 def history():
     from services.neo_desk.history import history_page
-    return jsonify(history_page(session['user'],request.args.get('symbol',''),request.args.get('start'),request.args.get('end'),request.args.get('cursor',0)))
 
-@neo_desk_bp.post('/history/import')
+    return jsonify(
+        history_page(
+            session["user"],
+            request.args.get("symbol", ""),
+            request.args.get("start"),
+            request.args.get("end"),
+            request.args.get("cursor", 0),
+        )
+    )
+
+
+@neo_desk_bp.post("/history/import")
 @authenticated
 def history_import():
     from services.neo_desk.history import import_csv
-    return jsonify(import_csv(session['user'],(request.get_json(silent=True) or {}).get('csv','')))
 
-@neo_desk_bp.post('/history/refresh')
+    return jsonify(
+        import_csv(session["user"], (request.get_json(silent=True) or {}).get("csv", ""))
+    )
+
+
+@neo_desk_bp.post("/history/refresh")
 @authenticated
 def history_refresh():
     from services.neo_desk.history import refresh_history
-    return jsonify(refresh_history(session['user']))
 
-@neo_desk_bp.get('/history/export')
+    return jsonify(refresh_history(session["user"]))
+
+
+@neo_desk_bp.get("/history/export")
 @authenticated
 def history_export():
     from flask import Response
-    from services.neo_desk.history import export_csv
-    return Response(export_csv(session['user'],request.args.get('symbol',''),request.args.get('start'),request.args.get('end')),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=recorded-executions.csv'})
 
-@neo_desk_bp.get('/history/template')
+    from services.neo_desk.history import export_csv
+
+    return Response(
+        export_csv(
+            session["user"],
+            request.args.get("symbol", ""),
+            request.args.get("start"),
+            request.args.get("end"),
+        ),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=recorded-executions.csv"},
+    )
+
+
+@neo_desk_bp.get("/history/template")
 @authenticated
 def history_template():
     from flask import Response
-    return Response('fill_id,order_id,symbol,exchange,product,side,quantity,price,time,fees\n',mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=execution-template.csv'})
 
-@neo_desk_bp.get('/chart')
+    return Response(
+        "fill_id,order_id,symbol,exchange,product,side,quantity,price,time,fees\n",
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=execution-template.csv"},
+    )
+
+
+@neo_desk_bp.get("/chart")
 @authenticated
 def chart():
     from services.neo_desk.chart_views import chart_view
-    return jsonify(chart_view(session['user'],request.args.get('instrument',''),request.args.get('interval','15m')))
 
-@neo_desk_bp.get('/datasets')
+    return jsonify(
+        chart_view(
+            session["user"], request.args.get("instrument", ""), request.args.get("interval", "15m")
+        )
+    )
+
+
+@neo_desk_bp.get("/datasets")
 @authenticated
 def datasets():
     from services.neo_desk.datasets import list_datasets
+
     return jsonify(datasets=list_datasets())
 
-@neo_desk_bp.post('/research')
+
+@neo_desk_bp.post("/research")
 @authenticated
 def research():
     from services.neo_desk.research_jobs import submit_job
-    return jsonify(submit_job(session['user'],request.get_json(silent=True))),202
 
-@neo_desk_bp.get('/research/<identity>')
+    return jsonify(submit_job(session["user"], request.get_json(silent=True))), 202
+
+
+@neo_desk_bp.get("/research/<identity>")
 @authenticated
 def research_job(identity):
     from services.neo_desk.research_jobs import get_job
-    return jsonify(get_job(session['user'],identity))
+
+    return jsonify(get_job(session["user"], identity))
+
+
+@neo_desk_bp.get("/overview")
+@authenticated
+def overview():
+    from services.neo_desk.overview import live_overview
+
+    return jsonify(live_overview(session["user"]))
+
+
+@neo_desk_bp.get("/health")
+@authenticated
+def health():
+    from services.neo_desk.health import execution_feedback
+
+    return jsonify(execution_feedback(session["user"]))

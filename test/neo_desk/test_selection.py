@@ -3,10 +3,10 @@ from datetime import timedelta
 from decimal import Decimal as D
 
 import pytest
-from conftest import contract, quote, when
 
 from services.neo_desk.presets import get_preset
 from services.neo_desk.selection import select_contract
+from test.neo_desk.conftest import contract, quote, when
 
 
 def choose(c=None, q=None, cash=D(10000)):
@@ -74,7 +74,43 @@ def test_equal_premiums_choose_strike_nearest_the_current_index():
     )
     assert selected.contract == b
 
+
 def test_entry_affordability_includes_unverified_plan_brokerage():
-    c=contract('CE')
-    result=select_contract([c],{c.symbol:quote(c)},get_preset('orb_trail'),D('3298'),when(),direction='CE')
+    c = contract("CE")
+    result = select_contract(
+        [c], {c.symbol: quote(c)}, get_preset("orb_trail"), D("3298"), when(), direction="CE"
+    )
     assert not result.ok
+
+
+def test_two_lots_require_total_affordability_and_depth():
+    q = replace(quote(), bid_qty=130, ask_qty=130)
+    s = choose(q=q)
+    assert s.ok and s.quantity == 130
+    assert s.entry_cost == s.limit_price * 130 + __import__(
+        "services.neo_desk.fees", fromlist=["estimate"]
+    ).estimate("BUY", s.limit_price, 130)
+    assert choose(q=q, cash=D(6000)).quantity == 65
+    assert choose(q=replace(q, bid_qty=129)).quantity == 65
+
+
+def test_controlled_two_lots_fall_back_when_planned_risk_exceeds_500():
+    from services.neo_desk.types import Candle
+
+    c = contract()
+    q = replace(quote(c), bid_qty=130, ask_qty=130)
+    recent = {
+        c.symbol: [
+            Candle(when() - timedelta(minutes=n), D(50), D(51), D(49), D(50)) for n in range(1, 6)
+        ]
+    }
+    s = select_contract(
+        [c],
+        {c.symbol: q},
+        get_preset("orb_controls"),
+        D(20000),
+        when(),
+        direction="CE",
+        recent_bars=recent,
+    )
+    assert s.ok and s.quantity == 65

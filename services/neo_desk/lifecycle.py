@@ -66,10 +66,11 @@ def request_owned_exit(owner_id, trade_id, reason, request_id):
 
 
 def observed_price(owner, symbol, exchange):
-    from database.auth_db import get_auth_token
-    from services.quotes_service import get_quotes
-    from services.depth_service import get_depth
     from time import monotonic
+
+    from database.auth_db import get_auth_token
+    from services.depth_service import get_depth
+    from services.quotes_service import get_quotes
 
     auth = get_auth_token(owner)
     if not auth:
@@ -246,7 +247,6 @@ def manage_once(owner_id, *, now=None, quote_provider=None, run_id=None):
     index = provider("NIFTY", "NSE_INDEX")
     bid = provider(leg["symbol"], leg["exchange"])
     with owner_locks.hold(owner_id):
-        current = desk.view(owner_id)
         fresh = state.get_run_state(rid)
         leg = (fresh or {}).get("legs", {}).get("1", {})
         if (
@@ -365,6 +365,7 @@ def start_management():
     desk.init_db()
     recover_provider()
     from .research_jobs import recover_jobs
+
     recover_jobs()
     scheduler = get_scheduler()
     if scheduler is None:

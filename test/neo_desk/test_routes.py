@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-from conftest import when
 from flask import Flask, session
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import generate_csrf
@@ -11,6 +10,7 @@ from test_ownership import owned
 from blueprints.neo_desk import neo_desk_bp
 from database import neo_desk_db as desk
 from services.neo_desk.service import NeoDeskService
+from test.neo_desk.conftest import when
 
 
 class Host:
@@ -120,9 +120,10 @@ def test_start_does_not_submit_a_broker_order(service, monkeypatch):
 
 
 def test_push_subscription_cannot_use_body_to_impersonate_an_owner(client, monkeypatch):
-    from extensions import socketio
-    from blueprints.neo_desk import subscribe_desk
     import flask
+
+    from blueprints.neo_desk import subscribe_desk
+    from extensions import socketio
 
     c, _ = client
     app = c.application

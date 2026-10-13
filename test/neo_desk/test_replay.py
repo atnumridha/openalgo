@@ -1,11 +1,13 @@
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal as D
+
 import pytest
-from conftest import bars, when, contract
-from services.neo_desk.types import Candle
+
 from services.neo_desk.datasets import HistoricalDataset
 from services.neo_desk.replay import ReplayRequest, run_replay, whole_lots
+from services.neo_desk.types import Candle
+from test.neo_desk.conftest import bars, contract, when
 
 
 def fixture(missing=False, future=False):
@@ -57,7 +59,7 @@ def test_conservative_stop_and_fee_algebra_without_live_execution(monkeypatch):
     report = run_replay(fixture(), request())
     trade = report["trades"][0]
     assert trade["entry_price"] == "50.50" and D(trade["exit_price"]) <= D("39.50")
-    assert D(trade["gross"]) == (D(trade["exit_price"]) - D(trade["entry_price"])) * 65
+    assert D(trade["gross"]) == (D(trade["exit_price"]) - D(trade["entry_price"])) * 130
     assert D(trade["net"]) == D(trade["gross"]) - D(trade["fees"])
     assert "OHLC" in report["assumptions"][0]
 
@@ -70,3 +72,19 @@ def test_one_year_request_validation():
 def test_unresolved_entry_still_has_estimated_entry_charges():
     report = run_replay(fixture(missing=True), request())
     assert D(report["fees_estimate"]) > 0
+
+
+@pytest.mark.parametrize("compound", [False, True])
+def test_replay_prefers_two_lots_and_never_exceeds_two(compound):
+    report = run_replay(fixture(), replace(request(), compound=compound))
+    assert report["trades"][0]["quantity"] == 130
+    assert report["trades"][0]["gross"] == str(
+        (D(report["trades"][0]["exit_price"]) - D(report["trades"][0]["entry_price"])) * 130
+    )
+    poor = run_replay(fixture(), replace(request(), initial_cash=D(6000), compound=compound))
+    assert poor["trades"][0]["quantity"] == 65
+
+
+def test_unresolved_trade_keeps_actual_entry_observation_for_chart():
+    report = run_replay(fixture(missing=True), request())
+    assert report["trades"][0]["option_bars"][0]["time"] == int(when().timestamp())

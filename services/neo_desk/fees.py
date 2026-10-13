@@ -33,12 +33,12 @@ def estimate_charges(fills, promotion=None, plan=FeePlan()):
         if qty <= 0:
             continue
         if f.get("exchange") not in ("NFO", "nse_fo"):
-            return dict(
-                total=None,
-                breakdown={},
-                promotion_verified=False,
-                source="Estimate unavailable for non-NSE options",
-            )
+            return {
+                "total": None,
+                "breakdown": {},
+                "promotion_verified": False,
+                "source": "Estimate unavailable for non-NSE options",
+            }
         day = date.fromisoformat(f["trade_date"])
         price = D(str(f["price"]))
         side = {"B": "BUY", "S": "SELL"}.get(f["side"], f["side"])
@@ -50,14 +50,14 @@ def estimate_charges(fills, promotion=None, plan=FeePlan()):
             brokerage=brokerage, stt=D(".0015") if day >= date(2026, 4, 1) else D(".001")
         )
         turnover = price * qty
-        values = dict(
-            brokerage=brokerage,
-            exchange=turnover * rates.exchange,
-            sebi=turnover * rates.sebi,
-            ipft=turnover * rates.ipft,
-            stamp=turnover * rates.stamp if side == "BUY" else D(0),
-            stt=turnover * rates.stt if side == "SELL" else D(0),
-        )
+        values = {
+            "brokerage": brokerage,
+            "exchange": turnover * rates.exchange,
+            "sebi": turnover * rates.sebi,
+            "ipft": turnover * rates.ipft,
+            "stamp": turnover * rates.stamp if side == "BUY" else D(0),
+            "stt": turnover * rates.stt if side == "SELL" else D(0),
+        }
         values["gst"] = (
             values["brokerage"] + values["exchange"] + values["sebi"] + values["ipft"]
         ) * rates.gst
@@ -65,11 +65,11 @@ def estimate_charges(fills, promotion=None, plan=FeePlan()):
         per_fill[f["fill_id"]] = str(sum(values.values()))
         for k, v in values.items():
             totals[k] += v
-    return dict(
-        total=str(sum(totals.values())),
-        breakdown={k: str(v) for k, v in totals.items()},
-        per_fill=per_fill,
-        promotion_verified=bool(promotion and promotion.verified),
-        source=plan.source,
-        assumption="₹10 per executed order unless a dated promotion is verified",
-    )
+    return {
+        "total": str(sum(totals.values())),
+        "breakdown": {k: str(v) for k, v in totals.items()},
+        "per_fill": per_fill,
+        "promotion_verified": bool(promotion and promotion.verified),
+        "source": plan.source,
+        "assumption": "₹10 per executed order unless a dated promotion is verified",
+    }

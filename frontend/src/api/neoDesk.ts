@@ -23,9 +23,21 @@ export const neoDeskApi = {
         confirm_live: confirmLive,
       })
     ).data,
-  protection: async (tradeId:number,changes:Record<string,unknown>) => (await webClient.post('/neodesk/api/position/protection',{trade_id:tradeId,changes})).data,
-  close: async (tradeId:number) => (await webClient.post('/neodesk/api/position/close',{trade_id:tradeId,confirmed:true,request_id:crypto.randomUUID()})).data,
-  chart: async (instrument:string,interval:string):Promise<{overlays:Array<{label:string;price:string;run_id:number}>}> => (await webClient.get('/neodesk/api/chart',{params:{instrument,interval}})).data,
+  protection: async (tradeId: number, changes: Record<string, unknown>) =>
+    (await webClient.post('/neodesk/api/position/protection', { trade_id: tradeId, changes })).data,
+  close: async (tradeId: number) =>
+    (
+      await webClient.post('/neodesk/api/position/close', {
+        trade_id: tradeId,
+        confirmed: true,
+        request_id: crypto.randomUUID(),
+      })
+    ).data,
+  chart: async (
+    instrument: string,
+    interval: string
+  ): Promise<{ overlays: Array<{ label: string; price: string; run_id: number }> }> =>
+    (await webClient.get('/neodesk/api/chart', { params: { instrument, interval } })).data,
   settings: async (profile: string): Promise<NeoDeskView> =>
     (await webClient.post('/neodesk/api/settings', { profile })).data,
 }

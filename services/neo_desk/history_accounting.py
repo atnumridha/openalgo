@@ -1,6 +1,8 @@
 """Preserved conservative FIFO accounting; no broker or persistence dependencies."""
 
-import csv, io, json
+import csv
+import io
+import json
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from datetime import UTC, datetime, time
@@ -189,8 +191,8 @@ class TradeArchive:
                 unresolved = lot["unresolved"]
                 ambiguous = lot["ambiguous"] or fill_ambiguous
                 matches.append(
-                    dict(
-                        trade_id=json.dumps(
+                    {
+                        "trade_id": json.dumps(
                             [
                                 entry["exchange"],
                                 entry["trade_date"],
@@ -200,48 +202,48 @@ class TradeArchive:
                             ],
                             separators=(",", ":"),
                         ),
-                        symbol=fill["symbol"],
-                        exchange=fill["exchange"],
-                        product=fill["product"],
-                        side="long" if entry["side"] == "BUY" else "short",
-                        quantity=quantity,
-                        entry_side=entry["side"],
-                        exit_side=fill["side"],
-                        entry_time=entry["time"],
-                        exit_time=fill["time"],
-                        entry_price=entry["price"],
-                        exit_price=fill["price"],
-                        entry_trade_date=entry["trade_date"],
-                        exit_trade_date=fill["trade_date"],
-                        entry_fill_id=entry["fill_id"],
-                        exit_fill_id=fill["fill_id"],
-                        gross_pnl=None if unresolved or ambiguous else _decimal(gross),
-                        fees=_decimal(fees) if known and not ambiguous else None,
-                        net_pnl=_decimal(gross - fees)
+                        "symbol": fill["symbol"],
+                        "exchange": fill["exchange"],
+                        "product": fill["product"],
+                        "side": "long" if entry["side"] == "BUY" else "short",
+                        "quantity": quantity,
+                        "entry_side": entry["side"],
+                        "exit_side": fill["side"],
+                        "entry_time": entry["time"],
+                        "exit_time": fill["time"],
+                        "entry_price": entry["price"],
+                        "exit_price": fill["price"],
+                        "entry_trade_date": entry["trade_date"],
+                        "exit_trade_date": fill["trade_date"],
+                        "entry_fill_id": entry["fill_id"],
+                        "exit_fill_id": fill["fill_id"],
+                        "gross_pnl": None if unresolved or ambiguous else _decimal(gross),
+                        "fees": _decimal(fees) if known and not ambiguous else None,
+                        "net_pnl": _decimal(gross - fees)
                         if known and not unresolved and not ambiguous
                         else None,
-                        fees_source="broker_report_allocated"
+                        "fees_source": "broker_report_allocated"
                         if known and not ambiguous
                         else "unavailable",
-                        fee_coverage="ambiguous_allocation"
+                        "fee_coverage": "ambiguous_allocation"
                         if ambiguous
                         else "complete"
                         if known
                         else "partial"
                         if entry["fees"] is not None or fill["fees"] is not None
                         else "unavailable",
-                        fees_allocation="proportional_fill_quantity"
+                        "fees_allocation": "proportional_fill_quantity"
                         if known and not ambiguous
                         else None,
-                        status="ambiguous_execution_order"
+                        "status": "ambiguous_execution_order"
                         if ambiguous
                         else "unresolved_opening_inventory"
                         if unresolved
                         else "closed"
                         if quantity == lot["remaining"]
                         else "partial_close",
-                        provenance={"entry": entry["provenance"], "exit": fill["provenance"]},
-                    )
+                        "provenance": {"entry": entry["provenance"], "exit": fill["provenance"]},
+                    }
                 )
                 remaining -= quantity
                 lot["remaining"] -= quantity
@@ -249,30 +251,30 @@ class TradeArchive:
                     queue.popleft()
             if remaining:
                 queue.append(
-                    dict(
-                        fill=fill,
-                        remaining=remaining,
-                        unresolved=opening_unresolved,
-                        ambiguous=fill_ambiguous,
-                    )
+                    {
+                        "fill": fill,
+                        "remaining": remaining,
+                        "unresolved": opening_unresolved,
+                        "ambiguous": fill_ambiguous,
+                    }
                 )
         opens = [
-            dict(
-                symbol=lot["fill"]["symbol"],
-                exchange=lot["fill"]["exchange"],
-                product=lot["fill"]["product"],
-                side=lot["fill"]["side"],
-                quantity=lot["remaining"],
-                entry_time=lot["fill"]["time"],
-                entry_price=lot["fill"]["price"],
-                status="ambiguous_execution_order"
+            {
+                "symbol": lot["fill"]["symbol"],
+                "exchange": lot["fill"]["exchange"],
+                "product": lot["fill"]["product"],
+                "side": lot["fill"]["side"],
+                "quantity": lot["remaining"],
+                "entry_time": lot["fill"]["time"],
+                "entry_price": lot["fill"]["price"],
+                "status": "ambiguous_execution_order"
                 if lot["ambiguous"]
                 else "unresolved_opening_inventory"
                 if lot["unresolved"]
                 else "open",
-                fill_id=lot["fill"]["fill_id"],
-                trade_date=lot["fill"]["trade_date"],
-            )
+                "fill_id": lot["fill"]["fill_id"],
+                "trade_date": lot["fill"]["trade_date"],
+            }
             for queue in inventory.values()
             for lot in queue
         ]
@@ -316,50 +318,50 @@ class TradeArchive:
                 )
 
         known_net = sum(row["net_pnl"] is not None for row in filtered)
-        summary = dict(
-            gross_pnl=total_amount(filtered, "gross_pnl"),
-            gross_known_count=sum(row["gross_pnl"] is not None for row in filtered),
-            closed_count=len(filtered),
-            fees=total_amount(filtered_fills, "fees"),
-            fees_known_fill_count=sum(row["fees"] is not None for row in filtered_fills),
-            fill_count=len(filtered_fills),
-            fees_scope="actual charges on filtered fills, including open inventory",
-            allocated_trade_fees=total_amount(filtered, "fees"),
-            net_pnl=total_amount(filtered, "net_pnl") if known_net == len(filtered) else None,
-            net_known_pnl=total_amount(filtered, "net_pnl"),
-            net_known_count=known_net,
-        )
-        coverage = dict(
-            lifetime_complete=False,
-            fill_count=len(fills),
-            first_fill_time=fills[0]["time"] if fills else None,
-            last_fill_time=fills[-1]["time"] if fills else None,
-            recorded_dates=sorted(
+        summary = {
+            "gross_pnl": total_amount(filtered, "gross_pnl"),
+            "gross_known_count": sum(row["gross_pnl"] is not None for row in filtered),
+            "closed_count": len(filtered),
+            "fees": total_amount(filtered_fills, "fees"),
+            "fees_known_fill_count": sum(row["fees"] is not None for row in filtered_fills),
+            "fill_count": len(filtered_fills),
+            "fees_scope": "actual charges on filtered fills, including open inventory",
+            "allocated_trade_fees": total_amount(filtered, "fees"),
+            "net_pnl": total_amount(filtered, "net_pnl") if known_net == len(filtered) else None,
+            "net_known_pnl": total_amount(filtered, "net_pnl"),
+            "net_known_count": known_net,
+        }
+        coverage = {
+            "lifetime_complete": False,
+            "fill_count": len(fills),
+            "first_fill_time": fills[0]["time"] if fills else None,
+            "last_fill_time": fills[-1]["time"] if fills else None,
+            "recorded_dates": sorted(
                 {
                     datetime.fromisoformat(row["time"]).astimezone(IST).date().isoformat()
                     for row in fills
                 }
             ),
-            fees_known_fill_count=sum(row["fees"] is not None for row in fills),
-            note=(
+            "fees_known_fill_count": sum(row["fees"] is not None for row in fills),
+            "note": (
                 "Recorded broker fills and imports only. Date coverage does not establish "
                 "complete lifetime history or opening inventory."
             ),
-        )
-        return dict(
-            rows=filtered[offset : offset + limit],
-            summary=summary,
-            symbols=sorted({row["symbol"] for row in fills}),
-            total=len(filtered),
-            offset=offset,
-            limit=limit,
-            coverage=coverage,
-            open_inventory=[row for row in opens if not symbol or row["symbol"] == symbol],
-            source="Kotak Neo broker archive",
-            accounting=(
+        }
+        return {
+            "rows": filtered[offset : offset + limit],
+            "summary": summary,
+            "symbols": sorted({row["symbol"] for row in fills}),
+            "total": len(filtered),
+            "offset": offset,
+            "limit": limit,
+            "coverage": coverage,
+            "open_inventory": [row for row in opens if not symbol or row["symbol"] == symbol],
+            "source": "Kotak Neo broker archive",
+            "accounting": (
                 "FIFO by exchange, symbol and product; actual fill fees allocated by quantity"
             ),
-        )
+        }
 
     def export_csv(self, symbol="", start=None, end=None):
         lower, upper = _date_bounds(start, end)

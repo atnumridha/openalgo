@@ -2,7 +2,6 @@ from datetime import UTC, timezone
 from decimal import Decimal as D
 
 import pytest
-from conftest import when
 from test_native_entries import OWNER, boundary, isolated, prepare
 
 from database import neo_desk_db as desk
@@ -16,6 +15,7 @@ from services.neo_desk.lifecycle import (
 )
 from services.strategy_module import engine, state
 from services.strategy_module.order_dispatch import DispatchResult
+from test.neo_desk.conftest import when
 
 
 def owned(monkeypatch, qty=65, mode="sandbox"):
@@ -191,8 +191,8 @@ def test_overdue_prior_session_squareoff_does_not_wait_until_today_afternoon():
 
 
 def test_option_protection_requires_actual_bid_depth_not_ltp(monkeypatch):
-    from services.neo_desk.lifecycle import observed_price
     import services.neo_desk.lifecycle as module
+    from services.neo_desk.lifecycle import observed_price
 
     monkeypatch.setattr("database.auth_db.get_auth_token", lambda owner: "fixture")
     monkeypatch.setattr(

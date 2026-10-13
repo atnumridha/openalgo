@@ -2,6 +2,8 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
 
+vi.stubEnv('VITE_NEO_DESK_ENABLED','false')
+
 // Cleanup after each test case
 afterEach(() => {
   cleanup()

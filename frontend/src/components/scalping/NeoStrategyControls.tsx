@@ -114,7 +114,7 @@ function EnabledNeoControls() {
               <div className="space-y-1 text-sm">
                 <p>Confirmed 15-minute signals · CE or PE buys</p>
                 <p>Entries 09:45–15:15 IST · square-off 15:29 IST</p>
-                <p>6R index target · one verified lot near ₹50</p>
+                <p>6R index target · up to two verified lots near ₹50</p>
                 <p>₹500 trade guard · ₹1,000 daily guard · 3 entries</p>
               </div>
             </div>

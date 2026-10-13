@@ -1,7 +1,9 @@
 import sqlite3
-from services.neo_desk.migration import migrate_archive
-from test_history import isolated, OWNER, fill
+
+from test_history import OWNER, fill, isolated
+
 from services.neo_desk.history import history_page
+from services.neo_desk.migration import migrate_archive
 
 
 def test_migration_dry_run_then_idempotent_import(tmp_path):

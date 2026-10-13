@@ -63,7 +63,7 @@ Shared rules:
 - Entry execution window: 09:45 through 15:15 IST, inclusive of a signal confirmed at 15:15.
 - Scheduled owned-position square-off: 15:29 IST, independent of chart candle completion. Stops, targets and loss guards can exit earlier.
 - Initial index target: 6R. Preserve each preset's existing trailing activation and distance rather than silently changing them.
-- One broker lot at a time; expected NIFTY lot size 65, verified against metadata before trading.
+- Updated by user request on 13 October: prefer two whole broker lots when total entry cost, executable depth and the preset's planned risk allow; fall back to one or skip. Maximum 130 units with verified 65-unit NIFTY lot metadata. Existing ₹500/₹1,000 guards remain; original ORB uses its monitored loss threshold, which cannot guarantee a fill cap. Research also caps entries at two lots.
 - Option selection: observed premium near ₹50 ±5, subject to executable spread/depth, fresh data and affordability checks.
 - Entry affordability uses fresh available Kotak trading limit and estimated entry costs; no fixed entry-budget cap is restored.
 - Planned trade-risk limit ₹500, daily loss guard ₹1,000 and three-entry guard. Controlled presets retain their tighter option-risk conditions.

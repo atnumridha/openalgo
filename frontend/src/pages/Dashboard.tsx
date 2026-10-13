@@ -1,3 +1,5 @@
+import { MarketOverview } from '@/components/neo-desk/MarketOverview'
+import { ExecutionFeedback } from '@/components/neo-desk/ExecutionFeedback'
 import { BarChart3, BookOpen, FileText, GraduationCap, Search, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
@@ -302,6 +304,8 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6 md:space-y-12">
+      <MarketOverview />
+      <ExecutionFeedback />
       {/* Dashboard Header */}
       <div className="flex flex-col lg:flex-row lg:items-start gap-4">
         <div className="flex-1">

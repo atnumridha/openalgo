@@ -29,11 +29,11 @@ def desk_view(owner, host):
             "run_id": c["run_id"],
             "legs": list((snap or {}).get("legs", {}).values()),
             "managed_runs": [
-                dict(
-                    run_id=rid,
-                    protection=desk.get_run_protection(owner, rid),
-                    state=state.get_run_state(rid),
-                )
+                {
+                    "run_id": rid,
+                    "protection": desk.get_run_protection(owner, rid),
+                    "state": state.get_run_state(rid),
+                }
                 for rid in desk.managed_run_ids(owner)
             ],
         },
@@ -51,8 +51,9 @@ def room_for_owner(owner):
 def publish_owner(owner):
     from database.auth_db import get_auth_token
     from extensions import emit_from_any_thread
-    from .service import get_service
     from utils.logging import get_logger
+
+    from .service import get_service
 
     try:
         if not get_auth_token(owner):

@@ -1,3 +1,5 @@
+import { MarketOverview } from '@/components/neo-desk/MarketOverview'
+import { ExecutionFeedback } from '@/components/neo-desk/ExecutionFeedback'
 import { OwnedTradeControls } from '@/components/neo-desk/OwnedTradeControls'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -1045,7 +1047,9 @@ export default function Scalping() {
 
   return (
     <div className="space-y-4 p-4">
+      <MarketOverview />
       <NeoStrategyControls />
+      <ExecutionFeedback />
       <OwnedTradeControls />
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>

@@ -1,24 +1,26 @@
 from decimal import Decimal as D
+
 import pytest
-from services.neo_desk.history import ingest_fills, history_page
+
 from database import neo_history_db as db
+from services.neo_desk.history import history_page, ingest_fills
 
 OWNER = "history-fixture"
 
 
 def fill(id, side="BUY", qty=65, price="50", fees="2", time="2026-10-09T10:00:00+05:30"):
-    return dict(
-        fill_id=id,
-        order_id=id,
-        symbol="NIFTY13OCT2622500CE",
-        exchange="NFO",
-        product="NRML",
-        side=side,
-        quantity=qty,
-        price=price,
-        fees=fees,
-        time=time,
-    )
+    return {
+        "fill_id": id,
+        "order_id": id,
+        "symbol": "NIFTY13OCT2622500CE",
+        "exchange": "NFO",
+        "product": "NRML",
+        "side": side,
+        "quantity": qty,
+        "price": price,
+        "fees": fees,
+        "time": time,
+    }
 
 
 @pytest.fixture(autouse=True)

@@ -1,17 +1,21 @@
 """Recorded executions and actual reported charges; no cancelled-order inference."""
 
-import csv, io, json
+import csv
+import io
+import json
 from hashlib import sha256
+
 from database import neo_history_db as db
-from .history_accounting import TradeArchive, _normalized, IMMUTABLE, MAX_BYTES, MAX_ROWS
-from .fees import estimate_charges, FeePlan
+
+from .fees import FeePlan, estimate_charges
+from .history_accounting import IMMUTABLE, MAX_BYTES, MAX_ROWS, TradeArchive, _normalized
 
 
 def ingest_fills(owner, rows, source="broker_report"):
     if len(rows) > MAX_ROWS:
         raise ValueError("Import exceeds 10,000 executions.")
     db.init_db()
-    summary = dict(inserted=0, duplicates=0, updated=0, ignored=0)
+    summary = {"inserted": 0, "duplicates": 0, "updated": 0, "ignored": 0}
     try:
         for raw in rows:
             if str(raw.get("quantity")) == "0":

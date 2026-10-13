@@ -3,7 +3,6 @@ from dataclasses import replace
 from decimal import Decimal as D
 
 import pytest
-from conftest import bars, contract, quote, when
 
 from database import neo_desk_db as desk
 from database import strategy_module_db as native
@@ -14,6 +13,7 @@ from services.neo_desk.signals import evaluate_setup
 from services.strategy_module import engine, state
 from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.symbol_resolver import ResolvedLeg
+from test.neo_desk.conftest import bars, contract, quote, when
 
 OWNER = "neo_fixture_owner"
 
@@ -173,3 +173,38 @@ def test_native_manual_start_cannot_bypass_confirmed_provider_setup(monkeypatch)
     result = engine.start_run(sid, OWNER, "sandbox")
     assert not result.ok and "confirmed" in result.error.lower()
     assert orders == []
+
+
+def test_native_entry_uses_selected_two_lots_and_exact_quantity(monkeypatch):
+    orders = []
+    boundary(monkeypatch, "CE", orders)
+    c = contract("CE")
+    q = replace(quote(c), bid_qty=130, ask_qty=130)
+    chosen = select_contract(
+        [c], {c.symbol: q}, get_preset("orb_trail"), D(10000), when(), direction="CE"
+    )
+    assert chosen.quantity == 130
+    monkeypatch.setattr(
+        engine,
+        "resolve_leg",
+        lambda *a, **kw: ResolvedLeg(
+            ok=True,
+            symbol=c.symbol,
+            exchange="NFO",
+            segment="options",
+            lotsize=65,
+            tick_size=0.05,
+            strike=22500,
+            expiry="13-OCT-26",
+            expiry_symbol="13OCT26",
+            quantity=130,
+            lots=2,
+            option_type="CE",
+            underlying="NIFTY",
+        ),
+    )
+    s, _ = prepare("CE")
+    result = submit_setup(OWNER, s, chosen, "sandbox", now=when())
+    assert result.ok, result.error
+    assert len(orders) == 1 and int(orders[0]["quantity"]) == 130
+    assert desk.view(OWNER)["protection"]["quantity"] == 130
