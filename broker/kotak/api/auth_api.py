@@ -80,6 +80,7 @@ def authenticate_broker(mobile_number, totp, mpin):
             "https://mis.kotaksecurities.com/login/1.0/tradeApiLogin",
             headers=headers,
             content=payload,
+            timeout=15,
         )
 
         logger.debug(f"TOTP Login Response Status: {response.status_code}")
@@ -89,9 +90,8 @@ def authenticate_broker(mobile_number, totp, mpin):
 
         # Check for errors in TOTP login
         if "data" not in data_dict or data_dict.get("data", {}).get("status") != "success":
-            error_msg = data_dict.get("errMsg", data_dict.get("message", "TOTP login failed"))
-            logger.error(f"TOTP Login Failed - Response: {data_dict}")
-            return None, f"TOTP Login Error: {error_msg}"
+            logger.warning("Kotak declined the authenticator login")
+            return None, "Kotak could not verify the login. Retry with a fresh authenticator code."
 
         # Extract View token and sid
         view_token = data_dict["data"]["token"]
@@ -116,6 +116,7 @@ def authenticate_broker(mobile_number, totp, mpin):
             "https://mis.kotaksecurities.com/login/1.0/tradeApiValidate",
             headers=headers,
             content=payload,
+            timeout=15,
         )
 
         logger.debug(f"MPIN Validation Response Status: {response.status_code}")
@@ -125,9 +126,11 @@ def authenticate_broker(mobile_number, totp, mpin):
 
         # Check for errors in MPIN validation
         if "data" not in data_dict or data_dict.get("data", {}).get("status") != "success":
-            error_msg = data_dict.get("errMsg", data_dict.get("message", "MPIN validation failed"))
-            logger.error(f"MPIN Validation Failed - Response: {data_dict}")
-            return None, f"MPIN Validation Error: {error_msg}"
+            logger.warning("Kotak declined the trading-session validation")
+            return (
+                None,
+                "Kotak trading login did not complete. Check the private MPIN configuration.",
+            )
 
         # Extract Trading token, sid, and baseUrl
         trading_token = data_dict["data"]["token"]
@@ -164,15 +167,12 @@ def authenticate_broker(mobile_number, totp, mpin):
 
         return auth_string, None
 
-    except KeyError as e:
-        logger.error(f"Missing expected field in API response: {str(e)}")
-        return None, f"Missing expected field in API response: {str(e)}"
-    except httpx.HTTPError as e:
-        logger.error(f"HTTP request failed: {str(e)}")
-        return None, f"HTTP request failed: {str(e)}"
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response: {str(e)}")
-        return None, f"Failed to parse JSON response: {str(e)}"
-    except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
-        return None, f"Authentication error: {str(e)}"
+    except (KeyError, json.JSONDecodeError):
+        logger.exception("Kotak login response was incomplete")
+        return None, "Kotak returned an incomplete login response. Retry later."
+    except httpx.HTTPError:
+        logger.exception("Kotak login connection failed")
+        return None, "Could not reach Kotak login. Check the connection and retry."
+    except Exception:
+        logger.exception("Kotak authentication did not complete")
+        return None, "Kotak login did not complete. Retry with a fresh authenticator code."

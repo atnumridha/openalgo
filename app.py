@@ -297,6 +297,8 @@ def create_app():
 
     # Register other blueprints
     app.register_blueprint(auth_bp)
+    from blueprints.neo_login import neo_login_bp
+    app.register_blueprint(neo_login_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(orders_bp)
     app.register_blueprint(search_bp)

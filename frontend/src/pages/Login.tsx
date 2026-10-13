@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
+import { NeoLogin } from '@/components/auth/NeoLogin'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,6 +23,8 @@ import { showToast } from '@/utils/toast'
 export default function Login() {
   const navigate = useNavigate()
   const { login: setLogin } = useAuthStore()
+  const [savedLogin, setSavedLogin] = useState(false)
+  const [canResume, setCanResume] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [totpCode, setTotpCode] = useState('')
@@ -40,6 +43,20 @@ export default function Login() {
           credentials: 'include',
         })
         const setupData = await setupResponse.json()
+        if (setupData.saved_login_enabled) {
+          const nativeResponse = await fetch('/auth/session-status', { credentials: 'include' })
+          if (nativeResponse.ok) {
+            const nativeSession = await nativeResponse.json()
+            if (nativeSession.logged_in && nativeSession.broker) {
+              setLogin(nativeSession.user || nativeSession.username || 'neo', nativeSession.broker)
+              navigate('/dashboard', { replace: true })
+              return
+            }
+          }
+          setCanResume(!!setupData.can_resume)
+          setSavedLogin(true)
+          return
+        }
         if (setupData.needs_setup) {
           navigate('/setup', { replace: true })
           return
@@ -75,7 +92,7 @@ export default function Login() {
       }
     }
     checkSetup()
-  }, [navigate])
+  }, [navigate, setLogin])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -206,6 +223,8 @@ export default function Login() {
   }
 
   // Show loading while checking setup
+  if (savedLogin) return <NeoLogin canResume={canResume} />
+
   if (isCheckingSetup) {
     return (
       <div className="min-h-screen flex items-center justify-center">

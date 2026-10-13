@@ -1,8 +1,9 @@
 import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
 import { BrokerAuthSignOut } from '@/components/auth/BrokerAuthSignOut'
+import { NeoLogin } from '@/components/auth/NeoLogin'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -333,6 +334,24 @@ export default function BrokerTOTP() {
   const navigate = useNavigate()
   const { login } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
+  const [savedLogin, setSavedLogin] = useState(false)
+  const [checkingSavedLogin, setCheckingSavedLogin] = useState(broker === 'kotak')
+  useEffect(() => {
+    if (broker !== 'kotak') return
+    let current = true
+    fetch('/auth/check-setup', { credentials: 'include' })
+      .then((response) => response.json())
+      .then((data) => {
+        if (current) setSavedLogin(!!data.saved_login_enabled)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (current) setCheckingSavedLogin(false)
+      })
+    return () => {
+      current = false
+    }
+  }, [broker])
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<Record<string, string>>({})
 
@@ -430,6 +449,9 @@ export default function BrokerTOTP() {
 
     setFormData((prev) => ({ ...prev, [name]: filteredValue }))
   }
+
+  if (savedLogin) return <NeoLogin />
+  if (checkingSavedLogin) return <p className="p-6">Checking Kotak connection…</p>
 
   return (
     <div className="min-h-screen flex items-center justify-center py-8 px-4">
