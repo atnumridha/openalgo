@@ -56,6 +56,7 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 #   cd upgrade && uv run migrate_drop_legacy_strategy.py --status
 #   cd upgrade && uv run migrate_drop_legacy_strategy.py
 MIGRATIONS = [
+    ("migrate_neo_desk.py", "Neo Desk native preset provider"),
     # Legacy migrations (for users upgrading from older versions)
     ("add_feed_token.py", "Feed Token Support"),
     ("add_user_id.py", "User ID Column"),

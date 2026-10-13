@@ -515,6 +515,19 @@ def _resolve_all_legs(
             )
             continue
 
+        if leg.get("expected_symbol") and (
+            outcome.symbol != leg["expected_symbol"]
+            or outcome.quantity != leg.get("expected_quantity")
+        ):
+            failures.append(
+                {
+                    "leg_id": leg_id,
+                    "ok": False,
+                    "error": "Resolved contract differs from the checked provider selection",
+                    "code": "provider_identity_mismatch",
+                }
+            )
+            continue
         if underlying_ltp is None:
             underlying_ltp = outcome.underlying_ltp
 
@@ -538,6 +551,7 @@ def _resolve_all_legs(
                 "target_pts": leg.get("target_pts"),
                 "trail": leg.get("trail") or {},
                 "risk_unit": leg.get("risk_unit") or "points",
+                "entry_price": leg.get("entry_price", 0),
             }
         )
 
@@ -718,6 +732,7 @@ def _place_entries(
             product=strategy.get("product", "NRML"),
             strategy_name=strategy.get("name", ""),
             pricetype=strategy.get("pricetype", "MARKET"),
+            price=leg.get("entry_price", 0),
         )
         # The intent is durable BEFORE the broker is called, not after. It used
         # to be recorded from the dispatch result, which meant a crash or a

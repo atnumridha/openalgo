@@ -885,3 +885,10 @@ def _place(
         engine.reconcile_pending_stop(run_id)
 
     return _Placement(ok=result.ok, error=result.error, exit_claim_id=exit_claim_id)
+
+
+def start_provider_run(strategy_id: int, user_id: str, mode: str):
+    """A server-side provider uses the same durable batch run/order pipeline."""
+    from services.strategy_module.engine import start_run
+
+    return start_run(strategy_id, user_id, mode, trigger_source="neo_confirmed_setup")
