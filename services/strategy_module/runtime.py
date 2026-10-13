@@ -50,6 +50,10 @@ def start_strategy_module() -> dict[str, bool]:
     result["checkpoint"] = _guard("checkpointing", _start_checkpoint)
     result["scheduler"] = _guard("scheduler", _start_scheduler)
 
+    import os
+    if os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true":
+        from services.neo_desk.lifecycle import start_management
+        result["neo_management"] = _guard("Neo Desk owned protection", start_management)
     logger.info("Strategy module started: %s", result)
     return result
 

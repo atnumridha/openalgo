@@ -102,6 +102,7 @@ def submit_setup(owner_id, setup, selection, mode, *, now=None):
         "symbol": c.symbol,
         "exchange": c.exchange,
     }
+    desk.configure(owner_id, protection=protection)
     try:
         result = start_provider_run(sid, owner_id, mode)
     except Exception:
