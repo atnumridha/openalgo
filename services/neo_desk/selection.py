@@ -16,7 +16,7 @@ def select_contract(
     direction=None,
     index_reference=None,
     recent_bars=None,
-    brokerage=D(0),
+    brokerage=D(10),
 ):
     candidates = []
     if now.tzinfo is None or not D(available_limit).is_finite() or D(available_limit) <= 0:

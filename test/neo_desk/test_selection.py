@@ -73,3 +73,8 @@ def test_equal_premiums_choose_strike_nearest_the_current_index():
         index_reference=D(22500),
     )
     assert selected.contract == b
+
+def test_entry_affordability_includes_unverified_plan_brokerage():
+    c=contract('CE')
+    result=select_contract([c],{c.symbol:quote(c)},get_preset('orb_trail'),D('3298'),when(),direction='CE')
+    assert not result.ok

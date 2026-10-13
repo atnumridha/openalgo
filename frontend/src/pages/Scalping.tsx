@@ -1,3 +1,4 @@
+import { OwnedTradeControls } from '@/components/neo-desk/OwnedTradeControls'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
@@ -1045,6 +1046,7 @@ export default function Scalping() {
   return (
     <div className="space-y-4 p-4">
       <NeoStrategyControls />
+      <OwnedTradeControls />
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Scalping Terminal</h1>
         <div className="flex items-center gap-3">
@@ -1358,7 +1360,7 @@ export default function Scalping() {
       {showCharts &&
         (isSingle ? (
           <div className="grid grid-cols-1 gap-3">
-            <div className="h-[340px]">
+            <div className="h-[480px]">
               <ScalpChart
                 symbol={singleLeg?.symbol ?? ''}
                 exchange={singleLeg?.exchange ?? ''}
@@ -1369,7 +1371,7 @@ export default function Scalping() {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="h-[340px]">
+            <div className="h-[480px]">
               <ScalpChart
                 symbol={ceLeg?.symbol ?? ''}
                 exchange={ceLeg?.exchange ?? ''}
@@ -1377,7 +1379,7 @@ export default function Scalping() {
                 title="Call (CE)"
               />
             </div>
-            <div className="h-[340px]">
+            <div className="h-[480px]">
               <ScalpChart
                 symbol={underlyingSym}
                 exchange={underlyingExch}
@@ -1385,7 +1387,7 @@ export default function Scalping() {
                 title={underlying || 'Underlying'}
               />
             </div>
-            <div className="h-[340px]">
+            <div className="h-[480px]">
               <ScalpChart
                 symbol={peLeg?.symbol ?? ''}
                 exchange={peLeg?.exchange ?? ''}

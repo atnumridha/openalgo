@@ -138,3 +138,9 @@ def history_export():
 def history_template():
     from flask import Response
     return Response('fill_id,order_id,symbol,exchange,product,side,quantity,price,time,fees\n',mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=execution-template.csv'})
+
+@neo_desk_bp.get('/chart')
+@authenticated
+def chart():
+    from services.neo_desk.chart_views import chart_view
+    return jsonify(chart_view(session['user'],request.args.get('instrument',''),request.args.get('interval','15m')))

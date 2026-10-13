@@ -1,3 +1,4 @@
+import { NeoMarketChart } from '@/components/neo-desk/NeoMarketChart'
 /**
  * ScalpChart - a self-contained live candlestick + volume chart for the
  * scalping terminal.
@@ -62,7 +63,7 @@ function fmtVol(n: number): string {
   return String(Math.round(n))
 }
 
-export function ScalpChart({
+function LegacyScalpChart({
   symbol,
   exchange,
   interval,
@@ -438,3 +439,5 @@ export function ScalpChart({
     </div>
   )
 }
+
+export function ScalpChart(props:{symbol:string;exchange:string;interval:string;title?:string}){return import.meta.env.VITE_NEO_DESK_ENABLED==='true'?<NeoMarketChart {...props}/>:<LegacyScalpChart {...props}/>}
