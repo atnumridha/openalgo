@@ -14,6 +14,7 @@ export interface Tool {
 }
 
 export const tools: Tool[] = [
+  ...(import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? [{title:'Neo Strategy Backtests',description:'Replay confirmed NIFTY CE/PE presets using preserved real observations and explicit coverage',href:'/neo-backtests',color:'bg-emerald-500'}] : []),
   {
     title: 'Strategy Builder',
     description:

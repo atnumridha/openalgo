@@ -18,3 +18,13 @@ class NeoFill(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+
+
+class NeoResearchJob(Base):
+    __tablename__ = "neo_research_job"
+    id = Column(String(64), primary_key=True)
+    owner = Column(String(100), nullable=False, index=True)
+    status = Column(String(20), nullable=False)
+    request = Column(JSON, nullable=False)
+    result = Column(JSON)
+    error = Column(String(500))

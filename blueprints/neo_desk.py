@@ -144,3 +144,21 @@ def history_template():
 def chart():
     from services.neo_desk.chart_views import chart_view
     return jsonify(chart_view(session['user'],request.args.get('instrument',''),request.args.get('interval','15m')))
+
+@neo_desk_bp.get('/datasets')
+@authenticated
+def datasets():
+    from services.neo_desk.datasets import list_datasets
+    return jsonify(datasets=list_datasets())
+
+@neo_desk_bp.post('/research')
+@authenticated
+def research():
+    from services.neo_desk.research_jobs import submit_job
+    return jsonify(submit_job(session['user'],request.get_json(silent=True))),202
+
+@neo_desk_bp.get('/research/<identity>')
+@authenticated
+def research_job(identity):
+    from services.neo_desk.research_jobs import get_job
+    return jsonify(get_job(session['user'],identity))

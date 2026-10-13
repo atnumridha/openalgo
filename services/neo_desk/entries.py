@@ -1,4 +1,3 @@
-from dataclasses import asdict
 from datetime import datetime, time
 from decimal import Decimal as D
 
@@ -10,12 +9,7 @@ from .presets import get_preset
 from .types import IST, EntryResult
 
 
-def public_setup(s):
-    return {
-        k: v.isoformat() if isinstance(v, datetime) else str(v) if isinstance(v, D) else v
-        for k, v in asdict(s).items()
-    }
-
+from .serialization import public_setup
 
 def submit_setup(owner_id, setup, selection, mode, *, now=None):
     now = now or datetime.now(IST)

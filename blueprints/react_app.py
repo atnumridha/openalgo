@@ -891,3 +891,7 @@ def serve_docs(filename):
     if not docs_dir.exists():
         return "Docs not found", 404
     return send_from_directory(docs_dir, filename)
+
+@react_bp.route('/neo-backtests',strict_slashes=False)
+def react_neo_backtests():
+    return serve_react_app()

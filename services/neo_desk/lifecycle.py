@@ -364,6 +364,8 @@ def start_management():
 
     desk.init_db()
     recover_provider()
+    from .research_jobs import recover_jobs
+    recover_jobs()
     scheduler = get_scheduler()
     if scheduler is None:
         raise RuntimeError("Native strategy scheduler is unavailable; entries cannot be started.")

@@ -67,6 +67,7 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
+const NeoBacktests = lazy(() => import('@/pages/NeoBacktests'))
 const Scalping = lazy(() => import('@/pages/Scalping'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const OIRange = lazy(() => import('@/pages/OIRange'))
@@ -220,6 +221,7 @@ function App() {
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
                 <Route path="/scalping" element={<Scalping />} />
+                <Route path="/neo-backtests" element={<NeoBacktests />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />

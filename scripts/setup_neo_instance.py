@@ -38,6 +38,7 @@ def provision(source: Path, target: Path):
         "REDIRECT_URL": "http://127.0.0.1:5001/kotak/callback",
         "WEBSOCKET_HOST": "127.0.0.1",
         "WEBSOCKET_PORT": "8767",
+        "WEBSOCKET_URL": "ws://127.0.0.1:8767",
         "ZMQ_HOST": "127.0.0.1",
         "ZMQ_PORT": "5557",
         "SESSION_COOKIE_NAME": "neo_openalgo_session",
