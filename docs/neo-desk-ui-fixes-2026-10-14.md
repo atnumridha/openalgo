@@ -1,0 +1,15 @@
+# Neo Desk chart labels and signal activation — 14 October 2026
+
+The NIFTY chart selectors now show the broker chain's ATM, ITM1/2 and OTM1/2 labels on both call and put strikes. The selected-strike summary shows the ATM reference and each side's classification. Calls and puts use opposite directions relative to the chain's nearest ATM strike. Missing ATM data is unclassified rather than guessed. Labels describe the latest chain refresh, not a new trade recommendation.
+
+Neo provider strategies used to display the ordinary batch “Start run” action. That action attempts an immediate entry and is deliberately refused by the native engine for Neo strategies. Their detail pages now display the existing shared Strategy automation controller: one selected preset, Start Sandbox or Start Live, Stop entries, the runner state, waiting reason, entry count and owned-run status. Start Live is the single activation action; no extra arming checkbox was added. A “No open run” badge is separate from whether signal automation is Active or Stopped. Generic API starts remain refused with directions to the correct controller.
+
+The browser check also reproduced a late default chart initialization that replaced a manual option chart after restored history failed. A valid explicit selection now owns initialization and cannot be replaced by the pending default. The regression failed with two symbol loads before the fix and passes with only the selected option loaded.
+
+Verification: 3,500 frontend tests across 257 files passed; 165 native strategy/session tests passed; 50 targeted UI tests passed. Production type-check/build, scoped UI lint and Python lint passed. The existing large-bundle advisory remains. One native fee test relied on yesterday's historical signal date while its native run was timestamped today; the fixture assertion now uses the actual run's IST date, without changing production accounting.
+
+Actual browser verification on /strategy/1: Start Sandbox became Active with Runner running; Stop entries restored Stopped with Runner stopped. Switching to Live exposed an enabled Start Live button without a separate checkbox. Start Live was not clicked and no real order was submitted. Mode was restored to Sandbox. The read-only Kotak account check succeeded, with zero nonzero positions and zero pending orders; native ownership was flat and the provider had no pending entry.
+
+These changes do not establish a profitable strategy or complete a month/year options backtest. The existing expired-option history and archive coverage limitations continue to apply. Private test logs and verification details are stored in runtime/neo_desk/verification-final/2026-10-14-atm-provider-ui/.
+
+The final deployed Trading UI retained NIFTY19OCT2622750CE on the 5-minute chart with 710 historical bars after manual selection. At the chain ATM reference 22700, both selectors chose 22750 and displayed CE OTM1 / PE ITM1. The chart remained on the chosen call with the three native studies. The market was closed; these were historical candles, not a demonstration of live fills.

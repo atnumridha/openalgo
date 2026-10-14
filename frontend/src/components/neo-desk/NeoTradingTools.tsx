@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import type { OptionChainRow, OptionType } from '@/types/scalping'
 import { Label } from '@/components/ui/label'
 import { activeExpiries, nearestExpiry } from '@/lib/neoOptionSelection'
 import type { TradingTerminal } from '@/lib/trading/terminal'
@@ -47,6 +49,15 @@ export function NeoTradingTools({
     setCe((old) => (rows.some((r) => String(r.strike) === old && r.ce?.symbol) ? old : atm))
     setPe((old) => (rows.some((r) => String(r.strike) === old && r.pe?.symbol) ? old : atm))
   }, [rows, chainQuery.data])
+  // Match the broker chain's nearest-ATM convention, not the option premium.
+  function strikeLabel(row: OptionChainRow, side: OptionType): string {
+    const atm = chainQuery.data?.atm_strike
+    if (atm == null || !Number.isFinite(atm) || atm <= 0) return 'Unclassified'
+    const reported = (side === 'CE' ? row.ce : row.pe)?.label
+    if (reported && /^(ATM|ITM[0-9]*|OTM[0-9]*)$/.test(reported)) return reported
+    if (row.strike === atm) return 'ATM'
+    return (side === 'CE' ? row.strike < atm : row.strike > atm) ? 'ITM' : 'OTM'
+  }
   async function applyStudies(pane: TradingTerminal) {
     for (const id of studies) {
       if (!pane.listIndicators().some((s) => s.indicatorId === id)) await pane.addIndicatorById(id)
@@ -71,6 +82,8 @@ export function NeoTradingTools({
       setError('Choose a listed strike for this expiry.')
       return
     }
+    // An explicit valid selection owns initialization, even after restored history failed.
+    initial.current = true
     loading.current = true
     setBusy(true)
     setError('')
@@ -97,14 +110,23 @@ export function NeoTradingTools({
     if (initial.current) return
     const tryDefault = () => {
       const pane = target()
-      if (!initial.current && pane && !pane.dataUnavailable() && !pane.replayActive() && !pane.replayPickingBar()) {
+      if (
+        !initial.current &&
+        pane &&
+        !pane.dataUnavailable() &&
+        !pane.replayActive() &&
+        !pane.replayPickingBar()
+      ) {
         initial.current = true
         void chart('INDEX')
       }
     }
     tryDefault()
     if (initial.current) return
-    const timer = setInterval(() => {tryDefault(); if (initial.current) clearInterval(timer)}, 250)
+    const timer = setInterval(() => {
+      tryDefault()
+      if (initial.current) clearInterval(timer)
+    }, 250)
     return () => clearInterval(timer)
   }, [revision, target])
   const problem =
@@ -133,9 +155,9 @@ export function NeoTradingTools({
         </div>
         {(['CE', 'PE'] as const).map((side) => (
           <div key={side}>
-            <Label htmlFor={'neo-chart-' + side}>{side} strike</Label>
+            <Label htmlFor={`neo-chart-${side}`}>{side} strike</Label>
             <select
-              id={'neo-chart-' + side}
+              id={`neo-chart-${side}`}
               value={side === 'CE' ? ce : pe}
               onChange={(e) => (side === 'CE' ? setCe(e.target.value) : setPe(e.target.value))}
               disabled={busy || !rows.length}
@@ -145,8 +167,7 @@ export function NeoTradingTools({
                 .filter((r) => (side === 'CE' ? r.ce : r.pe)?.symbol)
                 .map((r) => (
                   <option key={r.strike} value={String(r.strike)}>
-                    {r.strike}
-                    {r.strike === chainQuery.data?.atm_strike ? ' · ATM' : ''}
+                    {r.strike} · {strikeLabel(r, side)}
                   </option>
                 ))}
             </select>
@@ -183,6 +204,26 @@ export function NeoTradingTools({
           Refresh broker data
         </Button>
       </div>
+      {rows.length ? (
+        <fieldset
+          aria-label="Selected option moneyness"
+          className="mt-2 flex flex-wrap items-center gap-2 text-xs"
+        >
+          <span>ATM reference {chainQuery.data?.atm_strike ?? 'unavailable'}</span>
+          {(['CE', 'PE'] as const).map((side) => {
+            const row = rows.find((r) => String(r.strike) === (side === 'CE' ? ce : pe))
+            return row ? (
+              <Badge key={side} variant="outline">
+                {side} {row.strike} · {strikeLabel(row, side)}
+              </Badge>
+            ) : null
+          })}
+          <span className="text-muted-foreground">
+            ATM = nearest strike · ITM = in the money · OTM = out of the money. Numbers count
+            strikes from ATM; based on the latest chain refresh.
+          </span>
+        </fieldset>
+      ) : null}
       <p className="mt-1 text-xs text-muted-foreground">
         {busy ? 'Loading selected prices and indicators…' : shown || 'NIFTY charts'} · nearest
         active expiry by default; expiry list newest first. Donchian 20 / EMA 200, FVG / structure

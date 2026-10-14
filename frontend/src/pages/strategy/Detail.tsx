@@ -36,6 +36,7 @@ import {
   useBrokerBook,
   useStrategyLive,
 } from '@/api/strategy_module'
+import { NeoStrategyControls } from '@/components/scalping/NeoStrategyControls'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -449,7 +450,9 @@ function LiveTab({
           <CardDescription>
             {isRunning
               ? 'Active run — LTP, MTM and effective SL from the engine.'
-              : 'Run inactive — start the strategy to see live state here.'}
+              : strategy.legs.some((leg) => leg.neo_provider === true)
+                ? 'No open Neo run. Automation waits for a confirmed setup; its status is shown above.'
+                : 'Run inactive — start the strategy to see live state here.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -2689,6 +2692,7 @@ export default function StrategyDetail() {
   const events = eventsQuery.data ?? []
   const running = strategy.status === 'running'
   const stopped = !running
+  const neoProvider = strategy.legs.some((leg) => leg.neo_provider === true)
 
   return (
     <div className="space-y-6">
@@ -2699,9 +2703,17 @@ export default function StrategyDetail() {
           </div>
           <h1 className="text-2xl font-bold tracking-tight">{strategy.name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge variant={statusBadgeVariant(strategy.status)}>{strategy.status}</Badge>
+            <Badge variant={statusBadgeVariant(strategy.status)}>
+              {neoProvider && strategy.status === 'stopped' && !strategy.current_run_id
+                ? 'No open run'
+                : strategy.status}
+            </Badge>
             <Badge variant={strategy.live_enabled ? 'destructive' : 'secondary'}>
-              {strategy.live_enabled ? 'LIVE-enabled' : 'SANDBOX-only'}
+              {neoProvider
+                ? 'Neo Desk automation'
+                : strategy.live_enabled
+                  ? 'LIVE-enabled'
+                  : 'SANDBOX-only'}
             </Badge>
             {strategy.webhook_locked && (
               <Badge variant="destructive" className="font-semibold">
@@ -2757,9 +2769,12 @@ export default function StrategyDetail() {
               nothing for a Start button to do: pressing it ran the batch
               lifecycle over legs that carry an accepted side rather than a
               position to enter at. */}
-          {stopped && !strategy.webhook_locked && strategy.strategy_kind !== 'signal' && (
-            <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
-          )}
+          {stopped &&
+            !neoProvider &&
+            !strategy.webhook_locked &&
+            strategy.strategy_kind !== 'signal' && (
+              <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
+            )}
           {stopped && !strategy.webhook_locked && strategy.strategy_kind === 'signal' && (
             <span
               className="text-xs text-muted-foreground"
@@ -2778,7 +2793,7 @@ export default function StrategyDetail() {
               {stopMutation.isPending ? 'Stopping…' : 'Stop & Close Positions'}
             </Button>
           )}
-          {stopped && !strategy.live_enabled && (
+          {stopped && !neoProvider && !strategy.live_enabled && (
             <Button
               variant="destructive"
               onClick={() => setConfirmEnableLive(true)}
@@ -2787,7 +2802,7 @@ export default function StrategyDetail() {
               Enable LIVE
             </Button>
           )}
-          {stopped && strategy.live_enabled && (
+          {stopped && !neoProvider && strategy.live_enabled && (
             <Button
               variant="outline"
               onClick={() => liveModeMutation.mutate(false)}
@@ -2827,6 +2842,30 @@ export default function StrategyDetail() {
           </span>
         ) : null}
       </div>
+
+      {neoProvider ? (
+        <section aria-label="Neo Desk signal automation" className="space-y-3">
+          <div className="rounded-md border bg-muted/30 p-3 text-sm">
+            <p>
+              Neo Desk opens a run only after a fresh confirmed 15-minute NIFTY setup. Start
+              automation below; it waits for the signal instead of buying the configured leg
+              immediately.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              The controller manages one selected preset across the terminal. “No open run” means no
+              strategy entry is currently open; check Active / Stopped below for automation status.
+            </p>
+            <Button
+              variant="link"
+              className="mt-1 h-auto px-0"
+              onClick={() => navigate('/scalping')}
+            >
+              Open scalping terminal and readiness
+            </Button>
+          </div>
+          <NeoStrategyControls />
+        </section>
+      ) : null}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex flex-wrap gap-1 bg-transparent">

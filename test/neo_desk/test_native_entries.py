@@ -172,6 +172,7 @@ def test_native_manual_start_cannot_bypass_confirmed_provider_setup(monkeypatch)
     sid = NeoDeskService()._native_strategy(OWNER, desk.view(OWNER))
     result = engine.start_run(sid, OWNER, "sandbox")
     assert not result.ok and "confirmed" in result.error.lower()
+    assert "/scalping" in result.error
     assert orders == []
 
 

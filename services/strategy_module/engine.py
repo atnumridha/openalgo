@@ -298,8 +298,18 @@ def start_run(
         )
 
     strategy = store.strategy_to_dict(strategy_row)
-    if any(leg.get("neo_provider") for leg in strategy.get("legs",[])) and trigger_source!="neo_confirmed_setup":
-        return StartResult(ok=False,error="Neo Desk entries require a fresh confirmed provider setup.")
+    if (
+        any(leg.get("neo_provider") for leg in strategy.get("legs", []))
+        and trigger_source != "neo_confirmed_setup"
+    ):
+        return StartResult(
+            ok=False,
+            error=(
+                "This Neo Desk strategy opens entries on a fresh confirmed 15-minute setup. "
+                "Start Strategy automation on the strategy page or /scalping; "
+                "the generic Start run cannot place an immediate Neo entry."
+            ),
+        )
     api_key = _api_key_for(user_id)
     if not api_key:
         return StartResult(ok=False, error="No API key is configured for this user")

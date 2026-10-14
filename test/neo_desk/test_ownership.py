@@ -142,7 +142,10 @@ def test_running_entry_fees_are_not_charged_twice_by_daily_guard(monkeypatch):
     from services.neo_desk.lifecycle import day_performance
 
     rid, orders = owned(monkeypatch)
-    net, count = day_performance(OWNER, when().date())
+    # The native run is timestamped at creation; the signal fixture is historical.
+    # Use that actual run's IST day so the fee test also works after midnight.
+    run_day = native.get_run(rid).started_at.astimezone(when().tzinfo).date()
+    net, count = day_performance(OWNER, run_day)
     assert count == 1 and net == -estimate("BUY", D(50), 65)
 
 

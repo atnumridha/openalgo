@@ -118,6 +118,8 @@ export interface TrailConfig {
  * `legToPayload` below is the one place that pruning happens.
  */
 export interface Leg {
+  /** Entries are supplied by the confirmed Neo Desk signal controller. */
+  neo_provider?: boolean
   id: number
   segment: Segment
 

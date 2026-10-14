@@ -3,7 +3,7 @@ import { act, render, renderHook, screen, waitFor, within } from '@testing-libra
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const rest = vi.hoisted(() => ({
   get: vi.fn(),
@@ -1402,10 +1402,82 @@ describe('strategy exit action toasts describe proven state only', () => {
     await user.click(screen.getByRole('button', { name: 'Start sandbox' }))
 
     await waitFor(() =>
-      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/start', { mode: 'sandbox' })
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/start', {
+        mode: 'sandbox',
+      })
     )
     expect(toast.warning).toHaveBeenCalledWith(
       'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
     )
   })
 })
+
+describe('Neo provider strategies use signal automation instead of immediate batch entries', () => {
+  it.each([
+    'sandbox',
+    'live',
+  ] as const)('starts the shared %s controller and never opens the batch-start dialog', async (mode) => {
+    vi.stubEnv('VITE_NEO_DESK_ENABLED', 'true')
+    const neoState = {
+      profile: 'orb_trail',
+      activation: 'Stopped',
+      mode,
+      status: 'Entries stopped',
+      can_edit: true,
+      run_id: null,
+      entries_today: 0,
+      day_net_estimate: '0',
+      protection: {},
+      presets: [{ profile: 'orb_trail', label: 'ORB index trail' }],
+      runner: { running: false },
+    }
+    const stopped = {
+      ...strategy,
+      status: 'stopped',
+      current_run_id: null,
+      legs: [{ id: 1, segment: 'options', position: 'B', lots: 1, neo_provider: true }],
+    }
+    rest.get.mockImplementation((url: string) =>
+      Promise.resolve({
+        data:
+          url === '/strategy/api/strategies/7'
+            ? { data: stopped }
+            : url === '/neodesk/api/state'
+              ? neoState
+              : { data: [] },
+      })
+    )
+    rest.post.mockResolvedValue({
+      data: {
+        ...neoState,
+        activation: 'Active',
+        runner: { running: true },
+        status: 'Waiting for a fresh confirmed 15-minute setup',
+      },
+    })
+    const user = userEvent.setup()
+    renderDetail()
+    const start = await screen.findByRole('button', {
+      name: mode === 'live' ? 'Start Live' : 'Start Sandbox',
+    })
+    expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Enable LIVE' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    await user.click(start)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop entries' })).toBeEnabled())
+    expect(rest.post).toHaveBeenCalledWith('/neodesk/api/execution/start', {
+      request_id: expect.any(String),
+      confirm_live: mode === 'live',
+    })
+    expect(rest.post).not.toHaveBeenCalledWith(
+      '/strategy/api/strategies/7/start',
+      expect.anything()
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Waiting for a fresh confirmed 15-minute setup'
+    )
+    vi.unstubAllEnvs()
+  })
+})
+
+afterEach(() => vi.unstubAllEnvs())

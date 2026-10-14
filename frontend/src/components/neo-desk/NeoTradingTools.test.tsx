@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { NeoTradingTools } from './NeoTradingTools'
+import { scalpingApi } from '@/api/scalping'
 vi.mock('@/api/scalping', () => ({
   scalpingApi: {
     getExpiry: async () => ({ status: 'success', data: ['27OCT26', '19OCT26'] }),
@@ -62,24 +63,152 @@ it('loads NIFTY with our indicators and charts the exact CE/PE selected strike w
   expect(applied).toHaveLength(3)
 })
 
-
 it('waits for the restored native chart to finish before applying the default NIFTY chart', async () => {
   let unavailable = true
   const loadSymbol = vi.fn(async () => true)
-  const target = () => ({loadSymbol, listIndicators: () => [], addIndicatorById: async () => {}, dataUnavailable: () => unavailable, replayActive: () => false, replayPickingBar: () => false})
-  const client = new QueryClient({defaultOptions: {queries: {retry:false}}})
-  render(<QueryClientProvider client={client}><NeoTradingTools target={target as never} revision={1} /></QueryClientProvider>)
+  const target = () => ({
+    loadSymbol,
+    listIndicators: () => [],
+    addIndicatorById: async () => {},
+    dataUnavailable: () => unavailable,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <NeoTradingTools target={target as never} revision={1} />
+    </QueryClientProvider>
+  )
   await screen.findAllByLabelText('NIFTY expiry')
   expect(loadSymbol).not.toHaveBeenCalled()
   unavailable = false
   // Native boot can finish without another workspace revision.
 
-  await waitFor(() => expect(loadSymbol).toHaveBeenCalledWith({symbol:'NIFTY',exchange:'NSE_INDEX'}))
+  await waitFor(() =>
+    expect(loadSymbol).toHaveBeenCalledWith({ symbol: 'NIFTY', exchange: 'NSE_INDEX' })
+  )
 })
-
 
 beforeEach(() => {
-  vi.useFakeTimers({toFake:['Date']})
+  vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date('2026-10-13T10:00:00+05:30'))
 })
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+it('labels the same strike oppositely for calls and puts and shows the selected moneyness', async () => {
+  const target = () => ({
+    loadSymbol: async () => {},
+    listIndicators: () => [],
+    addIndicatorById: async () => {},
+    dataUnavailable: () => false,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <NeoTradingTools target={target as never} revision={1} />
+    </QueryClientProvider>
+  )
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Chart PE' })).toBeEnabled())
+  const labels = (side: string) =>
+    Array.from((screen.getByLabelText(`${side} strike`) as HTMLSelectElement).options).map(
+      (o) => o.textContent
+    )
+  expect(labels('CE')).toEqual(['22650 · ITM', '22700 · ATM', '22750 · OTM'])
+  expect(labels('PE')).toEqual(['22650 · OTM', '22700 · ATM', '22750 · ITM'])
+  fireEvent.change(screen.getByLabelText('CE strike'), { target: { value: '22750' } })
+  fireEvent.change(screen.getByLabelText('PE strike'), { target: { value: '22650' } })
+  expect(screen.getByLabelText('Selected option moneyness')).toHaveTextContent('CE 22750 · OTM')
+  expect(screen.getByLabelText('Selected option moneyness')).toHaveTextContent('PE 22650 · OTM')
+})
+
+it.each([
+  {
+    atm: 22700,
+    ceLabel: 'ITM1',
+    peLabel: 'OTM1',
+    expectedCE: '22650 · ITM1',
+    expectedPE: '22650 · OTM1',
+  },
+  {
+    atm: undefined,
+    ceLabel: '',
+    peLabel: '',
+    expectedCE: '22650 · Unclassified',
+    expectedPE: '22650 · Unclassified',
+  },
+])('preserves broker strike-distance labels and never invents a classification without ATM ($expectedCE)', async (f) => {
+  vi.spyOn(scalpingApi, 'getStrikes').mockResolvedValue({
+    status: 'success',
+    underlying: 'NIFTY',
+    fo_exchange: 'NFO',
+    expiry_date: '19OCT26',
+    atm_strike: f.atm,
+    chain: [
+      {
+        strike: 22650,
+        ce: { symbol: 'NIFTY19OCT2622650CE', label: f.ceLabel },
+        pe: { symbol: 'NIFTY19OCT2622650PE', label: f.peLabel },
+      },
+    ],
+  })
+  const target = () => ({
+    loadSymbol: async () => {},
+    listIndicators: () => [],
+    addIndicatorById: async () => {},
+    dataUnavailable: () => false,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <NeoTradingTools target={target as never} revision={1} />
+    </QueryClientProvider>
+  )
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Chart PE' })).toBeEnabled())
+  expect((screen.getByLabelText('CE strike') as HTMLSelectElement).options[0].textContent).toBe(
+    f.expectedCE
+  )
+  expect((screen.getByLabelText('PE strike') as HTMLSelectElement).options[0].textContent).toBe(
+    f.expectedPE
+  )
+})
+
+it('never lets delayed default initialization replace a manual option selection after failed restoration', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+  vi.setSystemTime(new Date('2026-10-13T10:00:00+05:30'))
+  let unavailable = true
+  const loadSymbol = vi.fn(async () => {
+    unavailable = false
+  })
+  const target = () => ({
+    loadSymbol,
+    listIndicators: () => [],
+    addIndicatorById: async () => {},
+    dataUnavailable: () => unavailable,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <NeoTradingTools target={target as never} revision={1} />
+    </QueryClientProvider>
+  )
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Chart CE' })).toBeEnabled())
+  fireEvent.change(screen.getByLabelText('CE strike'), { target: { value: '22750' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Chart CE' }))
+  await screen.findByText(/NIFTY19OCT2622750CE · nearest/)
+  act(() => vi.advanceTimersByTime(500))
+  await waitFor(() => expect(loadSymbol).toHaveBeenCalledTimes(1))
+  expect(loadSymbol).toHaveBeenLastCalledWith({ symbol: 'NIFTY19OCT2622750CE', exchange: 'NFO' })
+})
