@@ -335,6 +335,7 @@ export default function BrokerTOTP() {
   const { login } = useAuthStore()
   const [isLoading, setIsLoading] = useState(false)
   const [savedLogin, setSavedLogin] = useState(false)
+  const [canResume, setCanResume] = useState(false)
   const [checkingSavedLogin, setCheckingSavedLogin] = useState(broker === 'kotak')
   useEffect(() => {
     if (broker !== 'kotak') return
@@ -342,7 +343,10 @@ export default function BrokerTOTP() {
     fetch('/auth/check-setup', { credentials: 'include' })
       .then((response) => response.json())
       .then((data) => {
-        if (current) setSavedLogin(!!data.saved_login_enabled)
+        if (current) {
+          setSavedLogin(!!data.saved_login_enabled)
+          setCanResume(!!data.can_resume)
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -450,7 +454,7 @@ export default function BrokerTOTP() {
     setFormData((prev) => ({ ...prev, [name]: filteredValue }))
   }
 
-  if (savedLogin) return <NeoLogin />
+  if (savedLogin) return <NeoLogin canResume={canResume} />
   if (checkingSavedLogin) return <p className="p-6">Checking Kotak connection…</p>
 
   return (

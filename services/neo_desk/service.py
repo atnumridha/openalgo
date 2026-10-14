@@ -117,8 +117,6 @@ class NeoDeskService:
                     raise ValueError(
                         "An entry outcome is uncertain. Reconcile the native run before restarting."
                     )
-                if mode == "live" and get_preset(c["profile"]).research_only:
-                    raise ValueError("Price Break & Retest is available in Sandbox only.")
                 if mode == "live" and not confirm_live:
                     raise ValueError("Confirm Start Live to allow new real orders.")
                 if c["run_id"] and c["mode"] != mode:
@@ -207,8 +205,6 @@ class NeoDeskService:
             )
             return {"acted": False, "message": "Execution mode changed; entries stopped."}
         p = get_preset(c["profile"])
-        if p.research_only and mode == "live":
-            return {"acted": False, "message": "Research preset requires Sandbox."}
         net, count = day_performance(owner_id, now.astimezone(IST).date())
         if count >= 3 or net <= -1000:
             desk.configure(

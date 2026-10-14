@@ -1,3 +1,4 @@
+import { NeoTradingViewWorkspace } from '@/components/neo-desk/NeoTradingViewWorkspace'
 import { NeoTradingTools } from '@/components/neo-desk/NeoTradingTools'
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
@@ -219,7 +220,7 @@ export default function Trading() {
   const account = useAuthStore((state) =>
     state.isAuthenticated ? (state.user?.username ?? null) : null
   )
-  return <TradingWorkspace key={account ?? 'signed-out'} account={account} />
+  return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? <NeoTradingViewWorkspace key={account ?? 'signed-out'} /> : <TradingWorkspace key={account ?? 'signed-out'} account={account} />
 }
 
 function TradingWorkspace({ account }: { account: string | null }) {

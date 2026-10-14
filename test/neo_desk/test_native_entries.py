@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import timedelta
 from decimal import Decimal as D
 
 import pytest
@@ -10,6 +11,7 @@ from services.neo_desk.entries import submit_setup
 from services.neo_desk.presets import get_preset
 from services.neo_desk.selection import select_contract
 from services.neo_desk.signals import evaluate_setup
+from services.neo_desk.types import Candle
 from services.strategy_module import engine, state
 from services.strategy_module.order_dispatch import DispatchResult
 from services.strategy_module.symbol_resolver import ResolvedLeg
@@ -124,12 +126,40 @@ def test_recovered_signal_and_stopped_mode_refuse(monkeypatch):
     assert not submit_setup(OWNER, s, c, "sandbox", now=when()).ok and orders == []
 
 
-def test_research_never_routes_live(monkeypatch):
-    desk.configure(OWNER, profile="price_retest", mode="live", activation="Active")
-    s = evaluate_setup(bars("price_retest"), get_preset("price_retest"))
-    _, c = prepare("CE")
-    result = submit_setup(OWNER, s, c, "live", now=s.execute_at)
-    assert not result.ok and "Sandbox" in result.error
+@pytest.mark.parametrize(
+    "profile", ["orb_trail", "orb_controls", "donchian_controls", "price_retest"]
+)
+@pytest.mark.parametrize("mode", ["sandbox", "live"])
+def test_all_presets_reach_native_provider_in_each_mode(monkeypatch, profile, mode):
+    from types import SimpleNamespace
+
+    desk.configure(OWNER, profile=profile, mode=mode, activation="Active")
+    setup = evaluate_setup(bars(profile), get_preset(profile))
+    c = contract("CE")
+    now = setup.execute_at
+    selected = select_contract(
+        [c],
+        {c.symbol: quote(c, received_at=now, exchange_time=now)},
+        get_preset(profile),
+        D(10000),
+        now,
+        direction="CE",
+        recent_bars={
+            c.symbol: [
+                Candle(now - timedelta(minutes=n), D(50), D(51), D(49), D(50)) for n in range(1, 6)
+            ]
+        },
+    )
+    calls = []
+
+    def native_start(sid, owner, selected_mode):
+        calls.append((owner, selected_mode))
+        return SimpleNamespace(ok=True, run_id=None, error=None)
+
+    monkeypatch.setattr("services.neo_desk.entries.start_provider_run", native_start)
+    result = submit_setup(OWNER, setup, selected, mode, now=now)
+    assert result.ok, result.error
+    assert calls == [(OWNER, mode)]
 
 
 def test_native_resolver_mismatch_never_dispatches(monkeypatch):

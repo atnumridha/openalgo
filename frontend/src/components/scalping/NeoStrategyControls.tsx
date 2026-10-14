@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import { useThemeStore } from '@/stores/themeStore'
 
 function message(error: unknown) {
   const e = error as { response?: { data?: { message?: string } }; message?: string }
@@ -15,10 +16,12 @@ function message(error: unknown) {
     'Request did not complete. Refresh the connection and retry.'
   )
 }
-export function NeoStrategyControls() {
-  return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? <EnabledNeoControls /> : null
+export function NeoStrategyControls({ compact = false }: { compact?: boolean } = {}) {
+  return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? (
+    <EnabledNeoControls compact={compact} />
+  ) : null
 }
-function EnabledNeoControls() {
+function EnabledNeoControls({ compact }: { compact: boolean }) {
   const client = useQueryClient()
   const { socket } = useSocketContext()
   useEffect(() => {
@@ -36,6 +39,8 @@ function EnabledNeoControls() {
     }
   }, [socket, client])
 
+  const toggleMode = useThemeStore((s) => s.toggleAppMode)
+  const modeBusy = useThemeStore((s) => s.isTogglingMode)
   const busy = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const query = useQuery({
@@ -45,7 +50,9 @@ function EnabledNeoControls() {
   })
   const change = useMutation({
     mutationFn: ({ action, profile }: { action?: string; profile?: string }) =>
-      profile ? neoDeskApi.settings(profile) : neoDeskApi.command(action || 'stop', query.data?.mode === 'live' && action === 'start'),
+      profile
+        ? neoDeskApi.settings(profile)
+        : neoDeskApi.command(action || 'stop', query.data?.mode === 'live' && action === 'start'),
     onSuccess: (data) => {
       client.setQueryData(['neo-desk'], data)
       setError(null)
@@ -94,7 +101,28 @@ function EnabledNeoControls() {
                 Runner {d.runner.running ? 'running' : 'stopped'}
               </span>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <fieldset className="flex gap-1 rounded-md border p-1" aria-label="Execution mode">
+              {(['sandbox', 'live'] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  size="sm"
+                  className="flex-1"
+                  variant={d.mode === mode ? 'secondary' : 'ghost'}
+                  aria-pressed={d.mode === mode}
+                  disabled={modeBusy || change.isPending}
+                  onClick={async () => {
+                    if (d.mode === mode) return
+                    const result = await toggleMode()
+                    if (!result.success)
+                      setError(result.message || 'Execution mode did not change.')
+                    await query.refetch()
+                  }}
+                >
+                  {mode === 'sandbox' ? 'Sandbox' : 'Live'}
+                </Button>
+              ))}
+            </fieldset>
+            <div className={compact ? 'grid gap-3' : 'grid gap-4 md:grid-cols-2'}>
               <div className="space-y-2">
                 <Label htmlFor="neo-preset">Active preset</Label>
                 <select
@@ -114,15 +142,21 @@ function EnabledNeoControls() {
                   One preset at a time. Stop entries and wait until flat to switch.
                 </p>
               </div>
-              <div className="space-y-1 text-sm">
+              <details
+                open={!compact}
+                className={
+                  compact ? 'space-y-1 text-xs text-muted-foreground' : 'space-y-1 text-sm'
+                }
+              >
+                <summary className="cursor-pointer">Entry & exit rules</summary>
                 <p>Confirmed 15-minute signals · CE or PE buys</p>
                 <p>Entries 09:45–15:15 IST · square-off 15:29 IST</p>
                 <p>6R index target · up to two verified lots near ₹50</p>
                 <p>₹500 trade guard · ₹1,000 daily guard · 3 entries</p>
-              </div>
+              </details>
             </div>
-            <output className="rounded-md bg-muted p-3 text-sm">{d.status}</output>
-            <div className="flex flex-wrap gap-6 text-sm">
+            <output className="block rounded-md bg-muted p-3 text-xs">{d.status}</output>
+            <div className="flex flex-wrap gap-3 text-xs">
               <span>
                 Entries today <strong>{d.entries_today} / 3</strong>
               </span>
@@ -135,9 +169,7 @@ function EnabledNeoControls() {
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
-                disabled={
-                  change.isPending || d.activation === 'Active'
-                }
+                disabled={change.isPending || d.activation === 'Active'}
                 variant={d.mode === 'live' ? 'destructive' : 'default'}
                 onClick={() => command('start')}
               >
@@ -155,7 +187,9 @@ function EnabledNeoControls() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              {d.mode === 'live' ? 'Start Live authorizes new real option orders under the displayed controls. ' : ''}
+              {d.mode === 'live'
+                ? 'Start Live authorizes new real option orders under the displayed controls. '
+                : ''}
               Stopping entries keeps owned stops and scheduled exits managed. Trading allowance
               comes from the broker; chart choices do not change the 15-minute execution rules.
             </p>

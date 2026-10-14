@@ -44,7 +44,7 @@ SCALPING_STRATEGY = "Scalping"
 # IST, and the client's live forming candle aligns with the history bars.
 IST = pytz.timezone("Asia/Kolkata")
 IST_OFFSET_SECONDS = 19800
-CHART_INTERVAL_TRADING_DAYS = {"1m": 1, "5m": 3, "15m": 9}
+CHART_INTERVAL_TRADING_DAYS = {"1m": 1, "3m": 3, "5m": 3, "15m": 9, "30m": 20, "1h": 40, "1d": 250}
 
 # Order constants enforced on the order endpoint.
 VALID_ACTIONS = {"BUY", "SELL"}
@@ -187,7 +187,7 @@ def chart_history():
         success, response, status_code = get_history(
             symbol=symbol,
             exchange=exchange,
-            interval=interval,
+            interval="D" if interval == "1d" else interval,
             start_date=start_date,
             end_date=end_date,
             api_key=api_key,
@@ -358,7 +358,11 @@ def _mcx_cds_option_chain(underlying, exchange, expiry_ddmmmyy, strike_count, ap
     )
     futs = sorted(futs, key=lambda r: _parse_expiry(r.expiry))
     if not futs:
-        return False, {"status": "error", "message": f"No futures for {underlying} on {exchange}"}, 400
+        return (
+            False,
+            {"status": "error", "message": f"No futures for {underlying} on {exchange}"},
+            400,
+        )
     fut_symbol = futs[0].symbol
     ok, qresp, _qc = get_quotes(symbol=fut_symbol, exchange=exchange, api_key=api_key)
     ltp = float((qresp.get("data") or {}).get("ltp") or 0) if ok and isinstance(qresp, dict) else 0
@@ -460,7 +464,7 @@ def strikes():
     # The scalping ladder only needs the strike list + ATM + symbols (it streams live
     # prices over the WebSocket feed), so default to a structure-only build that skips
     # the slow per-strike broker multiquote. Pass ?quotes=true to include live quotes.
-    with_quotes = (request.args.get("quotes", "false").strip().lower() == "true")
+    with_quotes = request.args.get("quotes", "false").strip().lower() == "true"
 
     if exchange in ("NFO", "BFO"):
         success, response, status_code = get_option_chain(
@@ -582,7 +586,9 @@ def _resolve_session_auth():
     api_key = get_api_key_for_tradingview(username)
     if not api_key:
         return (
-            None, None, None,
+            None,
+            None,
+            None,
             {"status": "error", "message": "API key required. Generate one at /apikey"},
             401,
         )
@@ -655,7 +661,9 @@ def order():
     if action not in VALID_ACTIONS:
         return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
     if product not in _allowed_products(exchange):
-        return jsonify({"status": "error", "message": f"Invalid product for {exchange}: {product}"}), 400
+        return jsonify(
+            {"status": "error", "message": f"Invalid product for {exchange}: {product}"}
+        ), 400
     if quantity <= 0:
         return jsonify({"status": "error", "message": "quantity must be positive"}), 400
     if quantity > MAX_ORDER_QUANTITY:
@@ -746,7 +754,10 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
         if quantity % lotsize != 0:
             return (
                 False,
-                {"status": "error", "message": f"quantity must be a whole number of lots ({lotsize})"},
+                {
+                    "status": "error",
+                    "message": f"quantity must be a whole number of lots ({lotsize})",
+                },
                 400,
             )
 
@@ -791,9 +802,7 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
         "product": product,
         "quantity": quantity,
     }
-    return place_order(
-        order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker
-    )
+    return place_order(order_data=order_data, api_key=api_key, auth_token=auth_token, broker=broker)
 
 
 @scalping_bp.route("/scalping/api/close_leg", methods=["POST"])
@@ -819,7 +828,9 @@ def close_leg():
     if action not in VALID_ACTIONS:
         return jsonify({"status": "error", "message": f"Invalid action: {action}"}), 400
     if product not in _allowed_products(exchange):
-        return jsonify({"status": "error", "message": f"Invalid product for {exchange}: {product}"}), 400
+        return jsonify(
+            {"status": "error", "message": f"Invalid product for {exchange}: {product}"}
+        ), 400
     if quantity <= 0:
         return jsonify({"status": "error", "message": "quantity must be positive"}), 400
     if quantity > MAX_ORDER_QUANTITY:
@@ -853,7 +864,9 @@ def close_all():
 
     tracked = get_tracked_symbols(mode=_current_mode())
     if not tracked:
-        return jsonify({"status": "success", "message": "No scalping positions to close", "results": []})
+        return jsonify(
+            {"status": "success", "message": "No scalping positions to close", "results": []}
+        )
 
     from services.positionbook_service import get_positionbook
 
@@ -881,8 +894,14 @@ def close_all():
             continue  # flat — nothing to close (kept in the list for realized P&L)
         exit_action = "SELL" if netqty > 0 else "BUY"
         ok2, resp2, _c = _reducing_exit(
-            t["symbol"], t["exchange"], t["product"], exit_action, abs(netqty),
-            auth_token, broker, api_key,
+            t["symbol"],
+            t["exchange"],
+            t["product"],
+            exit_action,
+            abs(netqty),
+            auth_token,
+            broker,
+            api_key,
         )
         results.append(
             {
@@ -895,7 +914,11 @@ def close_all():
             closed += 1
 
     return jsonify(
-        {"status": "success", "message": f"Closed {closed} scalping position(s)", "results": results}
+        {
+            "status": "success",
+            "message": f"Closed {closed} scalping position(s)",
+            "results": results,
+        }
     )
 
 
@@ -956,7 +979,11 @@ def upsert_sl():
 
     # Product must be valid FOR THIS EXCHANGE (e.g. reject CNC on NFO/BFO/MCX/CDS) so
     # we never persist an SL leg the freeze-safe exit can't actually place.
-    if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in _allowed_products(exchange):
+    if (
+        not symbol
+        or exchange not in VALID_LEG_EXCHANGES
+        or product not in _allowed_products(exchange)
+    ):
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
     # Validate the side and coerce/range-check numeric fields so the browser SL
@@ -980,8 +1007,15 @@ def upsert_sl():
         "side": side,
         "quantity": quantity,
     }
-    for field in ("entry_price", "initial_sl", "trailing_step", "highest_price",
-                  "lowest_price", "current_sl", "target"):
+    for field in (
+        "entry_price",
+        "initial_sl",
+        "trailing_step",
+        "highest_price",
+        "lowest_price",
+        "current_sl",
+        "target",
+    ):
         if data.get(field) is not None:
             try:
                 val = float(data[field])

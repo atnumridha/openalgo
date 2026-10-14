@@ -10,7 +10,7 @@ const profiles = [
   ['orb_trail', 'ORB · index trail'],
   ['orb_controls', 'ORB · option controls'],
   ['donchian_controls', 'Donchian · trend / option controls'],
-  ['price_retest', 'Price Retest · Sandbox research'],
+  ['price_retest', 'Price Retest · research'],
 ]
 export default function NeoBacktests() {
   const datasets = useQuery({ queryKey: ['neo-datasets'], queryFn: neoResearchApi.datasets }),
@@ -51,7 +51,7 @@ export default function NeoBacktests() {
     setSelected(null)
     try {
       const result = await neoResearchApi.start({
-        request_id: crypto.randomUUID(),
+        request_id: `neo-compare:${Date.now()}:${crypto.randomUUID()}`,
         dataset,
         profile,
         symbol: 'NIFTY',

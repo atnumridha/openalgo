@@ -159,13 +159,8 @@ def check_setup_required():
     needs_setup = find_user_by_username() is None
     if os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true":
         from blueprints.neo_login import can_resume_owner
-        from services.kotak_saved_login import cached_native_auth, read_saved_kotak_settings
-        from pathlib import Path
-        from zoneinfo import ZoneInfo
-        source = Path(os.getenv("NEO_SOURCE_RUNTIME", ".")) / "broker-session.json"
-        cached = cached_native_auth(source, read_saved_kotak_settings(), datetime.now(ZoneInfo("Asia/Kolkata")))
         return jsonify(status="success", needs_setup=False, saved_login_enabled=True,
-                       can_resume=bool(can_resume_owner() and cached))
+                       can_resume=bool(can_resume_owner()))
     return jsonify({"status": "success", "needs_setup": needs_setup})
 
 

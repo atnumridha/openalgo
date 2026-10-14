@@ -157,3 +157,50 @@ def public_error(error):
         if text in messages:
             return messages[text]
     return "Replay failed; verify source checksums, coverage and native logs."
+
+
+def latest_jobs(owner):
+    """Last completed workspace comparison for each preset, bound to this account."""
+    db.init_db()
+    rows = (
+        db.db_session.query(db.NeoResearchJob)
+        .filter(
+            db.NeoResearchJob.owner == owner,
+            db.NeoResearchJob.status == "complete",
+            db.NeoResearchJob.request["request_id"].as_string().like("neo-compare:%"),
+        )
+        .all()
+    )
+
+    def stamp(row):
+        try:
+            return int(row.request["request_id"].split(":")[1])
+        except (ValueError, IndexError, KeyError):
+            return 0
+
+    latest = {}
+    for row in sorted(rows, key=stamp, reverse=True):
+        profile = (row.result or {}).get("profile")
+        if profile and profile not in latest:
+            report = row.result or {}
+            latest[profile] = {
+                "id": row.id,
+                "status": row.status,
+                "error": row.error,
+                "request": row.request,
+                "result": {
+                    key: report.get(key)
+                    for key in (
+                        "profile",
+                        "known_realized_net",
+                        "net_complete",
+                        "fees_estimate",
+                        "closed_count",
+                        "unresolved_count",
+                        "wins",
+                        "drawdown",
+                        "coverage",
+                    )
+                },
+            }
+    return list(latest.values())

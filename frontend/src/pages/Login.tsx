@@ -47,7 +47,11 @@ export default function Login() {
           const nativeResponse = await fetch('/auth/session-status', { credentials: 'include' })
           if (nativeResponse.ok) {
             const nativeSession = await nativeResponse.json()
-            if (nativeSession.logged_in && nativeSession.broker) {
+            if (
+              nativeSession.logged_in &&
+              nativeSession.broker &&
+              !nativeSession.broker_session_expired
+            ) {
               setLogin(nativeSession.user || nativeSession.username || 'neo', nativeSession.broker)
               navigate('/dashboard', { replace: true })
               return

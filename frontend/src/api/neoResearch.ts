@@ -52,10 +52,12 @@ export interface ResearchJob {
   result: ReplayReport | null
 }
 export const neoResearchApi = {
+  latest: async (): Promise<ResearchJob[]> =>
+    (await webClient.get('/neodesk/api/research/latest')).data.jobs,
   datasets: async (): Promise<DatasetView[]> =>
     (await webClient.get('/neodesk/api/datasets')).data.datasets,
   start: async (body: Record<string, unknown>): Promise<ResearchJob> =>
     (await webClient.post('/neodesk/api/research', body)).data,
   job: async (id: string): Promise<ResearchJob> =>
-    (await webClient.get('/neodesk/api/research/' + id)).data,
+    (await webClient.get(`/neodesk/api/research/${id}`)).data,
 }

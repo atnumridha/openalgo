@@ -36,7 +36,10 @@ export function nextLiveBar(
     minute = local.getUTCHours() * 60 + local.getUTCMinutes(),
     day = local.getUTCDay()
   if (day === 0 || day === 6 || minute < 555 || minute >= 930) return null
-  const time = Math.floor(ms / 1000 / sec) * sec
+  const sessionStart =
+    (Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), 9, 15) - 19800000) /
+    1000
+  const time = sessionStart + Math.floor((ms / 1000 - sessionStart) / sec) * sec
   if (previous && time < previous.time) return null
   return previous && time === previous.time
     ? {

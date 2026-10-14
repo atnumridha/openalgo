@@ -97,6 +97,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  localStorage.removeItem('neo.native.chart.indicators')
 })
 
 it('labels the same strike oppositely for calls and puts and shows the selected moneyness', async () => {
@@ -211,4 +212,35 @@ it('never lets delayed default initialization replace a manual option selection 
   act(() => vi.advanceTimersByTime(500))
   await waitFor(() => expect(loadSymbol).toHaveBeenCalledTimes(1))
   expect(loadSymbol).toHaveBeenLastCalledWith({ symbol: 'NIFTY19OCT2622750CE', exchange: 'NFO' })
+})
+
+it('keeps a hidden context overlay off when changing option charts', async () => {
+  let ids: string[] = []
+  const target = () => ({
+    loadSymbol: async () => {},
+    listIndicators: () => ids.map((id) => ({ id, indicatorId: id })),
+    addIndicatorById: async (id: string) => {
+      ids.push(id)
+    },
+    removeIndicatorById: (id: string) => {
+      ids = ids.filter((value) => value !== id)
+    },
+    dataUnavailable: () => false,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <NeoTradingTools target={target as never} revision={1} />
+    </QueryClientProvider>
+  )
+  const control = await screen.findByRole('checkbox', { name: 'FVG / levels' })
+  await waitFor(() => expect(control).toBeEnabled())
+  fireEvent.click(control)
+  await waitFor(() => expect(control).not.toBeChecked())
+  fireEvent.click(screen.getByRole('button', { name: 'Chart PE' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Chart PE' })).toBeEnabled())
+  expect(ids).toEqual(['neo-donchian', 'rsi'])
 })

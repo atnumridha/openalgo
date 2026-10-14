@@ -14,6 +14,7 @@ export function NeoLogin({ canResume = false }: { canResume?: boolean }) {
   const login = useAuthStore((s) => s.login)
   const [totp, setTotp] = useState('')
   const [busy, setBusy] = useState(canResume)
+  const [requiresTotp, setRequiresTotp] = useState(!canResume)
   const [error, setError] = useState('')
   const attemptedResume = useRef(false)
 
@@ -32,22 +33,32 @@ export function NeoLogin({ canResume = false }: { canResume?: boolean }) {
         })
         const data = await response.json()
         if (!response.ok || data.status !== 'success') {
-          setError(data.message || 'Kotak login did not complete. Retry with a fresh code.')
+          if (resume)
+            setRequiresTotp(
+              data.requires_totp === true ||
+                (response.status === 401 && data.requires_totp !== false)
+            )
+          setError(
+            data.message ||
+              (resume
+                ? 'Saved session check unavailable. Retry the connection.'
+                : 'Kotak login did not complete. Retry with a fresh code.')
+          )
           return
         }
         let analyzeMode = data.analyze_mode
-      if (typeof analyzeMode !== 'boolean') {
-        const modeResponse = await fetch('/auth/analyzer-mode', { credentials: 'include' })
-        const modeData = await modeResponse.json()
-        analyzeMode = modeData.data?.analyze_mode
-        if (!modeResponse.ok || typeof analyzeMode !== 'boolean') {
-          setError('Could not confirm the trading mode. Refresh the terminal before continuing.')
-          return
+        if (typeof analyzeMode !== 'boolean') {
+          const modeResponse = await fetch('/auth/analyzer-mode', { credentials: 'include' })
+          const modeData = await modeResponse.json()
+          analyzeMode = modeData.data?.analyze_mode
+          if (!modeResponse.ok || typeof analyzeMode !== 'boolean') {
+            setError('Could not confirm the trading mode. Refresh the terminal before continuing.')
+            return
+          }
         }
-      }
-      useThemeStore.getState().setAppMode(analyzeMode ? 'analyzer' : 'live')
-      if (typeof data.api_key === 'string') useAuthStore.getState().setApiKey(data.api_key)
-      login(data.username, data.broker || 'kotak')
+        useThemeStore.getState().setAppMode(analyzeMode ? 'analyzer' : 'live')
+        if (typeof data.api_key === 'string') useAuthStore.getState().setApiKey(data.api_key)
+        login(data.username, data.broker || 'kotak')
         navigate('/dashboard', { replace: true })
       } catch {
         setError('Could not connect to the local terminal. Refresh the page and retry.')
@@ -82,35 +93,48 @@ export function NeoLogin({ canResume = false }: { canResume?: boolean }) {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (!busy && /^\d{6}$/.test(totp)) void connect(false, totp)
-            }}
-          >
-            <div className="space-y-2">
-              <Label htmlFor="neo-totp">Authenticator TOTP</Label>
-              <Input
-                id="neo-totp"
-                type="password"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                pattern="[0-9]{6}"
-                value={totp}
-                disabled={busy}
-                onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-              />
+          {!requiresTotp ? (
+            <div className="space-y-4">
+              <output className="block text-sm text-muted-foreground">
+                {busy
+                  ? 'Checking your saved Kotak session…'
+                  : 'Your saved session has not been confirmed expired. Retry its connection.'}
+              </output>
+              <Button className="w-full" disabled={busy} onClick={() => void connect(true)}>
+                {busy ? 'Checking saved connection…' : 'Retry saved connection'}
+              </Button>
             </div>
-            <Button className="w-full" type="submit" disabled={busy || totp.length !== 6}>
-              {busy ? 'Connecting Kotak…' : 'Connect Kotak'}
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              Strategy activation is controlled separately from login.
-            </p>
-          </form>
+          ) : (
+            <form
+              className="space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (!busy && /^\d{6}$/.test(totp)) void connect(false, totp)
+              }}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="neo-totp">Authenticator TOTP</Label>
+                <Input
+                  id="neo-totp"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  pattern="[0-9]{6}"
+                  value={totp}
+                  disabled={busy}
+                  onChange={(event) => setTotp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  required
+                />
+              </div>
+              <Button className="w-full" type="submit" disabled={busy || totp.length !== 6}>
+                {busy ? 'Connecting Kotak…' : 'Connect Kotak'}
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                Strategy activation is controlled separately from login.
+              </p>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>

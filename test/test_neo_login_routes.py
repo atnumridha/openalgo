@@ -109,15 +109,68 @@ def test_verified_callback_returns_authoritative_mode_and_native_sdk_key(login_c
     from types import SimpleNamespace
 
     from blueprints.neo_login import complete_verified_login
-    monkeypatch.setattr("database.user_db.find_user_by_username", lambda: SimpleNamespace(username="owner"))
+
+    monkeypatch.setattr(
+        "database.user_db.find_user_by_username", lambda: SimpleNamespace(username="owner")
+    )
     monkeypatch.setattr("database.auth_db.get_api_key", lambda user: "existing")
-    monkeypatch.setattr("database.auth_db.get_api_key_for_tradingview", lambda user: "native-sdk-key")
+    monkeypatch.setattr(
+        "database.auth_db.get_api_key_for_tradingview", lambda user: "native-sdk-key"
+    )
     monkeypatch.setattr("database.settings_db.get_analyze_mode", lambda: True)
     monkeypatch.setattr("utils.auth_utils.handle_auth_success", lambda *a, **kw: None)
-    monkeypatch.setattr("blueprints.neo_login.read_saved_kotak_settings", lambda: SimpleNamespace(ucc="fixture-ucc"))
+    monkeypatch.setattr(
+        "blueprints.neo_login.read_saved_kotak_settings", lambda: SimpleNamespace(ucc="fixture-ucc")
+    )
     app, _, _ = login_client
     with app.test_request_context():
         result = complete_verified_login("broker-secret")
     assert result["analyze_mode"] is True
     assert result["api_key"] == "native-sdk-key"
     assert "broker-secret" not in str(result)
+
+
+def test_resume_temporary_broker_failure_does_not_request_totp(login_client, monkeypatch):
+    _, client, headers = login_client
+    monkeypatch.setattr("blueprints.neo_login.can_resume_owner", lambda: True)
+    monkeypatch.setattr(
+        "blueprints.neo_login._saved_native_auth",
+        lambda settings: "fixture-native-auth",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "blueprints.neo_login.verify_saved_kotak_auth", lambda auth: "unavailable", raising=False
+    )
+    monkeypatch.setattr(
+        "blueprints.neo_login.complete_verified_login",
+        lambda *a: pytest.fail("Unverified session was committed"),
+    )
+    response = client.post("/auth/neo-resume", json={}, headers=headers)
+    assert response.status_code == 503 and response.json["requires_totp"] is False
+
+
+def test_resume_prefers_current_native_session_without_authenticator(login_client, monkeypatch):
+    _, client, headers = login_client
+    monkeypatch.setattr("blueprints.neo_login.can_resume_owner", lambda: True)
+    monkeypatch.setattr(
+        "blueprints.neo_login._saved_native_auth",
+        lambda settings: "current-native-auth",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "blueprints.neo_login.verify_saved_kotak_auth", lambda auth: "valid", raising=False
+    )
+    monkeypatch.setattr(
+        "blueprints.neo_login.cached_native_auth",
+        lambda *a: pytest.fail("Migration cache replaced the current session"),
+    )
+    monkeypatch.setattr(
+        "blueprints.neo_login.complete_verified_login",
+        lambda auth: (
+            {"status": "success", "username": "neo", "broker": "kotak"}
+            if auth == "current-native-auth"
+            else pytest.fail("Wrong session")
+        ),
+    )
+    response = client.post("/auth/neo-resume", json={}, headers=headers)
+    assert response.status_code == 200 and response.json["status"] == "success"

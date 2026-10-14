@@ -138,6 +138,21 @@ def _is_no_data_fault(message: str) -> bool:
     return any(marker in lowered for marker in _NO_DATA_MARKERS)
 
 
+def _history_clock() -> pd.Timestamp:
+    return pd.Timestamp.now(tz="Asia/Kolkata")
+
+
+def _history_latest_session_date() -> pd.Timestamp:
+    """Do not ask Neo for an empty, unopened NSE/BSE cash session."""
+    now = _history_clock()
+    latest = now.normalize().tz_localize(None)
+    if now.hour * 60 + now.minute < 9 * 60 + 15:
+        latest -= timedelta(days=1)
+    while latest.weekday() >= 5:
+        latest -= timedelta(days=1)
+    return latest
+
+
 def _history_earliest_start() -> pd.Timestamp:
     """Earliest fromdate Neo will accept, as a naive IST-dated timestamp.
 
@@ -1132,6 +1147,12 @@ class BrokerData:
             end = pd.to_datetime(end_date)
             if start > end:
                 raise Exception(f"start_date {start_date} is after end_date {end_date}")
+
+            # Neo returns HTTP 500 for a current-day-only chunk before 09:15.
+            # Previous history must stay available instead of failing the whole window.
+            end = min(end, _history_latest_session_date())
+            if start > end:
+                return pd.DataFrame(columns=HISTORY_COLUMNS)
 
             earliest = _history_earliest_start()
             if end < earliest:

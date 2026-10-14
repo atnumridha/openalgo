@@ -7172,9 +7172,10 @@ export class TradingTerminal {
    */
   private applyDefaultViewport(): void {
     if (!this.chart) return
-    if (this.shownCount > VISIBLE_BARS) {
+    const visibleBars = import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? 90 : VISIBLE_BARS
+    if (this.shownCount > visibleBars) {
       const to = this.shownCount - 1 + RIGHT_PAD_BARS
-      this.chart.timeScale.setVisibleLogicalRange({ from: to - VISIBLE_BARS, to })
+      this.chart.timeScale.setVisibleLogicalRange({ from: to - visibleBars, to })
     } else if (this.chart.timeScale.barSpacing > 14) {
       this.chart.timeScale.setBarSpacing(14)
     }

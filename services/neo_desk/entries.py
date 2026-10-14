@@ -13,8 +13,6 @@ from .types import IST, EntryResult
 def submit_setup(owner_id, setup, selection, mode, *, now=None):
     now = now or datetime.now(IST)
     p = get_preset(setup.profile)
-    if p.research_only and mode == "live":
-        return EntryResult(False, error="Price Break & Retest is available in Sandbox only.")
     if (
         mode not in ("sandbox", "live")
         or now.tzinfo is None

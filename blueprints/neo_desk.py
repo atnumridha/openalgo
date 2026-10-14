@@ -204,6 +204,14 @@ def research():
     return jsonify(submit_job(session["user"], request.get_json(silent=True))), 202
 
 
+@neo_desk_bp.get("/research/latest")
+@authenticated
+def research_latest():
+    from services.neo_desk.research_jobs import latest_jobs
+
+    return jsonify(jobs=latest_jobs(session["user"]))
+
+
 @neo_desk_bp.get("/research/<identity>")
 @authenticated
 def research_job(identity):

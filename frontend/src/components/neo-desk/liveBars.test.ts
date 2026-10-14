@@ -14,3 +14,14 @@ it('never invents a current candle for missing/stale time or an after-hours snap
   const open = Date.parse('2026-10-13T10:00:00+05:30')
   expect(nextLiveBar(undefined, 55, open, '5m', open + 16000)).toBeNull()
 })
+
+it.each([
+  ['30m', '2026-10-14T09:29:00+05:30', '2026-10-14T09:15:00+05:30'],
+  ['30m', '2026-10-14T09:44:00+05:30', '2026-10-14T09:15:00+05:30'],
+  ['30m', '2026-10-14T09:45:00+05:30', '2026-10-14T09:45:00+05:30'],
+  ['1h', '2026-10-14T10:14:00+05:30', '2026-10-14T09:15:00+05:30'],
+  ['1h', '2026-10-14T10:15:00+05:30', '2026-10-14T10:15:00+05:30'],
+])('anchors %s live candles to the 09:15 market open at %s', (interval, stamp, expected) => {
+  const now = Date.parse(stamp)
+  expect(nextLiveBar(undefined, 100, now, interval, now)?.time).toBe(Date.parse(expected) / 1000)
+})

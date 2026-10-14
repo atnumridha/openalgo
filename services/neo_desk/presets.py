@@ -14,10 +14,9 @@ PRESETS = {
     ),
     "price_retest": NeoPreset(
         "price_retest",
-        "Price Break & Retest · Sandbox research · 6R",
+        "Price Break & Retest · research · 6R",
         "price_retest",
         controlled=True,
-        research_only=True,
     ),
 }
 

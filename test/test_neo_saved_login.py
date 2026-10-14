@@ -130,3 +130,9 @@ def test_legacy_owner_cookie_is_verified_and_forgery_rejected():
     assert not legacy_access_is_valid(owner, "wrong-secret")
     assert not legacy_access_is_valid(serializer.dumps({"local_access": False}), app.secret_key)
     assert not legacy_access_is_valid(None, app.secret_key)
+
+
+def test_explicit_cache_validity_is_not_shortened_to_calendar_midnight(tmp_path):
+    tomorrow = NOW + timedelta(days=1)
+    path = session_file(tmp_path, valid_until=(tomorrow + timedelta(hours=1)).isoformat())
+    assert cached_native_auth(path, settings(), tomorrow) is not None

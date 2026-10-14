@@ -14,6 +14,7 @@ from services.kotak_saved_login import (
     cached_native_auth,
     legacy_access_is_valid,
     read_saved_kotak_settings,
+    verify_saved_kotak_auth,
 )
 from utils.logging import get_logger
 
@@ -41,19 +42,47 @@ def _local_request():
 
 def can_resume_owner():
     settings = read_saved_kotak_settings()
+    if session.get("logged_in") and session.get("broker") == "kotak" and session.get("user"):
+        from database.user_db import find_user_by_username
+        from utils.session import is_session_valid
+
+        owner = find_user_by_username()
+        if owner and owner.username == session["user"] and is_session_valid():
+            return True
     return legacy_access_is_valid(request.cookies.get("nifty_desk_session"), settings.access_secret)
+
+
+def _saved_native_auth(settings):
+    from database.auth_db import get_auth_token, get_auth_token_dbquery
+    from database.user_db import find_user_by_username
+
+    owner = find_user_by_username()
+    if not owner:
+        return None
+    row = get_auth_token_dbquery(owner.username)
+    if not row or row.is_revoked or row.broker != "kotak" or str(row.user_id or "") != settings.ucc:
+        return None
+    auth = get_auth_token(owner.username)
+    parts = auth.split(":::") if auth else []
+    return (
+        auth if len(parts) >= 4 and secrets.compare_digest(parts[3], settings.api_token) else None
+    )
 
 
 def _verified_cached_auth():
     settings = read_saved_kotak_settings()
     source = Path(os.getenv("NEO_SOURCE_RUNTIME", ".")) / "broker-session.json"
-    auth = cached_native_auth(source, settings, datetime.now(ZoneInfo("Asia/Kolkata")))
+    auth = _saved_native_auth(settings) or cached_native_auth(
+        source, settings, datetime.now(ZoneInfo("Asia/Kolkata"))
+    )
     if not auth:
         return None
-    from broker.kotak.api.funds import get_margin_data
-
-    funds = get_margin_data(auth)
-    return auth if isinstance(funds, dict) and funds and not funds.get("error") else None
+    result = verify_saved_kotak_auth(auth)
+    if result == "expired":
+        return None
+    if result != "valid":
+        raise RuntimeError("Saved-session validation temporarily unavailable")
+    return auth
 
 
 def complete_verified_login(auth):
@@ -75,8 +104,12 @@ def complete_verified_login(auth):
     if not get_api_key(username):
         upsert_api_key(username, secrets.token_hex(32))
     return {
-        "status": "success", "username": username, "broker": "kotak", "redirect": "/dashboard",
-        "analyze_mode": get_analyze_mode(), "api_key": get_api_key_for_tradingview(username),
+        "status": "success",
+        "username": username,
+        "broker": "kotak",
+        "redirect": "/dashboard",
+        "analyze_mode": get_analyze_mode(),
+        "api_key": get_api_key_for_tradingview(username),
     }
 
 
@@ -106,21 +139,25 @@ def resume():
     _local_request()
     if request.get_json(silent=True) != {} or not can_resume_owner():
         return jsonify(
-            status="error", message="Verify this browser with your current authenticator code."
+            status="error",
+            message="Verify this browser with your current authenticator code.",
+            requires_totp=True,
         ), 401
     try:
         auth = _verified_cached_auth()
         if not auth:
             return jsonify(
                 status="error",
-                message="Your saved Kotak session needs a fresh authenticator login.",
+                message="Your saved Kotak session expired or is no longer available. Enter a fresh authenticator code.",
+                requires_totp=True,
             ), 401
         return jsonify(complete_verified_login(auth))
     except Exception:
         logger.exception("Verified owner session could not resume Kotak")
         return jsonify(
             status="error",
-            message="Could not restore the Kotak connection. Retry with a fresh code.",
+            message="Saved Kotak session validation is temporarily unavailable. Retry the saved connection.",
+            requires_totp=False,
         ), 503
 
 

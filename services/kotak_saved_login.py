@@ -7,7 +7,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -101,9 +101,6 @@ def cached_native_auth(source: Path, settings: SavedKotakSettings, now: datetime
         until = datetime.fromisoformat(data["valid_until"])
         if not all(v.tzinfo for v in (issued, until, now)) or issued > now:
             return None
-        until = min(
-            until, (issued + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        )
         cached = data["session"]
         token, sid, base = (cached.get(k) for k in ("token", "sid", "base_url"))
         if not all(isinstance(v, str) and v and ":::" not in v for v in (token, sid, base)):
@@ -140,3 +137,54 @@ def legacy_access_is_valid(cookie, secret):
         return serializer.loads(cookie, max_age=31 * 86400).get("local_access") is True
     except (BadSignature, ValueError, TypeError, AttributeError):
         return False
+
+
+def verify_saved_kotak_auth(auth):
+    """Probe saved trade credentials without conflating outages with expiry."""
+    from utils.httpx_client import get_httpx_client
+
+    if not isinstance(auth, str):
+        return "expired"
+    parts = auth.split(":::")
+    if len(parts) < 4 or not all(parts[:4]) or not _endpoint_allowed(parts[2]):
+        return "expired"
+    try:
+        response = get_httpx_client().post(
+            parts[2] + "/quick/user/limits",
+            headers={
+                "accept": "application/json",
+                "Sid": parts[1],
+                "Auth": parts[0],
+                "neo-fin-key": "neotradeapi",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            content="jData=%7B%22seg%22%3A%22ALL%22%2C%22exch%22%3A%22ALL%22%2C%22prod%22%3A%22ALL%22%7D",
+            follow_redirects=False,
+            timeout=10,
+        )
+        if response.status_code == 401:
+            return "expired"
+        if response.status_code >= 500 or response.status_code == 424:
+            return "unavailable"
+        body = response.json()
+        if not isinstance(body, dict):
+            return "unavailable"
+        reason = str(body.get("emsg") or body.get("errMsg") or body.get("message") or "").lower()
+        if any(
+            value in reason
+            for value in (
+                "session expired",
+                "token expired",
+                "invalid session",
+                "invalid token",
+                "session invalid",
+                "jwt expired",
+            )
+        ):
+            return "expired"
+        if response.status_code == 200 and str(body.get("stat", "")).lower() == "ok":
+            return "valid"
+    except Exception:
+        # Credential-bearing requests are deliberately not written to user errors.
+        pass
+    return "unavailable"
