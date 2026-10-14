@@ -56,6 +56,22 @@ def get_job(owner, identity):
     db.init_db()
     row = db.db_session.query(db.NeoResearchJob).filter_by(owner=owner, id=identity).first()
     if not row:
+        from sqlalchemy import inspect
+
+        from .sql_retention import journal_rows
+
+        if inspect(db.engine).has_table("neo_sql_journal"):
+            for saved in journal_rows(db.engine, owner, source="neo_research_job"):
+                p = saved["payload"]
+                if p["id"] == identity:
+                    import json
+
+                    return {
+                        key: json.loads(p[key])
+                        if key in ("request", "result") and isinstance(p[key], str)
+                        else p[key]
+                        for key in ("id", "status", "request", "result", "error")
+                    }
         raise ValueError("Research job was not found for this owner.")
     return {
         "id": row.id,
@@ -204,3 +220,48 @@ def latest_jobs(owner):
                 },
             }
     return list(latest.values())
+
+
+def saved_jobs(owner):
+    """Metadata only; load the selected result rather than all archived candles."""
+    from sqlalchemy import inspect, text
+
+    db.init_db()
+    result = {}
+    if inspect(db.engine).has_table("neo_sql_journal"):
+        with db.engine.connect() as c:
+            rows = c.execute(
+                text("""SELECT json_extract(payload,'$.id') as id,
+                json_extract(payload,'$.request') as request,
+                json_extract(payload,'$.status') as status
+                FROM neo_sql_journal WHERE id IN
+                (SELECT max(id) FROM neo_sql_journal WHERE owner=:owner
+                AND source_table='neo_research_job' GROUP BY source_key)"""),
+                {"owner": owner},
+            ).mappings()
+            import json
+
+            for r in rows:
+                result[r["id"]] = {
+                    "id": r["id"],
+                    "status": r["status"],
+                    "request": json.loads(r["request"])
+                    if isinstance(r["request"], str)
+                    else r["request"],
+                }
+    for identity, status, request in (
+        db.db_session.query(
+            db.NeoResearchJob.id, db.NeoResearchJob.status, db.NeoResearchJob.request
+        )
+        .filter_by(owner=owner)
+        .all()
+    ):
+        result[identity] = {"id": identity, "status": status, "request": request}
+    return sorted(
+        result.values(),
+        key=lambda r: (
+            (r["request"] or {}).get("end", ""),
+            (r["request"] or {}).get("request_id", ""),
+        ),
+        reverse=True,
+    )

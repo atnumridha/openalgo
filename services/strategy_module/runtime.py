@@ -43,6 +43,12 @@ def start_strategy_module() -> dict[str, bool]:
 
     result: dict[str, bool] = {}
 
+    import os
+    neo_enabled = os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true"
+    if neo_enabled:
+        from services.neo_desk.persistence import initialize_retention
+        result["neo_sql_retention"] = _guard("Neo SQL history retention", initialize_retention)
+
     result["order_events"] = _guard("order updates", _start_order_events)
     recovered = _recover()
     result["recovery"] = recovered is not None
@@ -50,8 +56,9 @@ def start_strategy_module() -> dict[str, bool]:
     result["checkpoint"] = _guard("checkpointing", _start_checkpoint)
     result["scheduler"] = _guard("scheduler", _start_scheduler)
 
-    import os
-    if os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true":
+    if neo_enabled:
+        from services.neo_desk.persistence import start_retention_jobs
+        result["neo_history_jobs"] = _guard("Neo SQL history capture and backups", start_retention_jobs)
         from services.neo_desk.lifecycle import start_management
         result["neo_management"] = _guard("Neo Desk owned protection", start_management)
     logger.info("Strategy module started: %s", result)

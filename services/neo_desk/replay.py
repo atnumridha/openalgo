@@ -170,6 +170,8 @@ def run_replay(dataset, request):
             "quantity": qty,
             "index_reference": str(setup.index_reference),
             "initial_index_stop": str(setup.initial_stop),
+            "initial_option_stop": p.get("option_stop"),
+            "option_target": p.get("option_target"),
             "index_target": str(setup.target),
             "status": "open",
             "entry_fees": str(estimate("BUY", entry, qty)),
@@ -242,6 +244,8 @@ def run_replay(dataset, request):
                     "option_stop": p.get("option_stop"),
                     "index_stop": p["index_stop"],
                     "index_target": p["target"],
+                    "option_target": p.get("option_target"),
+                    "net_floor": p.get("net_floor"),
                 }
             )
             stamp += timedelta(minutes=1)

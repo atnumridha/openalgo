@@ -89,7 +89,9 @@ def list_datasets():
             )
         except (ValueError, KeyError, TypeError, OSError):
             continue
-    return result
+    from .chart_archive import get_archive
+    saved = get_archive().datasets()
+    return list({item["id"]: item for item in result + saved}.values())
 
 
 def load_dataset(identity):
@@ -99,6 +101,10 @@ def load_dataset(identity):
         or identity not in {x["id"] for x in list_datasets()}
     ):
         raise ValueError("Choose a preserved real dataset.")
+    from .chart_archive import get_archive
+    saved = get_archive().load_dataset(identity)
+    if saved is not None:
+        return saved
     directory = _manifest_paths()[identity].parent
     m = json.loads((directory / "manifest.json").read_text())
     tables = {}

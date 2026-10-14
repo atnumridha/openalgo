@@ -1,14 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { neoReportsApi } from '@/api/neoReports'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { FeeBreakdown, amount } from './FeeBreakdown'
+import { amount, FeeBreakdown } from './FeeBreakdown'
+import { RecordedTradeReplay } from './RecordedTradeReplay'
 export function RecordedTradeHistory() {
   return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? <EnabledHistory /> : null
 }
 function EnabledHistory() {
+  const [mode, setMode] = useState('live')
+  const [replayId, setReplayId] = useState('')
   const [symbol, setSymbol] = useState(''),
     [start, setStart] = useState(''),
     [end, setEnd] = useState(''),
@@ -25,8 +28,10 @@ function EnabledHistory() {
       }
     })
   const q = useQuery({
-    queryKey: ['neo-history', symbol, start, end, cursor, costPlan],
-    queryFn: () => neoReportsApi.history(symbol, start, end, cursor, costPlan),
+    queryKey: ['neo-history', symbol, start, end, cursor, costPlan, mode],
+    queryFn: () => neoReportsApi.history(symbol, start, end, cursor, costPlan, mode),
+    enabled: !(start && end && start > end),
+    refetchInterval: 60000,
   })
   const d = q.data
   async function action(fn: () => Promise<unknown>) {
@@ -46,13 +51,68 @@ function EnabledHistory() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recorded Kotak executions</CardTitle>
+        <CardTitle>Saved trading reports · {mode === 'live' ? 'Live' : 'Sandbox'}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Broker account history, separate from strategy-owned Sandbox results.
+          SQL history retained across days and restarts. Select any date or range; Live and Sandbox
+          records stay separate.
         </p>
         <div className="flex flex-wrap items-end gap-3">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const today = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Kolkata',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+              }).format(new Date())
+              setStart(today)
+              setEnd(today)
+              setCursor(0)
+              setReplayId('')
+            }}
+          >
+            Today
+          </Button>
+          <div>
+            <Label htmlFor="history-mode">Report mode</Label>
+            <select
+              id="history-mode"
+              className="h-10 rounded border bg-background px-3"
+              value={mode}
+              onChange={(e) => {
+                setMode(e.target.value)
+                setReplayId('')
+                setCursor(0)
+              }}
+            >
+              <option value="live">Live · Kotak account</option>
+              <option value="sandbox">Sandbox · paper trades</option>
+            </select>
+          </div>
+          <div>
+            <Label htmlFor="history-date">Recorded date</Label>
+            <select
+              id="history-date"
+              disabled={!d?.coverage.recorded_dates.length}
+              className="h-10 rounded border bg-background px-3"
+              value={start === end ? start : ''}
+              onChange={(e) => {
+                setStart(e.target.value)
+                setEnd(e.target.value)
+                setCursor(0)
+              }}
+            >
+              <option value="">All dates / custom range</option>
+              {[...(d?.coverage.recorded_dates ?? [])].reverse().map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </select>
+          </div>
           <div>
             <Label htmlFor="history-symbol">History symbol</Label>
             <select
@@ -138,13 +198,20 @@ function EnabledHistory() {
           >
             All recorded dates
           </Button>
-          <Button disabled={busy} onClick={() => action(neoReportsApi.refresh)}>
-            Refresh broker fills
-          </Button>
+          {mode === 'live' ? (
+            <Button disabled={busy} onClick={() => action(neoReportsApi.refresh)}>
+              Refresh broker fills
+            </Button>
+          ) : null}
           <Button variant="outline" onClick={() => q.refetch()}>
             Refresh archive
           </Button>
         </div>
+        {start && end && start > end ? (
+          <p role="alert" className="text-destructive">
+            From date must be before Through date.
+          </p>
+        ) : null}
         {error || q.error ? (
           <p role="alert" className="text-destructive">
             {error || (q.error as Error).message}
@@ -153,6 +220,16 @@ function EnabledHistory() {
         {d ? (
           <>
             <p className="text-sm">Lifetime completeness unverified</p>
+            <p className="text-xs text-muted-foreground">
+              Selected dates: {start || 'First recorded date'} → {end || 'Latest recorded date'} ·
+              IST · SQL saved history
+            </p>
+            {d.summary.fill_count === 0 ? (
+              <output className="block text-sm">
+                No recorded {mode === 'live' ? 'Live' : 'Sandbox'} executions for these dates.
+                Choose a stored date or widen the range.
+              </output>
+            ) : null}
             <p className="text-xs text-muted-foreground">
               {d.coverage.fill_count} fills · {d.coverage.recorded_dates.length} recorded days. Date
               coverage does not prove complete lifetime history or opening inventory.
@@ -170,7 +247,9 @@ function EnabledHistory() {
                     {value != null
                       ? amount(value)
                       : label === 'Actual fees paid'
-                        ? 'Not reported by Kotak'
+                        ? mode === 'sandbox'
+                          ? 'No broker fees on paper trades'
+                          : 'Not reported by Kotak'
                         : label === 'Net P&L after actual fees'
                           ? 'Waiting for paid charges'
                           : 'No resolved values'}
@@ -215,6 +294,7 @@ function EnabledHistory() {
                       'Estimated charges',
                       'Estimated net P&L',
                       'Actual paid fees',
+                      'Chart replay',
                     ].map((h) => (
                       <th key={h} className="p-2 text-left">
                         {h}
@@ -277,6 +357,15 @@ function EnabledHistory() {
                           amount(row.fees)
                         )}
                       </td>
+                      <td>
+                        <Button
+                          variant={replayId === row.trade_id ? 'default' : 'outline'}
+                          onClick={() => setReplayId(row.trade_id)}
+                          aria-label={`Replay recorded trade ${row.symbol} at ${row.entry_time}`}
+                        >
+                          Replay trade
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -285,6 +374,7 @@ function EnabledHistory() {
                 <p className="p-4 text-sm">No matched closes for this selection.</p>
               ) : null}
             </div>
+            {replayId ? <RecordedTradeReplay tradeId={replayId} mode={mode} /> : null}
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"
@@ -318,34 +408,36 @@ function EnabledHistory() {
         ) : (
           <p>Loading recorded executions…</p>
         )}
-        <details>
-          <summary className="cursor-pointer text-sm">
-            Import older executions and actual charges
-          </summary>
-          <p className="text-xs text-muted-foreground py-2">
-            Execution IDs and full timestamps required. Contract notes must be converted to the
-            execution template. Duplicate IDs are checked.
-          </p>
-          <a className="text-primary underline" href="/neodesk/api/history/template">
-            CSV template
-          </a>
-          <Label htmlFor="history-import" className="block mt-3">
-            Execution CSV
-          </Label>
-          <input
-            id="history-import"
-            type="file"
-            accept=".csv,text/csv"
-            disabled={busy}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              if (file) action(async () => neoReportsApi.importCSV(await file.text()))
-            }}
-          />
-        </details>
+        {mode === 'live' ? (
+          <details>
+            <summary className="cursor-pointer text-sm">
+              Import older executions and actual charges
+            </summary>
+            <p className="text-xs text-muted-foreground py-2">
+              Execution IDs and full timestamps required. Contract notes must be converted to the
+              execution template. Duplicate IDs are checked.
+            </p>
+            <a className="text-primary underline" href="/neodesk/api/history/template">
+              CSV template
+            </a>
+            <Label htmlFor="history-import" className="block mt-3">
+              Execution CSV
+            </Label>
+            <input
+              id="history-import"
+              type="file"
+              accept=".csv,text/csv"
+              disabled={busy}
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) action(async () => neoReportsApi.importCSV(await file.text()))
+              }}
+            />
+          </details>
+        ) : null}
         <a
           className="text-primary underline text-sm"
-          href={'/neodesk/api/history/export?' + new URLSearchParams({ symbol, start, end })}
+          href={`/neodesk/api/history/export?${new URLSearchParams({ symbol, start, end, mode })}`}
         >
           Export matched history
         </a>

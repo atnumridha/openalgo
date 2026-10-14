@@ -7,12 +7,20 @@ from decimal import Decimal as D
 from hashlib import sha256
 
 from database import neo_history_db as db
+from utils.keyed_locks import KeyedLocks
 
 from .fees import FeePlan, estimate_charges, fill_key
+
+_import_locks = KeyedLocks(name="neo-history-import")
 from .history_accounting import IMMUTABLE, MAX_BYTES, MAX_ROWS, TradeArchive, _normalized
 
 
 def ingest_fills(owner, rows, source="broker_report"):
+    with _import_locks.hold(owner):
+        return _ingest_fills(owner, rows, source)
+
+
+def _ingest_fills(owner, rows, source):
     if len(rows) > MAX_ROWS:
         raise ValueError("Import exceeds 10,000 executions.")
     db.init_db()
@@ -43,6 +51,7 @@ def ingest_fills(owner, rows, source="broker_report"):
                     summary["duplicates"] += 1
             else:
                 db.db_session.add(db.NeoFill(owner=owner, identity=identity, payload=row))
+                db.db_session.flush()
                 summary["inserted"] += 1
         db.db_session.commit()
     except Exception:
@@ -57,19 +66,64 @@ class NativeAccounting(TradeArchive):
 
     def fills(self):
         db.init_db()
-        return sorted(
-            [
-                dict(r.payload)
-                for r in db.db_session.query(db.NeoFill).filter_by(owner=self.owner).all()
-            ],
-            key=lambda f: (f["time"], f["exchange"], f["fill_id"]),
-        )
+        from sqlalchemy import inspect
+
+        from .sql_retention import journal_rows
+
+        recorded = {}
+        if inspect(db.engine).has_table("neo_sql_journal"):
+            for saved in journal_rows(
+                db.engine, self.owner, source="neo_recorded_fill", mode="live"
+            ):
+                fill = saved["payload"]["payload"]
+                recorded[saved["source_key"]] = json.loads(fill) if isinstance(fill, str) else fill
+        for row in db.db_session.query(db.NeoFill).filter_by(owner=self.owner).all():
+            recorded[row.identity] = dict(row.payload)
+        return sorted(recorded.values(), key=lambda f: (f["time"], f["exchange"], f["fill_id"]))
 
 
-def history_page(owner_id, symbol="", start=None, end=None, cursor=0, cost_plan="trade_free"):
+class PaperAccounting(TradeArchive):
+    def __init__(self, owner):
+        self.owner = owner
+
+    def fills(self):
+        from database import sandbox_db
+
+        from .sql_retention import journal_rows
+
+        rows = journal_rows(sandbox_db.engine, self.owner, source="sandbox_trades")
+        fills = []
+        for saved in rows:
+            p = saved["payload"]
+            fill = _normalized(
+                {
+                    "fill_id": p["tradeid"],
+                    "order_id": p["orderid"],
+                    "symbol": p["symbol"],
+                    "exchange": p["exchange"],
+                    "product": p["product"],
+                    "side": p["action"],
+                    "quantity": p["quantity"],
+                    "price": str(p["price"]),
+                    "time": saved["occurred_at"],
+                    "fees": "0",
+                    "provenance": [{"kind": "sandbox_sql", "name": "Recorded paper execution"}],
+                },
+                True,
+            )
+            fill["provenance"] = [{"kind": "sandbox_sql", "name": "Recorded paper execution"}]
+            fills.append(fill)
+        return sorted(fills, key=lambda f: (f["time"], f["exchange"], f["fill_id"]))
+
+
+def history_page(
+    owner_id, symbol="", start=None, end=None, cursor=0, cost_plan="trade_free", mode="live"
+):
+    if mode not in ("live", "sandbox"):
+        raise ValueError("Choose Live or Sandbox history.")
     if cost_plan not in ("free_offer", "trade_free"):
         raise ValueError("Choose the free-offer or Trade Free fee plan estimate.")
-    account = NativeAccounting(owner_id)
+    account = NativeAccounting(owner_id) if mode == "live" else PaperAccounting(owner_id)
     result = account.page(offset=int(cursor), symbol=symbol, start=start, end=end)
     summary = result["summary"]
     n = summary["fill_count"]
@@ -93,19 +147,33 @@ def history_page(owner_id, symbol="", start=None, end=None, cursor=0, cost_plan=
     for row in result["rows"]:
         portions = []
         for side in ("entry", "exit"):
-            key = "|".join(str(row[k]) for k in (side + "_trade_date", "exchange", side + "_fill_id"))
+            key = "|".join(
+                str(row[k]) for k in (side + "_trade_date", "exchange", side + "_fill_id")
+            )
             f = by_id.get(key)
             if f and key in allocated:
                 portions.append(D(allocated[key]) * row["quantity"] / f["quantity"])
         charge = sum(portions) if len(portions) == 2 else None
         row["estimated_fees"] = str(charge) if charge is not None else None
-        row["estimated_net_pnl"] = str(D(row["gross_pnl"]) - charge) if row["gross_pnl"] is not None and charge is not None else None
+        row["estimated_net_pnl"] = (
+            str(D(row["gross_pnl"]) - charge)
+            if row["gross_pnl"] is not None and charge is not None
+            else None
+        )
     estimate["cost_plan"] = cost_plan
     summary["estimated_fees"] = estimate["total"] if n else None
     result["fee_estimate"] = estimate
     if not n:
         summary["gross_pnl"] = None
         summary["net_pnl"] = None
+    result["mode"] = mode
+    result["storage"] = "SQL saved history"
+    result["selected_range"] = {"start": start, "end": end}
+    if mode == "sandbox":
+        result["source"] = "SQL paper execution archive"
+        result["coverage"]["note"] = (
+            "Recorded Sandbox fills retained independently of resets. No broker fees were paid on simulated orders."
+        )
     return result
 
 
@@ -116,8 +184,11 @@ def import_csv(owner, text):
     return ingest_fills(owner, rows, source="execution_csv")
 
 
-def export_csv(owner, symbol="", start=None, end=None):
-    return NativeAccounting(owner).export_csv(symbol, start, end)
+def export_csv(owner, symbol="", start=None, end=None, mode="live"):
+    if mode not in ("live", "sandbox"):
+        raise ValueError("Choose Live or Sandbox history.")
+    account = NativeAccounting(owner) if mode == "live" else PaperAccounting(owner)
+    return account.export_csv(symbol, start, end)
 
 
 def refresh_history(owner):
@@ -130,7 +201,13 @@ def refresh_history(owner):
     from broker.kotak.api.order_api import get_trade_book
 
     raw = get_trade_book(auth)
-    records = raw.get("data", []) if isinstance(raw, dict) else []
+    if not isinstance(raw, dict):
+        raise ValueError("Broker execution history is unavailable; saved SQL records are retained.")
+    stat = str(raw.get("stat", raw.get("status", ""))).lower()
+    empty = str(raw.get("emsg", "")).lower().strip() in ("no data", "no trades", "no data found")
+    if stat in ("not_ok", "error", "failed") and not empty:
+        raise ValueError("Broker execution history is unavailable; saved SQL records are retained.")
+    records = [] if empty else raw.get("data")
     if not isinstance(records, list):
         raise ValueError("Broker execution envelope is unavailable.")
     return ingest_fills(owner, broker_rows(records), source="kotak_daily_api")

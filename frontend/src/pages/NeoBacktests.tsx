@@ -1,11 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { neoResearchApi, type ReplayTrade } from '@/api/neoResearch'
-import { ReplayChart } from '@/components/neo-desk/ReplayChart'
+import { neoResearchApi } from '@/api/neoResearch'
 import { amount } from '@/components/neo-desk/FeeBreakdown'
+import { ReplayChart } from '@/components/neo-desk/ReplayChart'
+import { SavedCharts } from '@/components/neo-desk/SavedCharts'
+import { TodayTradeReplays } from '@/components/neo-desk/TodayTradeReplays'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+
 const profiles = [
   ['orb_trail', 'ORB · index trail'],
   ['orb_controls', 'ORB · option controls'],
@@ -20,10 +23,41 @@ export default function NeoBacktests() {
     [start, setStart] = useState(''),
     [end, setEnd] = useState(''),
     [compound, setCompound] = useState(false),
-    [jobId, setJobId] = useState(''),
+    [jobId, setJobId] = useState(() => {
+      try {
+        return localStorage.getItem('neo.replay.savedJob.v1') || ''
+      } catch {
+        return ''
+      }
+    }),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(''),
-    [selected, setSelected] = useState<ReplayTrade | null>(null)
+    [selectedIndex, setSelectedIndex] = useState(() => {
+      try {
+        return Math.max(0, Number(localStorage.getItem('neo.replay.selectedTrade.v1')) || 0)
+      } catch {
+        return 0
+      }
+    })
+  const saved = useQuery({
+    queryKey: ['neo-saved-research'],
+    queryFn: neoResearchApi.saved,
+    refetchInterval: 10000,
+  })
+  useEffect(() => {
+    if (!jobId && saved.data?.length) {
+      const recent = saved.data.find((r) => r.status === 'complete')
+      if (recent) setJobId(recent.id)
+    }
+  }, [jobId, saved.data])
+  useEffect(() => {
+    try {
+      localStorage.setItem('neo.replay.savedJob.v1', jobId)
+      localStorage.setItem('neo.replay.selectedTrade.v1', String(selectedIndex))
+    } catch {
+      /* Keep this screen’s choice. */
+    }
+  }, [jobId, selectedIndex])
   const chosen = datasets.data?.find((d) => d.id === dataset)
   useEffect(() => {
     if (datasets.data?.length && !datasets.data.some((d) => d.id === dataset))
@@ -44,11 +78,12 @@ export default function NeoBacktests() {
         ['queued', 'running'].includes(q.state.data?.status || '') ? 1000 : false,
     }),
     report = job.data?.result
+  const selected = report?.trades[selectedIndex] ?? null
   async function run() {
     if (busy) return
     setBusy(true)
     setError('')
-    setSelected(null)
+    setSelectedIndex(0)
     try {
       const result = await neoResearchApi.start({
         request_id: `neo-compare:${Date.now()}:${crypto.randomUUID()}`,
@@ -76,6 +111,45 @@ export default function NeoBacktests() {
         create unavailable expired-option data. Execution remains 15-minute confirmed NIFTY signals
         with 6R index targets.
       </p>
+      <TodayTradeReplays />
+      <Card>
+        <CardHeader>
+          <CardTitle>Saved preset backtests</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Label htmlFor="saved-backtest">Backtested preset / date range</Label>
+          <select
+            id="saved-backtest"
+            value={jobId}
+            className="h-10 w-full rounded border bg-background px-3"
+            onChange={(e) => {
+              setJobId(e.target.value)
+              setSelectedIndex(0)
+            }}
+          >
+            <option value="">Choose a saved result</option>
+            {(saved.data || []).map((r) => (
+              <option key={r.id} value={r.id}>
+                {profiles.find((p) => p[0] === r.request?.profile)?.[1] ||
+                  r.request?.profile ||
+                  'Preset'}{' '}
+                · {r.request?.start} → {r.request?.end} · expiry {r.request?.expiry} · {r.status} ·{' '}
+                {r.id.slice(0, 6)}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            Reopen preserved results and each trade’s chart without rerunning the backtest. Today’s
+            actual fills are shown separately above.
+          </p>
+          {saved.error ? (
+            <p role="alert" className="text-destructive">
+              {saved.error.message}
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
+      <SavedCharts />
       <Card>
         <CardHeader>
           <CardTitle>Research controls</CardTitle>
@@ -137,20 +211,40 @@ export default function NeoBacktests() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" disabled={!chosen} onClick={() => {
-              if (!chosen) return
-              const end = new Date(chosen.end + 'T12:00:00Z')
-              end.setUTCDate(end.getUTCDate()-29)
-              setStart(end.toISOString().slice(0,10));setEnd(chosen.end)
-            }}>Last 30 archive days</Button>
-            <Button variant="outline" disabled={!chosen} onClick={() => {
-              if (!chosen) return
-              const end = new Date(chosen.end + 'T12:00:00Z')
-              end.setUTCFullYear(end.getUTCFullYear()-1);end.setUTCDate(end.getUTCDate()+1)
-              setStart(end.toISOString().slice(0,10));setEnd(chosen.end)
-            }}>Last year ending at archive date</Button>
+            <Button
+              variant="outline"
+              disabled={!chosen}
+              onClick={() => {
+                if (!chosen) return
+                const end = new Date(`${chosen.end}T12:00:00Z`)
+                end.setUTCDate(end.getUTCDate() - 29)
+                setStart(end.toISOString().slice(0, 10))
+                setEnd(chosen.end)
+              }}
+            >
+              Last 30 archive days
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!chosen}
+              onClick={() => {
+                if (!chosen) return
+                const end = new Date(`${chosen.end}T12:00:00Z`)
+                end.setUTCFullYear(end.getUTCFullYear() - 1)
+                end.setUTCDate(end.getUTCDate() + 1)
+                setStart(end.toISOString().slice(0, 10))
+                setEnd(chosen.end)
+              }}
+            >
+              Last year ending at archive date
+            </Button>
           </div>
-          {chosen && (start < chosen.start || end > chosen.end) ? <p role="status" className="text-sm">The selected range extends beyond the archive. Only recorded dates can replay; this will be an incomplete result.</p> : null}
+          {chosen && (start < chosen.start || end > chosen.end) ? (
+            <output className="block text-sm">
+              The selected range extends beyond the archive. Only recorded dates can replay; this
+              will be an incomplete result.
+            </output>
+          ) : null}
           <p>Initial research capital ₹10,000 · up to two whole lots per entry</p>
           <label className="flex gap-2 text-sm">
             <input
@@ -163,6 +257,9 @@ export default function NeoBacktests() {
           {chosen ? (
             <div className="text-sm">
               <p>{chosen.source.name}</p>
+              {chosen.storage === 'SQL' ? (
+                <p>Replay source and its charts are preserved in SQL.</p>
+              ) : null}
               <p>
                 Observed calendar: {chosen.start} → {chosen.end}
               </p>
@@ -196,10 +293,15 @@ export default function NeoBacktests() {
         <Card>
           <CardHeader>
             <CardTitle>
+              {profiles.find((p) => p[0] === report.profile)?.[1] || report.profile} ·{' '}
               {report.coverage.complete ? 'Covered replay' : 'Incomplete historical replay'}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <p className="text-sm">
+              Backtested preset: {report.profile} · {job.data?.request?.start} →{' '}
+              {job.data?.request?.end} · expiry {job.data?.request?.expiry}
+            </p>
             <div className="grid gap-4 sm:grid-cols-4">
               {[
                 ['Observed closed-trade net estimate', report.known_realized_net],
@@ -257,7 +359,7 @@ export default function NeoBacktests() {
                 </thead>
                 <tbody>
                   {report.trades.map((t, i) => (
-                    <tr key={t.entry_time + '-' + i} className="border-t">
+                    <tr key={`${t.entry_time}-${i}`} className="border-t">
                       <td className="p-2">{t.symbol}</td>
                       <td>
                         {new Date(t.entry_time).toLocaleString('en-IN', {
@@ -275,8 +377,11 @@ export default function NeoBacktests() {
                         {t.reason}
                       </td>
                       <td>
-                        <Button variant="outline" onClick={() => setSelected(t)}>
-                          View trade
+                        <Button
+                          variant={selectedIndex === i ? 'default' : 'outline'}
+                          onClick={() => setSelectedIndex(i)}
+                        >
+                          Replay trade
                         </Button>
                       </td>
                     </tr>
@@ -284,7 +389,18 @@ export default function NeoBacktests() {
                 </tbody>
               </table>
             </div>
-            {selected ? <ReplayChart trade={selected} /> : null}
+            {selected ? (
+              <ReplayChart
+                key={`${jobId}:${selectedIndex}`}
+                trade={selected}
+                source={`Backtested ${report.profile} · modelled fills · preserved observations`}
+              />
+            ) : (
+              <p className="text-sm">
+                This preset produced no trades for the saved request. No entry or exit markers are
+                invented.
+              </p>
+            )}
           </CardContent>
         </Card>
       ) : null}

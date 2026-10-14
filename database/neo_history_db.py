@@ -3,9 +3,10 @@
 from sqlalchemy import JSON, Column, String
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-from database.engine_factory import create_db_engine
+from database.engine_factory import create_db_engine, enable_durable_writes
 
 engine = create_db_engine()
+enable_durable_writes(engine)
 db_session = scoped_session(sessionmaker(bind=engine))
 Base = declarative_base()
 

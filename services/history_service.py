@@ -160,7 +160,12 @@ def get_history_with_auth(
         if "oi" not in df.columns:
             df["oi"] = 0
 
-        return True, {"status": "success", "data": df.to_dict(orient="records")}, 200
+        records = df.to_dict(orient="records")
+        import os
+        if broker == "kotak" and os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true":
+            from services.neo_desk.chart_archive import save_observations
+            save_observations(symbol, exchange, interval, records)
+        return True, {"status": "success", "data": records}, 200
     except BrokerBusyError as e:
         return broker_busy_result(e, f"History request for {exchange}:{symbol}")
     except Exception as e:

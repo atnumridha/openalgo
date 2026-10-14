@@ -54,7 +54,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
-from database.engine_factory import create_db_engine
+from database.engine_factory import create_db_engine, enable_durable_writes
 from utils.logging import get_logger
 from utils.thread_safe_cache import MISSING, LockedTTLCache
 
@@ -63,6 +63,7 @@ logger = get_logger(__name__)
 # Canonical engine factory enforces the project-wide pooling policy
 # (SQLite -> NullPool with check_same_thread=False) for FD hygiene.
 engine = create_db_engine()
+enable_durable_writes(engine)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()

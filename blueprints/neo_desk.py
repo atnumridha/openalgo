@@ -123,6 +123,7 @@ def history():
             request.args.get("end"),
             request.args.get("cursor", 0),
             request.args.get("cost_plan", "trade_free"),
+            request.args.get("mode", "live"),
         )
     )
 
@@ -158,6 +159,7 @@ def history_export():
             request.args.get("symbol", ""),
             request.args.get("start"),
             request.args.get("end"),
+            request.args.get("mode", "live"),
         ),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=recorded-executions.csv"},
@@ -234,3 +236,36 @@ def health():
     from services.neo_desk.health import execution_feedback
 
     return jsonify(execution_feedback(session["user"]))
+
+
+@neo_desk_bp.get("/storage")
+@authenticated
+def storage():
+    from services.neo_desk.persistence import storage_status
+    return jsonify(storage_status(session["user"]))
+
+
+@neo_desk_bp.get("/charts/saved")
+@authenticated
+def archived_chart():
+    from services.neo_desk.persistence import saved_chart
+    return jsonify(saved_chart(
+        request.args.get("symbol", "NIFTY"), request.args.get("exchange", "NSE_INDEX"),
+        request.args.get("interval", "15m"), request.args.get("start", ""), request.args.get("end", "")
+    ))
+
+
+@neo_desk_bp.get("/history/replay")
+@authenticated
+def history_replay():
+    from services.neo_desk.trade_replay import trade_replay
+
+    return jsonify(trade_replay(session["user"], request.args.get("trade_id"), request.args.get("mode", "live")))
+
+
+@neo_desk_bp.get("/research/saved")
+@authenticated
+def research_saved():
+    from services.neo_desk.research_jobs import saved_jobs
+
+    return jsonify(jobs=saved_jobs(session["user"]))

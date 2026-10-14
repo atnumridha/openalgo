@@ -14,6 +14,7 @@ import {
 } from 'lightweight-charts'
 import { useEffect, useRef, useState } from 'react'
 import { neoDeskApi } from '@/api/neoDesk'
+import { neoReportsApi } from '@/api/neoReports'
 import { scalpingApi } from '@/api/scalping'
 import { Button } from '@/components/ui/button'
 import { useMarketData } from '@/hooks/useMarketData'
@@ -24,8 +25,8 @@ import {
   computeStudies,
   formatIST,
   openingRange,
-  reconcileHistory,
   type PriceBar,
+  reconcileHistory,
 } from './tradingViewStudies'
 import { TradingViewZones } from './tradingViewZones'
 
@@ -53,6 +54,7 @@ export function NeoMarketChart({
   studies,
   initialHistory,
   compact = false,
+  savedRange,
 }: {
   symbol: string
   exchange: string
@@ -61,6 +63,7 @@ export function NeoMarketChart({
   studies?: string[]
   initialHistory?: History
   compact?: boolean
+  savedRange?: { start: string; end: string }
 }) {
   const host = useRef<HTMLDivElement>(null),
     scene = useRef<Scene | null>(null),
@@ -89,40 +92,44 @@ export function NeoMarketChart({
   const market = useMarketData({
     symbols: symbol ? [{ symbol, exchange }] : [],
     mode: 'Quote',
-    enabled: Boolean(symbol),
+    enabled: Boolean(symbol) && !savedRange,
     autoReconnect: true,
   })
   const history = useQuery({
-    queryKey: ['neo-tv-history', exchange, symbol, interval],
+    queryKey: ['neo-tv-history', exchange, symbol, interval, savedRange?.start, savedRange?.end],
     enabled: Boolean(symbol && exchange),
     queryFn: async () => {
-      const result = await scalpingApi.getHistory(symbol, exchange, interval)
+      const result: History = savedRange
+        ? await neoReportsApi.chart(symbol, exchange, interval, savedRange.start, savedRange.end)
+        : await scalpingApi.getHistory(symbol, exchange, interval)
       if (result.status !== 'success')
         throw Error(result.message || 'Kotak history unavailable. Refresh the broker connection.')
       return result
     },
     initialData:
+      !savedRange &&
       initialHistory?.symbol === symbol &&
       initialHistory.exchange === exchange &&
       initialHistory.interval === interval
         ? initialHistory
         : undefined,
     staleTime: 20000,
-    refetchInterval: 25000,
+    refetchInterval: savedRange ? false : 25000,
     retry: 1,
   })
   const info = useQuery({
     queryKey: ['neo-chart', exchange, symbol, interval],
-    enabled: Boolean(symbol && exchange),
+    enabled: Boolean(symbol && exchange) && !savedRange,
     queryFn: () => neoDeskApi.chart(`${exchange}:${symbol}`, interval),
     refetchInterval: 2000,
   })
   const desk = useQuery({
     queryKey: ['neo-desk'],
+    enabled: !savedRange,
     queryFn: neoDeskApi.state,
     refetchInterval: 2000,
   })
-  const profile = desk.data?.profile ?? ''
+  const profile = savedRange ? '' : (desk.data?.profile ?? '')
   const profileRef = useRef(profile)
   profileRef.current = profile
   useEffect(() => {
@@ -363,7 +370,7 @@ export function NeoMarketChart({
   // biome-ignore lint/correctness/useExhaustiveDependencies: imperative chart and study changes must replay into the current scene
   useEffect(() => {
     const s = scene.current
-    if (!s || !info.data) return
+    if (!s || !info.data || savedRange) return
     const lines = info.data.overlays
       .filter((line) => Number.isFinite(Number(line.price)))
       .map((line) =>
@@ -383,8 +390,8 @@ export function NeoMarketChart({
     return () => {
       for (const line of lines) s.price.removePriceLine(line)
     }
-  }, [ready, info.data])
-  const tick = market.data.get(`${exchange}:${symbol}`)?.data
+  }, [ready, info.data, savedRange])
+  const tick = savedRange ? undefined : market.data.get(`${exchange}:${symbol}`)?.data
   useEffect(() => {
     const s = scene.current
     if (!s || !tick?.ltp || !bars.current.length) return
@@ -405,7 +412,7 @@ export function NeoMarketChart({
   const problems = [
     renderError,
     (history.error as Error)?.message,
-    (info.error as Error)?.message,
+    savedRange ? undefined : (info.error as Error)?.message,
   ].filter(Boolean)
   return (
     <section
@@ -421,9 +428,17 @@ export function NeoMarketChart({
             </span>
           </div>
           <div className="flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground">Broker LTP</span>
+            <span className="text-muted-foreground">
+              {savedRange ? 'Saved close' : 'Broker LTP'}
+            </span>
             <strong className="tabular-nums">
-              {tick?.ltp ? `₹${Number(tick.ltp).toFixed(2)}` : 'Waiting for quote'}
+              {savedRange
+                ? last
+                  ? `₹${last.close.toFixed(2)}`
+                  : 'No saved candles'
+                : tick?.ltp
+                  ? `₹${Number(tick.ltp).toFixed(2)}`
+                  : 'Waiting for quote'}
             </strong>
           </div>
         </div>
@@ -456,7 +471,9 @@ export function NeoMarketChart({
                 ? 'Choose an expiry and strike to load prices.'
                 : history.isPending
                   ? 'Loading Kotak candles…'
-                  : 'No candles returned. Select another contract or refresh history.'}
+                  : savedRange
+                    ? 'No saved candles for these dates. Choose a recorded date range.'
+                    : 'No candles returned. Select another contract or refresh history.'}
             </span>
           )}
         </section>
@@ -516,7 +533,11 @@ export function NeoMarketChart({
       ) : null}
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-3 py-1 text-[11px] text-muted-foreground">
         <span>
-          {market.isConnected ? 'Feed connected' : 'Feed disconnected'}
+          {savedRange
+            ? `SQL saved history · ${savedRange.start} → ${savedRange.end}`
+            : market.isConnected
+              ? 'Feed connected'
+              : 'Feed disconnected'}
           {age != null ? ` · last quote ${age.toFixed(0)}s ago` : ''} · {bars.current.length}{' '}
           candles · IST
         </span>

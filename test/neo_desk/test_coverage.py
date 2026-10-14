@@ -9,6 +9,12 @@ from services.neo_desk.datasets import list_datasets, load_dataset
 @pytest.fixture(autouse=True)
 def isolated_download_archive(tmp_path, monkeypatch):
     monkeypatch.setattr("services.neo_desk.datasets.ARCHIVE_ROOT", tmp_path / "downloaded")
+    from sqlalchemy import create_engine
+
+    from services.neo_desk.chart_archive import ChartArchive
+
+    empty = ChartArchive(create_engine("sqlite:///" + str(tmp_path / "archive.db")))
+    monkeypatch.setattr("services.neo_desk.chart_archive.get_archive", lambda: empty)
 
 
 def archive(tmp_path, name="valid", index_kind="index_15m", missing_options=False):

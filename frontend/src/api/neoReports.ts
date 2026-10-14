@@ -1,4 +1,5 @@
 import { webClient } from './client'
+import type { ReplayTrade } from './neoResearch'
 export interface HistoryRow {
   symbol: string
   quantity: number
@@ -40,17 +41,55 @@ export interface HistoryView {
     recorded_dates?: string[]
   }
 }
+export interface ChartCoverage {
+  symbol: string
+  exchange: string
+  interval: string
+  start: string
+  end: string
+  count: number
+  last_saved?: string
+}
+export interface StorageStatus {
+  backend: string
+  live_fills: number
+  paper_fills: number
+  history_events: number
+  charts: ChartCoverage[]
+  last_backup?: string
+  last_capture?: string
+  backup_error?: string | null
+  sync_error?: string | null
+  trade_chart_error?: string | null
+  chart_backfill_error?: string | null
+}
 export const neoReportsApi = {
+  replay: async (
+    trade_id: string,
+    mode: string
+  ): Promise<{
+    source: string
+    trade: ReplayTrade
+    coverage: { complete: boolean; gaps: string[] }
+  }> => (await webClient.get('/neodesk/api/history/replay', { params: { trade_id, mode } })).data,
+  storage: async (): Promise<StorageStatus> => (await webClient.get('/neodesk/api/storage')).data,
+  chart: async (symbol: string, exchange: string, interval: string, start: string, end: string) =>
+    (
+      await webClient.get('/neodesk/api/charts/saved', {
+        params: { symbol, exchange, interval, start, end },
+      })
+    ).data,
   history: async (
     symbol = '',
     start = '',
     end = '',
     cursor = 0,
-    cost_plan = 'trade_free'
+    cost_plan = 'trade_free',
+    mode = 'live'
   ): Promise<HistoryView> =>
     (
       await webClient.get('/neodesk/api/history', {
-        params: { symbol, start, end, cursor, cost_plan },
+        params: { symbol, start, end, cursor, cost_plan, mode },
       })
     ).data,
   refresh: async () => (await webClient.post('/neodesk/api/history/refresh')).data,

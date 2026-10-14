@@ -6,10 +6,17 @@ export interface DatasetView {
   expiries: string[]
   source: { name: string; synthetic: boolean }
   gaps: string[]
+  storage?: string
 }
 export interface ReplayTrade {
   symbol: string
   direction: string
+  entry_side?: string
+  underlying?: string | null
+  recorded?: boolean
+  profile?: string | null
+  initial_option_stop?: string | null
+  option_target?: string | null
   entry_time: string
   exit_time?: string
   quantity: number
@@ -18,9 +25,9 @@ export interface ReplayTrade {
   net?: string
   status: string
   reason?: string
-  initial_index_stop: string
-  index_target: string
-  index_reference: string
+  initial_index_stop: string | null
+  index_target: string | null
+  index_reference: string | null
   option_bars: Array<{
     time: number
     open: number
@@ -30,7 +37,15 @@ export interface ReplayTrade {
     volume: number
   }>
   index_bars: ReplayTrade['option_bars']
-  trail: Array<{ time: number; option_stop: string | null; index_stop: string }>
+  trail: Array<{
+    time: number
+    option_stop: string | null
+    index_stop: string | null
+    option_target?: string | null
+    index_target?: string | null
+    index_reference?: string | null
+    net_floor?: string | null
+  }>
 }
 export interface ReplayReport {
   profile: string
@@ -46,13 +61,15 @@ export interface ReplayReport {
   assumptions: string[]
 }
 export interface ResearchJob {
-  request?: { start: string; end: string; expiry: string }
+  request?: { start: string; end: string; expiry: string; profile?: string; dataset?: string }
   id: string
   status: string
   error: string | null
   result: ReplayReport | null
 }
 export const neoResearchApi = {
+  saved: async (): Promise<Array<Omit<ResearchJob, 'result' | 'error'>>> =>
+    (await webClient.get('/neodesk/api/research/saved')).data.jobs,
   latest: async (): Promise<ResearchJob[]> =>
     (await webClient.get('/neodesk/api/research/latest')).data.jobs,
   datasets: async (): Promise<DatasetView[]> =>

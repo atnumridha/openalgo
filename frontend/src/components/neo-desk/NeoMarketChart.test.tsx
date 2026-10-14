@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
+import { neoReportsApi } from '@/api/neoReports'
 import { scalpingApi } from '@/api/scalping'
 import { NeoMarketChart } from './NeoMarketChart'
 
@@ -9,9 +10,10 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   createLine: vi.fn(() => ({})),
   range: vi.fn(),
+  market: vi.fn(() => ({ data: new Map(), isConnected: true })),
 }))
 vi.mock('@/hooks/useMarketData', () => ({
-  useMarketData: () => ({ data: new Map(), isConnected: true }),
+  useMarketData: mocks.market,
 }))
 vi.mock('@/api/neoDesk', () => ({
   neoDeskApi: {
@@ -19,6 +21,7 @@ vi.mock('@/api/neoDesk', () => ({
     state: async () => ({ profile: 'orb_trail' }),
   },
 }))
+vi.mock('@/api/neoReports', () => ({ neoReportsApi: { chart: vi.fn() } }))
 vi.mock('@/api/scalping', () => ({ scalpingApi: { getHistory: vi.fn() } }))
 vi.mock('lightweight-charts', () => ({
   CandlestickSeries: 'candles',
@@ -109,4 +112,30 @@ it('waits for a listed instrument without sending an empty history request', asy
   )
   expect(await screen.findByText('Choose an expiry and strike to load prices.')).toBeVisible()
   expect(scalpingApi.getHistory).not.toHaveBeenCalled()
+})
+
+it('reopens SQL candles without live subscriptions, quotes or current-position lines', async () => {
+  vi.mocked(neoReportsApi.chart).mockResolvedValue(history)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(['neo-chart', 'NSE_INDEX', 'NIFTY', '15m'], {
+    overlays: [{ label: 'SL / trail', price: '95', run_id: 1 }],
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <NeoMarketChart
+        symbol="NIFTY"
+        exchange="NSE_INDEX"
+        interval="15m"
+        savedRange={{ start: '2025-11-03', end: '2025-11-03' }}
+      />
+    </QueryClientProvider>
+  )
+  await waitFor(() => expect(mocks.series[0]?.setData).toHaveBeenCalled())
+  expect(mocks.market).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }))
+  expect(scalpingApi.getHistory).not.toHaveBeenCalled()
+  expect(mocks.createLine).not.toHaveBeenCalledWith(
+    expect.objectContaining({ title: 'SL / trail' })
+  )
+  expect(screen.getByText('Saved close')).toBeVisible()
+  expect(screen.getByText(/SQL saved history/)).toBeVisible()
 })

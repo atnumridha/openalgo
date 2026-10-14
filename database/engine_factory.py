@@ -57,3 +57,17 @@ def create_db_engine(database_url=None):
 
     # Non-SQLite backends (e.g. PostgreSQL): use a real connection pool.
     return create_engine(database_url, pool_size=50, max_overflow=100, pool_timeout=10)
+
+
+def enable_durable_writes(engine):
+    """Fsync each trading commit while retaining WAL concurrency and NullPool."""
+    from sqlalchemy import event
+
+    if engine.dialect.name != "sqlite" or getattr(engine, "_neo_durable", False):
+        return
+
+    def full_sync(connection, record):
+        connection.execute("PRAGMA synchronous=FULL")
+
+    event.listen(engine, "connect", full_sync)
+    engine._neo_durable = True

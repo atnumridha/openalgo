@@ -4,7 +4,6 @@ import os
 from datetime import datetime
 
 import pytz
-
 from dotenv import load_dotenv
 from sqlalchemy import (
     DECIMAL,
@@ -58,6 +57,10 @@ if SANDBOX_DATABASE_URL and "sqlite" in SANDBOX_DATABASE_URL:
 else:
     # For other databases like PostgreSQL, use connection pooling
     engine = create_engine(SANDBOX_DATABASE_URL, pool_size=20, max_overflow=40, pool_timeout=10)
+
+from database.engine_factory import enable_durable_writes
+
+enable_durable_writes(engine)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
