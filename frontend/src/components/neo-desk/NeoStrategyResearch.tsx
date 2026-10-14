@@ -83,6 +83,13 @@ export function NeoStrategyResearch() {
                 <tr key={profile} className="border-b last:border-0">
                   <td className="py-2">
                     {label}
+                    {job?.request ? (
+                      <span className="block text-[10px] text-muted-foreground">
+                        {job.request.start} → {job.request.end}
+                        <br />
+                        Expiry {job.request.expiry}
+                      </span>
+                    ) : null}
                     {r && !r.coverage.complete ? (
                       <span className="block text-[10px] text-muted-foreground">
                         Incomplete coverage
@@ -114,8 +121,8 @@ export function NeoStrategyResearch() {
       </div>
       {datasets.data?.[0] ? (
         <p className="mt-2 text-[10px] text-muted-foreground">
-          Archive: {datasets.data[0].start} to {datasets.data[0].end}. Missing option observations
-          prevent a complete month/year result.
+          30-day comparison archive: {datasets.data[0].start} to {datasets.data[0].end}. Missing
+          option observations prevent a complete month/year result.
         </p>
       ) : null}
       <Button

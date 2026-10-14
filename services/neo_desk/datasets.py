@@ -12,6 +12,17 @@ from pathlib import Path
 from .types import IST, Candle, Contract
 
 ROOT = Path("runtime/neo_desk/migration-20261013/backup/data")
+ARCHIVE_ROOT = Path("runtime/neo_desk/datasets")
+
+
+def _manifest_paths():
+    """New broker pulls stay separate from the preserved migration snapshot."""
+    paths = {}
+    for root in (ROOT, ARCHIVE_ROOT):
+        for path in sorted(root.glob("*/manifest.json")):
+            paths.setdefault(path.parent.name, []).append(path)
+    # An identity collision must not replace the observations of an existing replay.
+    return {name: matches[0] for name, matches in paths.items() if len(matches) == 1}
 
 
 @dataclass
@@ -27,7 +38,7 @@ class HistoricalDataset:
 
 def list_datasets():
     result = []
-    for path in ROOT.glob("*/manifest.json"):
+    for path in _manifest_paths().values():
         try:
             m = json.loads(path.read_text())
             if m.get("source", {}).get("synthetic") is not False or m.get("kind") != "ohlc_1m":
@@ -88,7 +99,7 @@ def load_dataset(identity):
         or identity not in {x["id"] for x in list_datasets()}
     ):
         raise ValueError("Choose a preserved real dataset.")
-    directory = ROOT / identity
+    directory = _manifest_paths()[identity].parent
     m = json.loads((directory / "manifest.json").read_text())
     tables = {}
     for item in m["files"]:

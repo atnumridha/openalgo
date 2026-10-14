@@ -46,6 +46,7 @@ export interface ReplayReport {
   assumptions: string[]
 }
 export interface ResearchJob {
+  request?: { start: string; end: string; expiry: string }
   id: string
   status: string
   error: string | null
