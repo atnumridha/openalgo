@@ -1,4 +1,5 @@
 import type { UTCTimestamp } from 'lightweight-charts'
+import { fairValueGaps, nearbyFairValueGaps } from '../kotak-assistant/fairValueGaps'
 
 export interface PriceBar {
   time: number
@@ -14,6 +15,7 @@ export interface GapZone {
   low: number
   high: number
   bullish: boolean
+  touched: boolean
 }
 const day = (t: number) => Math.floor((t + 19800) / 86400)
 export function chartBars(input: PriceBar[]): PriceBar[] {
@@ -40,7 +42,7 @@ export function formatIST(t: number, withDate = false) {
     ...(withDate ? ({ day: '2-digit', month: 'short' } as const) : {}),
   }).format(new Date(t * 1000))
 }
-export function computeStudies(bars: PriceBar[]) {
+export function computeStudies(bars: PriceBar[], interval = '5m', nowUtc = Date.now() / 1000) {
   const upper: Array<{ time: UTCTimestamp; value: number }> = [],
     lower: typeof upper = [],
     ema: typeof upper = [],
@@ -74,8 +76,7 @@ export function computeStudies(bars: PriceBar[]) {
         })
     }
   }
-  const zones: GapZone[] = [],
-    last = bars.length - 1,
+  const last = bars.length - 1,
     close = bars[last]?.close ?? 0
   const supports: number[] = [],
     resistances: number[] = []
@@ -86,39 +87,43 @@ export function computeStudies(bars: PriceBar[]) {
       resistances.push(b.high)
     if (window.every((p, j) => j === 3 || p.low > b.low) && b.low <= close) supports.push(b.low)
   }
-  for (let i = Math.max(2, bars.length - 120); i < last; i++) {
-    const b = bars[i],
-      prev = bars[i - 2]
-    if (day(b.time) !== day(prev.time)) continue
-    const bullish = b.low > prev.high,
-      bearish = b.high < prev.low
-    if (!bullish && !bearish) continue
-    const low = bullish ? prev.high : b.high,
-      high = bullish ? b.low : prev.low
-    if (bars.slice(i + 1).some((p) => (bullish ? p.low <= low : p.high >= high))) continue
-    zones.push({ time: b.time, end: bars[last].time, low, high, bullish })
-  }
-  zones.sort(
-    (a, b) =>
-      Math.min(Math.abs(close - a.low), Math.abs(close - a.high)) -
-      Math.min(Math.abs(close - b.low), Math.abs(close - b.high))
-  )
+  const duration = /^(\d+)(s|m|h|d)$/.exec(interval)
+  const seconds = duration
+    ? Number(duration[1]) * ({ s: 1, m: 60, h: 3600, d: 86400 }[duration[2]] || 0)
+    : 0
+  // TradingView uses true UTC; the shared home-page model uses an IST-shifted
+  // axis. Convert once at this boundary and return UTC drawing anchors.
+  const zones: GapZone[] = nearbyFairValueGaps(
+    fairValueGaps(
+      bars.map((b) => ({ ...b, time: b.time + 19800 })),
+      seconds,
+      nowUtc
+    ),
+    close
+  ).map((gap) => ({
+    time: gap.startTime - 19800,
+    end: bars[last]?.time ?? 0,
+    low: gap.lower,
+    high: gap.upper,
+    bullish: gap.direction === 'bullish',
+    touched: gap.touched,
+  }))
   return {
     upper,
     lower,
     ema,
     rsi,
-    zones: zones.slice(0, 3),
+    zones,
     support: supports.length ? Math.max(...supports) : null,
     resistance: resistances.length ? Math.min(...resistances) : null,
   }
 }
-export function openingRange(bars: PriceBar[]) {
+export function openingRange(bars: PriceBar[], replayTime?: number) {
   const last = bars.at(-1)
   if (!last) return null
   const today = bars.filter((b) => day(b.time) === day(last.time))
   const minutes = (t: number) => Math.floor(((t + 19800) % 86400) / 60)
-  if (minutes(last.time) < 570) return null
+  if (minutes(replayTime ?? last.time) < 570) return null
   const opening = today.filter((b) => minutes(b.time) >= 555 && minutes(b.time) < 570)
   return opening.length && minutes(opening[0].time) === 555
     ? { high: Math.max(...opening.map((b) => b.high)), low: Math.min(...opening.map((b) => b.low)) }

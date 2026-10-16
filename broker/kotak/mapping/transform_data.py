@@ -154,6 +154,8 @@ _MAX_TAG_PREFIX = 15
 
 
 def _order_tag(data):
+    if data.get("_kotak_assistant_tag"):
+        return str(data["_kotak_assistant_tag"])
     prefix = str(data.get("order_tag") or data.get("ig") or ORDER_TAG_PREFIX).strip()
     return f"{(prefix or ORDER_TAG_PREFIX)[:_MAX_TAG_PREFIX]}-{uuid.uuid4()}"
 

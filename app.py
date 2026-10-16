@@ -96,6 +96,7 @@ from blueprints.react_app import (  # Import React frontend blueprint
     serve_react_app,
 )
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
+from blueprints.kotak_assistant import kotak_assistant_bp
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
 from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
@@ -336,6 +337,7 @@ def create_app():
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
+    app.register_blueprint(kotak_assistant_bp)
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
     app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(alerts_bp)  # Register chart alert log blueprint
@@ -910,6 +912,12 @@ def setup_environment(app):
                 logger.debug("Scalping risk monitor initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Scalping risk monitor: {e}")
+
+            try:
+                from services.kotak_assistant.runtime import start as start_kotak_assistant
+                start_kotak_assistant()
+            except Exception as e:
+                logger.error(f"Failed to initialize Kotak home monitor: {e}")
 
             # Auto-reconnect the WhatsApp bot if a paired session is persisted.
             # Without this, every server restart would leave is_ready()=False

@@ -143,8 +143,8 @@ export function NeoTradingViewWorkspace() {
           </Button>
         </p>
       ) : null}
-      <div className="grid flex-1 gap-3 p-3 md:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="h-[65vh] min-h-[480px] md:h-[calc(100vh-255px)] md:min-h-[550px]">
+      <div className="grid flex-1 gap-3 p-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="h-[72vh] min-h-[560px] md:h-[calc(100vh-245px)] md:min-h-[620px]">
           <NeoMarketChart
             symbol={instrument.symbol}
             exchange={instrument.exchange}

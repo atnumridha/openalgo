@@ -965,7 +965,7 @@ CONNECT_FAILED_MESSAGE = "Failed to connect to WebSocket server"
 
 
 def get_websocket_client(
-    api_key: str, host: str = "localhost", port: int = 8765
+    api_key: str, host: str | None = None, port: int | None = None
 ) -> WebSocketClient:
     """
     Get or create a WebSocket client instance for the given API key.
@@ -988,6 +988,10 @@ def get_websocket_client(
     Raises:
         ConnectionError: The server could not be reached or refused the key.
     """
+    # Follow the same endpoint as the local proxy, including isolated desks.
+    # Explicit callers (tests or remote clients) retain their chosen endpoint.
+    host = host if host is not None else os.getenv("WEBSOCKET_HOST", "127.0.0.1").strip("'\"")
+    port = port if port is not None else int(os.getenv("WEBSOCKET_PORT", "8765").strip("'\""))
     with _client_lock:
         client = _client_instances.get(api_key)
         if client is not None and client.alive:

@@ -8,6 +8,27 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+### Kotak dashboard trading assistant
+
+- Adds NIFTY, BANKNIFTY and SENSEX option charts, selected-strike setup guidance,
+  replay date ranges and restrained Fair Value Gap labels. Setup signals explain
+  their trigger and load a ticket only when you choose Use setup.
+- Shows option-premium entry, stop and reward targets, estimated charges and
+  net P&L. Cash-budget plans account for lots and fills; execution slippage can
+  still exceed the planned budget.
+- Saves terminal trade monitoring across restarts and tracks broker-app positions
+  and manually recorded outside trades. Manual records do not submit orders.
+- Limits new live terminal entries to three filled BUY orders per IST day,
+  including additions and re-entries. Extra Kotak-app entries are detected;
+  the terminal cannot block orders placed directly in the broker app.
+- Adds a green daily profit milestone at ₹2,000 after estimated charges and a
+  red warning at ₹1,000 loss. Further entries after the profit milestone remain
+  available only within the three-entry limit and existing risk checks.
+- Full-screen warnings can be closed or dismissed with Escape and repeat every
+  two minutes by default. The interval is configurable from 30 seconds to
+  10 minutes and saved in this browser. Go to open trades opens monitoring
+  without placing an order; exits remain available.
+
 ### /trading: Renko and point and figure settings, openalgo-charts 2.6.2
 
 No database migration and no `update.sh` run are needed. Pull and restart

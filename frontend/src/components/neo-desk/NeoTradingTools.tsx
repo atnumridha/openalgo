@@ -20,7 +20,7 @@ export interface NeoChartTarget {
 const studies = ['neo-donchian', 'neo-structure', 'rsi']
 const studyLabels: Record<string, string> = {
   'neo-donchian': 'Donchian / EMA',
-  'neo-structure': 'FVG / levels',
+  'neo-structure': 'Fair Value Gaps / levels',
   rsi: 'RSI 14',
 }
 export function NeoTradingTools({
@@ -292,7 +292,7 @@ export function NeoTradingTools({
               put directions differ.
             </p>
             <p>
-              Faint green / red zones show unfilled bullish / bearish FVGs. Dashed support and
+              Faint green / red zones show the three nearest unfilled FVGs. Compact arrows keep candles clear; open the FVG legend for prices and partial fills. Dashed support and
               resistance lines mark confirmed pivots, which may attract liquidity.
             </p>
             <p>

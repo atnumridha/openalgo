@@ -1,3 +1,4 @@
+import { KotakAssistant } from '@/components/kotak-assistant/KotakAssistant'
 import { MarketOverview } from '@/components/neo-desk/MarketOverview'
 import { ExecutionFeedback } from '@/components/neo-desk/ExecutionFeedback'
 import { BarChart3, BookOpen, FileText, GraduationCap, Search, Zap } from 'lucide-react'
@@ -8,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
 import { onModeChange } from '@/stores/themeStore'
+import { useAuthStore } from '@/stores/authStore'
 
 interface MarginData {
   availablecash: string
@@ -62,6 +64,7 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
 }
 
 export default function Dashboard() {
+  const isKotak = useAuthStore(s => s.user?.broker === 'kotak')
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -302,8 +305,7 @@ export default function Dashboard() {
     )
   }
 
-  return (
-    <div className="space-y-6 md:space-y-12">
+  const accountOverview = (<>
       <MarketOverview />
       <ExecutionFeedback />
       {/* Dashboard Header */}
@@ -456,6 +458,16 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       )}
+
+  </>)
+  return (
+    <div className="space-y-5">
+      <KotakAssistant />
+      {isKotak ? <details className="rounded-xl border bg-card p-4">
+        <summary className="cursor-pointer text-sm font-medium">Account balance & market overview</summary>
+        <div className="mt-4 space-y-4">{accountOverview}</div>
+      </details> : accountOverview}
+
 
       {/* Quick Access Tools */}
       <div>

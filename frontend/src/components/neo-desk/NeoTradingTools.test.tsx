@@ -236,7 +236,7 @@ it('keeps a hidden context overlay off when changing option charts', async () =>
       <NeoTradingTools target={target as never} revision={1} />
     </QueryClientProvider>
   )
-  const control = await screen.findByRole('checkbox', { name: 'FVG / levels' })
+  const control = await screen.findByRole('checkbox', { name: 'Fair Value Gaps / levels' })
   await waitFor(() => expect(control).toBeEnabled())
   fireEvent.click(control)
   await waitFor(() => expect(control).not.toBeChecked())
