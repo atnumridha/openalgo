@@ -15,7 +15,10 @@ import { useLivePrice } from './useLivePrice'
  * because this hook also prices Positions and Holdings and nothing else covered
  * it.
  */
-const marketData = new Map<string, { data: { ltp: number }; lastUpdate: number }>()
+const marketData = new Map<
+  string,
+  { data: { ltp: number; mark_price?: number }; lastUpdate: number }
+>()
 
 vi.mock('./useMarketData', () => ({
   useMarketData: () => ({
@@ -83,5 +86,64 @@ describe('useLivePrice closed-position gate', () => {
     )
 
     await waitFor(() => expect(result.current.data[0].ltp).toBe(1350))
+  })
+})
+
+describe('useLivePrice P&L% on a contract multiplier', () => {
+  beforeEach(() => {
+    marketData.clear()
+    marketData.set('CRYPTO:BTCUSDFUT', { data: { ltp: 84000 }, lastUpdate: Date.now() })
+  })
+
+  it('measures P&L% against the contract notional, not price x contracts', async () => {
+    // One Delta BTCUSD contract is 0.001 BTC: $85 notional at $85,000. A $1,000
+    // drop is $1 on that, -1.18%. Without the multiplier the base was $85,000
+    // and the row read -0.00%.
+    const { result } = renderHook(() =>
+      useLivePrice(
+        [
+          {
+            symbol: 'BTCUSDFUT',
+            exchange: 'CRYPTO',
+            quantity: 1,
+            average_price: 85000,
+            ltp: 85000,
+            lot_size: 0.001,
+          },
+        ],
+        { enabled: true }
+      )
+    )
+
+    await waitFor(() => expect(result.current.data[0].ltp).toBe(84000))
+    expect(result.current.data[0].pnl).toBeCloseTo(-1, 6)
+    expect(result.current.data[0].pnlpercent).toBeCloseTo(-1.1765, 3)
+  })
+
+  it('values the position at the mark price when the feed carries one', async () => {
+    // Delta marks positions to its mark price, not the last trade. The row
+    // shows the last trade as LTP but its P&L must match the exchange's.
+    marketData.set('CRYPTO:BTCUSDFUT', {
+      data: { ltp: 84000, mark_price: 84100 },
+      lastUpdate: Date.now(),
+    })
+    const { result } = renderHook(() =>
+      useLivePrice(
+        [
+          {
+            symbol: 'BTCUSDFUT',
+            exchange: 'CRYPTO',
+            quantity: -2,
+            average_price: 85000,
+            ltp: 85000,
+            lot_size: 0.001,
+          },
+        ],
+        { enabled: true }
+      )
+    )
+
+    await waitFor(() => expect(result.current.data[0].ltp).toBe(84000))
+    expect(result.current.data[0].pnl).toBeCloseTo(1.8, 6)
   })
 })

@@ -685,6 +685,7 @@ class PositionManager:
                         "today_realized_pnl": float(today_realized),
                         "total_pnl_today": float(position_total_pnl_today),
                         "lot_size": pos_cv,  # contract_value multiplier (e.g. 0.01 for ETHUSD.P)
+                        **self._crypto_fee_fields(position, pos_cv),
                     }
                 )
 
@@ -720,6 +721,73 @@ class PositionManager:
                 },
                 500,
             )
+
+    def _crypto_fee_fields(self, position, contract_value):
+        """Delta's fees on a crypto position's fills since the session opened.
+
+        The sandbox charges nothing at fill time, so a crypto result read
+        without these reads better than the same trade would on Delta. They
+        are worked out from the position's own fills with the same rules the
+        live figures use: the Scalper Offer and GST. A Diwali Fee Voucher is
+        a credit, not cash, so it is reported beside the fees, not taken off.
+        """
+        if position.exchange != "CRYPTO":
+            return {}
+        try:
+            from services.crypto_fee_service import (
+                contract_fees,
+                fee_profile,
+                voucher_earned_this_month,
+            )
+            from services.crypto_fees import fees_from_fills
+
+            session_start_utc = last_session_expiry_utc(
+                os.getenv("SESSION_EXPIRY_TIME", "03:00"), datetime.now(IST)
+            )
+            session_start_ist = (
+                session_start_utc.replace(tzinfo=UTC).astimezone(IST).replace(tzinfo=None)
+            )
+            trades = (
+                SandboxTrades.query.filter(
+                    SandboxTrades.user_id == self.user_id,
+                    SandboxTrades.symbol == position.symbol,
+                    SandboxTrades.exchange == position.exchange,
+                    SandboxTrades.product == position.product,
+                    SandboxTrades.trade_timestamp >= session_start_ist,
+                )
+                .order_by(SandboxTrades.trade_timestamp.asc())
+                .all()
+            )
+            # Fill times are stored as naive IST.
+            fills = [
+                (
+                    IST.localize(trade.trade_timestamp).timestamp()
+                    if trade.trade_timestamp.tzinfo is None
+                    else trade.trade_timestamp.timestamp(),
+                    float(trade.quantity) * (1 if trade.action == "BUY" else -1),
+                    float(trade.price),
+                )
+                for trade in trades
+            ]
+            contract, _ = contract_fees(position.symbol, position.exchange)
+            fees, vouchers, opened_at = fees_from_fills(
+                contract,
+                fee_profile(),
+                fills,
+                contract_value=float(contract_value or 1.0),
+                voucher_earned_before=voucher_earned_this_month(),
+            )
+            return {
+                "fees_paid": fees,
+                "fee_voucher": vouchers,
+                "funding": 0.0,
+                "opened_at": (
+                    datetime.fromtimestamp(opened_at).astimezone().isoformat() if opened_at else ""
+                ),
+            }
+        except Exception:
+            logger.exception("Could not work out sandbox crypto fees for %s", position.symbol)
+            return {}
 
     def get_position_for_symbol(self, symbol, exchange, product):
         """Get position for a specific symbol"""

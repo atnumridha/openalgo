@@ -1,3 +1,4 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import {
   ArrowDown,
   ArrowUp,
@@ -33,7 +34,7 @@ import {
 } from '@/components/ui/table'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Trade } from '@/types/trading'
@@ -101,7 +102,7 @@ function formatTime(timestamp: string): string {
 export default function TradeBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerPriceFormatter(user?.broker)
   const [trades, setTrades] = useState<Trade[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)

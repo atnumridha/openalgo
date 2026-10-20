@@ -1,0 +1,587 @@
+{
+  "about": "Contract between services/crypto_fees.py and frontend/src/lib/cryptoFees.ts. Add a case whenever a fee rule changes. Amounts are in the settling currency (USD for Delta futures and options). The diwali_examples cases are Delta's own published worked examples, quoted before GST.",
+  "fill_fee": [
+    {
+      "name": "BTCUSD taker opening, $85 notional",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures",
+        "maker_rate": 0.0002,
+        "taker_rate": 0.0005
+      },
+      "profile": {},
+      "args": {
+        "notional": 85.0,
+        "role": "taker"
+      },
+      "expect": {
+        "fee": 0.0425,
+        "gst": 0.00765,
+        "total": 0.05015,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "BTCUSD maker opening",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures",
+        "maker_rate": 0.0002,
+        "taker_rate": 0.0005
+      },
+      "profile": {},
+      "args": {
+        "notional": 100000.0,
+        "role": "maker"
+      },
+      "expect": {
+        "fee": 20.0,
+        "gst": 3.6,
+        "total": 23.6,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "BTCUSD close inside 30 minutes is free with the Scalper Offer",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 85.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 29.9
+      },
+      "expect": {
+        "fee": 0.0,
+        "gst": 0.0,
+        "total": 0.0,
+        "waived": true,
+        "capped": false
+      }
+    },
+    {
+      "name": "BTCUSD close after 30 minutes pays taker",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 85.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 31
+      },
+      "expect": {
+        "fee": 0.0425,
+        "gst": 0.00765,
+        "total": 0.05015,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "SOLUSD window is 15 minutes",
+      "contract": {
+        "symbol": "SOLUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 200.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 20
+      },
+      "expect": {
+        "fee": 0.1,
+        "gst": 0.018,
+        "total": 0.118,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "SOLUSD close inside 15 minutes is free",
+      "contract": {
+        "symbol": "SOLUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 200.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 14
+      },
+      "expect": {
+        "fee": 0.0,
+        "gst": 0.0,
+        "total": 0.0,
+        "waived": true,
+        "capped": false
+      }
+    },
+    {
+      "name": "No Scalper Offer joined: close pays",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "scalper_offer": false
+      },
+      "args": {
+        "notional": 85.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 5
+      },
+      "expect": {
+        "fee": 0.0425,
+        "gst": 0.00765,
+        "total": 0.05015,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "Option fee capped at 3.5% of premium",
+      "contract": {
+        "symbol": "C-ETH-2880-031026",
+        "contract_type": "call_options",
+        "maker_rate": 0.0001,
+        "taker_rate": 0.0001
+      },
+      "profile": {},
+      "args": {
+        "notional": 26900.0,
+        "role": "taker",
+        "premium": 20.0
+      },
+      "expect": {
+        "fee": 0.7,
+        "gst": 0.126,
+        "total": 0.826,
+        "waived": false,
+        "capped": true
+      }
+    },
+    {
+      "name": "Option fee under the cap is not capped",
+      "contract": {
+        "symbol": "C-BTC-88200-031026",
+        "contract_type": "call_options"
+      },
+      "profile": {},
+      "args": {
+        "notional": 84.6,
+        "role": "taker",
+        "premium": 5.0
+      },
+      "expect": {
+        "fee": 0.00846,
+        "gst": 0.0015228,
+        "total": 0.0099828,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "Options never get the Scalper Offer",
+      "contract": {
+        "symbol": "C-BTC-88200-031026",
+        "contract_type": "call_options"
+      },
+      "profile": {},
+      "args": {
+        "notional": 84.6,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 1
+      },
+      "expect": {
+        "fee": 0.00846,
+        "gst": 0.0015228,
+        "total": 0.0099828,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "Spot pays 0.1% both sides",
+      "contract": {
+        "symbol": "XRP_INR",
+        "contract_type": "spot"
+      },
+      "profile": {},
+      "args": {
+        "notional": 1000.0,
+        "role": "maker"
+      },
+      "expect": {
+        "fee": 1.0,
+        "gst": 0.18,
+        "total": 1.18,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "PAXGUSD never gets the Scalper Offer",
+      "contract": {
+        "symbol": "PAXGUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 100.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 2
+      },
+      "expect": {
+        "fee": 0.05,
+        "gst": 0.009,
+        "total": 0.059,
+        "waived": false,
+        "capped": false
+      }
+    },
+    {
+      "name": "ETHUSD close at 30 minutes is still free",
+      "contract": {
+        "symbol": "ETHUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "notional": 100.0,
+        "role": "taker",
+        "closing": true,
+        "held_minutes": 30
+      },
+      "expect": {
+        "fee": 0.0,
+        "gst": 0.0,
+        "total": 0.0,
+        "waived": true,
+        "capped": false
+      }
+    }
+  ],
+  "open_position_fees": [
+    {
+      "name": "BTC short 10 minutes in: entry paid, exit free now, taker after the window",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "entry_notional": 85.0,
+        "exit_notional": 84.575,
+        "held_minutes": 10
+      },
+      "expect": {
+        "entry_fee": 0.05015,
+        "exit_fee_now": 0.0,
+        "exit_fee_after_window": 0.04989925,
+        "window_minutes": 30,
+        "window_remaining_minutes": 20,
+        "voucher_now": 0.0,
+        "voucher_window_remaining_minutes": null
+      }
+    },
+    {
+      "name": "Exchange's paid fee wins over the estimate",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "entry_notional": 85.0,
+        "exit_notional": 85.0,
+        "held_minutes": 45,
+        "entry_fee_paid": 0.06
+      },
+      "expect": {
+        "entry_fee": 0.06,
+        "exit_fee_now": 0.05015,
+        "exit_fee_after_window": 0.05015,
+        "window_minutes": 30,
+        "window_remaining_minutes": 0,
+        "voucher_now": 0.0,
+        "voucher_window_remaining_minutes": null
+      }
+    },
+    {
+      "name": "Option has no window",
+      "contract": {
+        "symbol": "C-BTC-88200-031026",
+        "contract_type": "call_options"
+      },
+      "profile": {},
+      "args": {
+        "entry_notional": 84.6,
+        "exit_notional": 84.6,
+        "held_minutes": 5
+      },
+      "expect": {
+        "entry_fee": 0.0099828,
+        "exit_fee_now": 0.0099828,
+        "exit_fee_after_window": 0.0099828,
+        "window_minutes": null,
+        "window_remaining_minutes": null,
+        "voucher_now": 0.0,
+        "voucher_window_remaining_minutes": null
+      }
+    },
+    {
+      "name": "BTC Diwali: closing now earns the opening fee before GST",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "entry_notional": 60000.0,
+        "exit_notional": 60100.0,
+        "held_minutes": 12
+      },
+      "expect": {
+        "entry_fee": 35.4,
+        "exit_fee_now": 0.0,
+        "exit_fee_after_window": 35.459,
+        "window_minutes": 30,
+        "window_remaining_minutes": 18,
+        "voucher_now": 30.0,
+        "voucher_window_remaining_minutes": 18
+      }
+    }
+  ],
+  "net_pnl": [
+    {
+      "name": "Gross less paid and due fees, plus received funding",
+      "args": {
+        "gross": 0.425,
+        "fees_paid": 0.05015,
+        "exit_fee_due": 0.0,
+        "funding": -0.012
+      },
+      "expect": 0.36285
+    },
+    {
+      "name": "Fees due are taken off and paid funding is negative",
+      "args": {
+        "gross": -1.0,
+        "fees_paid": 0.1,
+        "exit_fee_due": 0.05,
+        "funding": -0.02
+      },
+      "expect": -1.17
+    }
+  ],
+  "opening_voucher": [
+    {
+      "name": "BTCUSD closed in 30 minutes earns the opening fee",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 12.0,
+        "held_minutes": 29
+      },
+      "expect": 12.0
+    },
+    {
+      "name": "BTCUSD after 30 minutes earns nothing",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 12.0,
+        "held_minutes": 31
+      },
+      "expect": 0.0
+    },
+    {
+      "name": "ETHUSD has the Scalper Offer but no voucher",
+      "contract": {
+        "symbol": "ETHUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 12.0,
+        "held_minutes": 5
+      },
+      "expect": 0.0
+    },
+    {
+      "name": "No voucher unless the Diwali offer is on",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {},
+      "args": {
+        "opening_fee": 12.0,
+        "held_minutes": 5
+      },
+      "expect": 0.0
+    },
+    {
+      "name": "No voucher without the Scalper Offer",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true,
+        "scalper_offer": false
+      },
+      "args": {
+        "opening_fee": 12.0,
+        "held_minutes": 5
+      },
+      "expect": 0.0
+    },
+    {
+      "name": "Options never earn a voucher",
+      "contract": {
+        "symbol": "C-BTC-88200-031026",
+        "contract_type": "call_options"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 1.0,
+        "held_minutes": 5
+      },
+      "expect": 0.0
+    },
+    {
+      "name": "The monthly cap leaves only what remains of $100",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 30.0,
+        "held_minutes": 10,
+        "earned_this_month": 85.0
+      },
+      "expect": 15.0
+    },
+    {
+      "name": "Nothing once the monthly cap is used",
+      "contract": {
+        "symbol": "BTCUSD",
+        "contract_type": "perpetual_futures"
+      },
+      "profile": {
+        "diwali_offer": true
+      },
+      "args": {
+        "opening_fee": 30.0,
+        "held_minutes": 10,
+        "earned_this_month": 100.0
+      },
+      "expect": 0.0
+    }
+  ],
+  "diwali_examples": [
+    {
+      "name": "Delta example 1: buy maker, sell maker at 60,200",
+      "profile": {
+        "diwali_offer": true,
+        "gst_pct": 0
+      },
+      "open": {
+        "notional": 60000.0,
+        "role": "maker"
+      },
+      "close": {
+        "notional": 60200.0,
+        "role": "maker"
+      },
+      "gross": 200.0,
+      "held_minutes": 20,
+      "expect": {
+        "no_offer_net": 175.96,
+        "scalper_net": 188.0,
+        "diwali_net": 188.0,
+        "voucher": 12.0
+      }
+    },
+    {
+      "name": "Delta example 2: buy taker, sell taker at 60,100",
+      "profile": {
+        "diwali_offer": true,
+        "gst_pct": 0
+      },
+      "open": {
+        "notional": 60000.0,
+        "role": "taker"
+      },
+      "close": {
+        "notional": 60100.0,
+        "role": "taker"
+      },
+      "gross": 100.0,
+      "held_minutes": 20,
+      "expect": {
+        "no_offer_net": 39.95,
+        "scalper_net": 70.0,
+        "diwali_net": 70.0,
+        "voucher": 30.0
+      }
+    },
+    {
+      "name": "Delta example 3: buy maker, sell taker at 60,100",
+      "profile": {
+        "diwali_offer": true,
+        "gst_pct": 0
+      },
+      "open": {
+        "notional": 60000.0,
+        "role": "maker"
+      },
+      "close": {
+        "notional": 60100.0,
+        "role": "taker"
+      },
+      "gross": 100.0,
+      "held_minutes": 20,
+      "expect": {
+        "no_offer_net": 57.95,
+        "scalper_net": 88.0,
+        "diwali_net": 88.0,
+        "voucher": 12.0
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import {
   Activity,
   BarChart3,
@@ -84,7 +85,6 @@ import {
 } from '@/lib/strategyMath'
 import type { Direction, StrategyTemplate } from '@/lib/strategyTemplates'
 import { normalizeExpiryCode } from '@/lib/templateResolution'
-import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -144,7 +144,8 @@ function queuedFetch<T>(fn: () => Promise<T>): Promise<T> {
 
 export default function StrategyBuilder() {
   const { apiKey, user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerCurrencyFormatter(user?.broker)
+  const formatPrice = useBrokerPriceFormatter(user?.broker)
   const {
     strategyBuilderExchanges: fnoExchanges,
     defaultStrategyBuilderExchange: defaultFnoExchange,
@@ -1867,6 +1868,7 @@ export default function StrategyBuilder() {
               isUpdating={loadedEntry !== null}
               executeDisabled={!apiKey}
               formatCurrency={formatCurrency}
+              formatPrice={formatPrice}
             />
           </div>
 
@@ -1946,6 +1948,7 @@ export default function StrategyBuilder() {
                       terminalLabel={terminalCurveLabel}
                       payoff={payoff}
                       formatCurrency={formatCurrency}
+                      formatPrice={formatPrice}
                     />
                   ) : (
                     <div className="flex h-[440px] items-center justify-center text-sm text-muted-foreground">
@@ -1963,6 +1966,7 @@ export default function StrategyBuilder() {
                   fnoExchange={fnoExchange}
                   fallbackPrices={fallbackPricesByLeg}
                   formatCurrency={formatCurrency}
+                  formatPrice={formatPrice}
                 />
               </TabsContent>
               <TabsContent value="strategychart" className="pt-4">

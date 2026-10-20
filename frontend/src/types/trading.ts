@@ -9,6 +9,14 @@ export interface Position {
   pnlpercent: number
   lot_size?: number // contract_value multiplier (e.g. 0.01 for ETHUSD.P)
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
+  /** Crypto: fees the exchange charged on the fills that opened the position, GST included. */
+  fees_paid?: number
+  /** Crypto: funding settled since the position opened; positive is received. */
+  funding?: number
+  /** Crypto: the exchange's mark price, what unrealised P&L is marked to. */
+  mark_price?: number
+  /** Crypto: when the position opened, for the Scalper Offer window. */
+  opened_at?: string
 }
 
 export interface Order {
@@ -26,6 +34,9 @@ export interface Order {
 }
 
 export interface Trade {
+  fill_id?: string
+  contract_value?: number | null
+  position_after?: number | null
   symbol: string
   exchange: string
   action: 'BUY' | 'SELL'
@@ -126,6 +137,7 @@ export interface PlaceOrderRequest {
 }
 
 export interface ApiResponse<T> {
+  complete?: boolean
   status: 'success' | 'error' | 'info'
   message?: string
   data?: T

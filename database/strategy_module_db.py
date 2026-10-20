@@ -420,6 +420,10 @@ class SmStrategyOrder(Base):
     avg_fill_price = Column(Numeric(18, 4), nullable=True)
     filled_qty = Column(Integer, nullable=True)
     reject_reason = Column(Text, nullable=True)
+    # An entry's own stop, target and trail when they differ from the leg's
+    # configuration (an ML trade sets them per trade). Written with the order,
+    # so a restart before the first checkpoint still recovers them.
+    risk = Column(JSON, nullable=True)
 
     __table_args__ = (
         Index("ix_sm_order_run_placed", "run_id", "placed_at"),
@@ -669,6 +673,7 @@ def order_to_dict(row: SmStrategyOrder) -> dict:
         "avg_fill_price": _num(row.avg_fill_price),
         "filled_qty": row.filled_qty,
         "reject_reason": row.reject_reason,
+        "risk": getattr(row, "risk", None),
     }
 
 
@@ -1858,6 +1863,7 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
             price=order.get("price", 0) or 0,
             trigger_price=order.get("trigger_price", 0) or 0,
             status=order.get("status", "pending"),
+            risk=order.get("risk"),
         )
         db_session.add(row)
         db_session.commit()

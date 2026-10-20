@@ -33,6 +33,8 @@ class Tradebook(Resource):
 
             # Call the service function to get tradebook data with API key
             success, response_data, status_code = get_tradebook(api_key=api_key)
+            if success:
+                response_data["complete"] = True
 
             return make_response(jsonify(response_data), status_code)
 

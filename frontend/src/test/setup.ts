@@ -72,8 +72,9 @@ window.HTMLElement.prototype.releasePointerCapture = vi.fn()
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 // Mock clipboard API
-Object.assign(navigator, {
-  clipboard: {
+Object.defineProperty(navigator, 'clipboard', {
+  configurable: true,
+  value: {
     writeText: vi.fn().mockImplementation(() => Promise.resolve()),
     readText: vi.fn().mockImplementation(() => Promise.resolve('')),
   },

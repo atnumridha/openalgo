@@ -1,0 +1,7 @@
+# One-month XAUTUSD liquidity strategy research
+
+Run September 18 through October 17 inclusive in IST, one contract and 2x leverage, without changing or starting the live runner. Use the deployed Python `advance` and `plan_order` rules with the saved monetary limits. Long-only is the saved strategy default. Native 1H/4H/1D pivots become known only after their two right candles close. Archive public history, metadata and hashes.
+
+This is an OHLC execution sensitivity study: run both open-low-high-close and open-high-low-close assumed paths, one-second linear steps only when needed, with a synthetic two-tick spread. Only later strict trade-through can fill a post-only entry; cancel after 15 seconds. Same-second or unknown queue fills are not claimed as observed. Include product maker/taker fees, GST and configured cash slippage. Stops precede targets on ambiguous observations. Preserve risk/daily limits and the 29-minute deadline. Record gaps and reject incomplete continuity. Report conditional sample size, net expectancy, profit factor and closed-equity drawdown, plus missed/unfilled entries. Missing recorded ticks/order books and historical funding prevent a faithful live-execution backtest. Do not optimize parameters against this sample.
+
+Steps: audit coverage; test causal pivots, strict maker fills, fees and adverse stops; run both paths; save CSV/JSON and a compact HTML report; inspect outcomes and provide a short qualified result.

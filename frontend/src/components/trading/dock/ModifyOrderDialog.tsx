@@ -1,3 +1,4 @@
+import { useAuthStore } from '@/stores/authStore'
 /**
  * A small modify ticket for a working order: quantity, and whichever of
  * price and trigger the order type carries. The rest of the order (symbol,
@@ -43,6 +44,7 @@ export function sendsTrigger(pricetype: string): boolean {
 }
 
 export function ModifyOrderDialog({ order, onOpenChange, onSubmit }: Props) {
+  const {user} = useAuthStore()
   const [values, setValues] = useState<ModifyValues>({ quantity: 0, price: 0, trigger_price: 0 })
   const [busy, setBusy] = useState(false)
 
@@ -113,7 +115,7 @@ export function ModifyOrderDialog({ order, onOpenChange, onSubmit }: Props) {
           </div>
           {withPrice && (
             <div className="grid grid-cols-[96px_1fr] items-center gap-2">
-              <Label htmlFor="dock-modify-price">Price</Label>
+              <Label htmlFor="dock-modify-price">Price{user?.broker === "deltaexchange" ? " · broker USD" : ""}</Label>
               <Input
                 id="dock-modify-price"
                 type="number"
@@ -127,7 +129,7 @@ export function ModifyOrderDialog({ order, onOpenChange, onSubmit }: Props) {
           )}
           {withTrigger && (
             <div className="grid grid-cols-[96px_1fr] items-center gap-2">
-              <Label htmlFor="dock-modify-trigger">Trigger</Label>
+              <Label htmlFor="dock-modify-trigger">Trigger{user?.broker === "deltaexchange" ? " · broker USD" : ""}</Label>
               <Input
                 id="dock-modify-trigger"
                 type="number"

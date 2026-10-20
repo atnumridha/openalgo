@@ -21,6 +21,7 @@ Signature: HMAC-SHA256(api_secret, "GET" + timestamp + "/live")
 Channel names:
   ticker      -> price/OI/quote snapshot, published every 5s (public endpoint)
   ob_l2       -> top-15 order book, published every 500ms (public endpoint)
+  trades      -> every public fill, delivered in bursts every ~500ms (public endpoint)
   orders      -> order updates (private endpoint, requires auth)
   positions   -> position updates (private endpoint, requires auth)
   margins     -> wallet / margin updates (private endpoint, requires auth)
@@ -39,6 +40,10 @@ Incoming message examples:
   Order book: { "type": "ob_l2", "sy": "BTCUSD", "ts": 1786521801671015,
                 "a": [["63834", "718"], ...],    // asks, price + size, best first
                 "b": [["63833", "4388"], ...] }  // bids
+
+  Trade:   { "type": "trades", "sy": "BTCUSD", "p": "72141.5", "s": 1.0,
+             "r": "m", "t": 1775800366578410, "ts": 1775800367003029 }
+             // p price, s size in contracts, t trade time in microseconds
 
 References: https://docs.delta.exchange/#public-channels
 """
@@ -82,12 +87,15 @@ class DeltaWebSocket:
     # Public channels — new public endpoint only
     CHANNEL_TICKER     = "ticker"
     CHANNEL_OB_L2      = "ob_l2"
+    CHANNEL_TRADES     = "trades"
     # Symbols Delta accepts in a single subscribe frame, per channel.
     # None = no limit found (ticker took 150 in one frame, verified live
-    # 2026-08-12); ob_l2 rejects anything above one symbol outright.
+    # 2026-08-12; trades took 150 in one frame, verified live 2026-10-03);
+    # ob_l2 rejects anything above one symbol outright.
     MAX_SYMBOLS_PER_FRAME = {
         CHANNEL_TICKER: None,
         CHANNEL_OB_L2:  1,
+        CHANNEL_TRADES: None,
     }
     # Private authenticated channels (require auth message to be sent first)
     CHANNEL_ORDERS    = "orders"      # real-time order fill / cancel / modify events
@@ -250,6 +258,13 @@ class DeltaWebSocket:
 
     def unsubscribe_orderbook(self, symbols: list[str]) -> None:
         self._unsubscribe(self.CHANNEL_OB_L2, symbols)
+
+    def subscribe_channel(self, channel: str, symbols: list[str]) -> None:
+        """Subscribe any public channel, framed by its per-frame symbol limit."""
+        self._subscribe(channel, symbols)
+
+    def unsubscribe_channel(self, channel: str, symbols: list[str]) -> None:
+        self._unsubscribe(channel, symbols)
 
     def forget_subscriptions(self) -> None:
         """Drop the replay registry.

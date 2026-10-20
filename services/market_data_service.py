@@ -466,6 +466,14 @@ class MarketDataService:
                     buy_levels = depth_buy or bids
                     sell_levels = depth_sell or asks
 
+                    # A trade print on a depth subscription carries a price and
+                    # no book; it must not blank the last book this entry holds.
+                    carries_book = "depth" in market_data or "bids" in market_data or "asks" in market_data
+                    previous = cache_entry.get("depth")
+                    if not carries_book and isinstance(previous, dict):
+                        buy_levels = previous.get("buy", [])
+                        sell_levels = previous.get("sell", [])
+
                     cache_entry["depth"] = {
                         "buy": buy_levels,
                         "sell": sell_levels,

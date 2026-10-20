@@ -49,8 +49,8 @@ CHART_INTERVAL_TRADING_DAYS = {"1m": 1, "5m": 3, "15m": 9}
 # Order constants enforced on the order endpoint.
 VALID_ACTIONS = {"BUY", "SELL"}
 # Derivatives (options/futures): lot rules apply. NFO/BFO (index+stock F&O),
-# MCX (commodity), CDS (currency).
-VALID_LEG_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
+# MCX (commodity), CDS (currency), CRYPTO (Delta crypto derivatives).
+VALID_LEG_EXCHANGES = {"NFO", "BFO", "MCX", "CDS", "CRYPTO"}
 VALID_EQUITY_EXCHANGES = {"NSE", "BSE"}  # equity: traded in shares, no lot rules
 VALID_ORDER_EXCHANGES = VALID_LEG_EXCHANGES | VALID_EQUITY_EXCHANGES
 # Products allowed per instrument class.
@@ -144,6 +144,20 @@ def underlyings():
         for name, cfg in SUPPORTED_UNDERLYINGS.items()
     ]
     return jsonify({"status": "success", "data": data})
+
+
+@scalping_bp.route("/scalping/api/ml-plan", methods=["GET"])
+@check_session_validity
+def ml_plan():
+    from services.scalping_ml_plan_service import get_plan
+    try:
+        quantity = int(request.args.get('quantity', '1'))
+        leverage = int(request.args.get('leverage', '25'))
+        if not 1 <= quantity <= MAX_ORDER_QUANTITY or not 1 <= leverage <= 200:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid quantity or leverage'}), 400
+    return jsonify({'status': 'success', 'data': get_plan(request.args.get('symbol', ''), quantity, leverage)})
 
 
 @scalping_bp.route("/scalping/api/history", methods=["GET"])
@@ -277,12 +291,22 @@ def all_underlyings():
     """
     exchange = (request.args.get("exchange", "NFO").strip() or "NFO").upper()
     instrumenttype = (request.args.get("instrumenttype", "options").strip() or "options").lower()
-    include_futures = instrumenttype == "futures" or exchange in ("MCX", "CDS")
+    include_futures = instrumenttype == "futures" or exchange in ("MCX", "CDS", "CRYPTO")
 
     try:
         from database.token_db_enhanced import get_distinct_underlyings_cached
 
         names = get_distinct_underlyings_cached(exchange=exchange, include_futures=include_futures)
+        if exchange == "CRYPTO" and include_futures:
+            from database.symbol import SymToken
+            from database.symbol import db_session as symbol_session
+
+            perps = (
+                symbol_session.query(SymToken)
+                .filter(SymToken.exchange == exchange, SymToken.instrumenttype == "PERPFUT")
+                .all()
+            )
+            names = sorted({*names, *(r.brsymbol or r.symbol for r in perps)})
     except Exception as e:  # noqa: BLE001 - degrade gracefully if cache/db unavailable
         logger.exception(f"Error fetching underlyings for {exchange}: {e}")
         names = []
@@ -514,7 +538,8 @@ def futures():
     """Return the futures contracts for an underlying on a derivative exchange.
 
     Lets the UI offer a per-expiry futures picker (underlying + expiry -> the framed
-    FUT symbol) for any exchange (NFO/BFO/MCX/CDS).
+    FUT symbol) for any exchange (NFO/BFO/MCX/CDS/CRYPTO). Delta perpetuals are
+    stored as PERPFUT rows (for example BTCUSDFUT -> broker symbol BTCUSD).
     """
     underlying = (request.args.get("underlying") or "").strip().upper()
     exchange = (request.args.get("exchange") or "").strip().upper()
@@ -525,18 +550,42 @@ def futures():
 
     from datetime import datetime
 
+    from sqlalchemy import or_
+
     from database.symbol import SymToken
     from database.symbol import db_session as symbol_session
 
-    rows = (
-        symbol_session.query(SymToken)
-        .filter(
-            SymToken.exchange == exchange,
-            SymToken.name == underlying,
-            SymToken.instrumenttype == "FUT",
+    if exchange == "CRYPTO":
+        base = underlying.removesuffix("FUT").removesuffix(".P")
+        candidates = {underlying, base, f"{base}FUT"}
+        if base.endswith("USD") and len(base) > 3:
+            coin = base[:-3]
+            candidates.update({coin, f"{coin}USDFUT"})
+        else:
+            candidates.update({f"{base}USD", f"{base}USDFUT"})
+        rows = (
+            symbol_session.query(SymToken)
+            .filter(
+                SymToken.exchange == exchange,
+                SymToken.instrumenttype.in_(("FUT", "PERPFUT")),
+                or_(
+                    SymToken.name.in_(candidates),
+                    SymToken.symbol.in_(candidates),
+                    SymToken.brsymbol.in_(candidates),
+                ),
+            )
+            .all()
         )
-        .all()
-    )
+    else:
+        rows = (
+            symbol_session.query(SymToken)
+            .filter(
+                SymToken.exchange == exchange,
+                SymToken.name == underlying,
+                SymToken.instrumenttype == "FUT",
+            )
+            .all()
+        )
 
     def parse_expiry(s: str):
         for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d%b%y"):
@@ -546,20 +595,22 @@ def futures():
                 continue
         return datetime.max
 
-    contracts = sorted(
-        (_serialize_futures_contract(r) for r in rows),
-        key=lambda c: parse_expiry(c["expiry"]),
-    )
+    def sort_key(c: dict):
+        return (0 if c.get("instrumenttype") == "PERPFUT" else 1, parse_expiry(c["expiry"]))
+
+    contracts = sorted((_serialize_futures_contract(r) for r in rows), key=sort_key)
     return jsonify({"status": "success", "data": contracts})
 
 
 def _serialize_futures_contract(row):
     """Preserve canonical metadata already stored on the master-contract row."""
+    expiry = row.expiry or ("PERP" if row.instrumenttype == "PERPFUT" else "")
     return {
         "symbol": row.symbol,
-        "expiry": row.expiry,
+        "expiry": expiry,
         "lotsize": row.lotsize,
         "tick_size": row.tick_size,
+        "instrumenttype": row.instrumenttype,
     }
 
 
@@ -586,6 +637,13 @@ def _resolve_session_auth():
             {"status": "error", "message": "API key required. Generate one at /apikey"},
             401,
         )
+    if _current_mode() == "live":
+        from database.auth_db import get_auth_token_broker
+        auth, broker = get_auth_token_broker(api_key)
+        if broker == "deltaexchange":
+            if not auth:
+                return None, None, None, {"status": "error", "message": "Delta authentication unavailable"}, 401
+            return auth, broker, api_key, None, None
     return None, None, api_key, None, None
 
 
@@ -681,6 +739,36 @@ def order():
     if err:
         return jsonify(err), code
 
+    # Analyze authentication intentionally leaves broker/auth_token unset so the
+    # shared order service selects the sandbox. Resolve identity separately for
+    # instrument policy and public maker quotes; never pass it as live routing.
+    market_broker = broker
+    if market_broker is None and _current_mode() == "analyze":
+        from database.auth_db import get_broker_name
+        market_broker = get_broker_name(api_key)
+
+    verified_ml_plan = None
+    protection_config = data.get("protection") or {}
+    if 'ml_plan' in data or 'ml_defaults' in data:
+        from services.scalping_ml_plan_service import validate_ticket, validate_manual_defaults
+        try:
+            if 'ml_plan' in data and 'ml_defaults' in data:
+                raise ValueError('Select one order source: manual defaults or ML approval')
+            if market_broker != 'deltaexchange' or exchange != 'CRYPTO':
+                raise ValueError('ML defaults are only supported for Delta BTCUSD')
+            source = 'ml_defaults' if 'ml_defaults' in data else 'ml_plan'
+            validate = validate_manual_defaults if source == 'ml_defaults' else validate_ticket
+            verified_ml_plan = validate(symbol, quantity, data.get('leverage'), action,
+                                        _current_mode(), data[source])
+            protection_config = {
+                'slOn': True, 'slUnit': 'PTS',
+                'slValue': str(abs(verified_ml_plan['entry'] - verified_ml_plan['stop'])),
+                'tgtOn': True, 'tgtUnit': 'PTS',
+                'tgtValue': str(abs(verified_ml_plan['target'] - verified_ml_plan['entry'])),
+            }
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
+
     from services.place_order_service import place_order
 
     order_data = {
@@ -692,6 +780,26 @@ def order():
         "product": product,
         "quantity": quantity,
     }
+
+    if market_broker == "deltaexchange":
+        from services.scalping_delta_execution import entry_order, place_entry
+        try:
+            if _current_mode() == "live":
+                defaults = {'verified_defaults': verified_ml_plan} if 'ml_defaults' in data else {}
+                success, response, status_code = place_entry(
+                    order_data, protection_config, data.get("leverage"), auth_token, api_key, **defaults
+                )
+                return jsonify(response), status_code
+            order_data = entry_order(order_data, data.get("leverage"), auth_token)
+            if verified_ml_plan and not math.isclose(order_data['price'], verified_ml_plan['entry'], rel_tol=0, abs_tol=1e-9):
+                raise ValueError('Maker price changed; refresh the ML ticket before submitting')
+        except (ValueError, ArithmeticError) as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        except Exception as exc:
+            logger.exception("Delta scalping entry failed")
+            return jsonify({"status": "error", "message": str(exc)}), 503
+        finally:
+            _notify_risk_monitor()
 
     # Pass the client-supplied LTP (from the live WebSocket feed) through as a prefetched
     # quote. In analyze/sandbox mode the sandbox engine uses it instead of fetching its own
@@ -730,6 +838,16 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
     chunks so no single order exceeds the exchange freeze limit. Used by both
     close_leg (single) and close_all (per scalping position).
     """
+    if broker == "deltaexchange" and _current_mode() == "live":
+        from services.scalping_delta_execution import manage_exit
+        try:
+            flat = manage_exit({"symbol": symbol, "exchange": exchange, "product": product}, "close", auth_token, api_key)
+            return True, {"status": "success", "message": "Position flat" if flat else "Market closure requested; awaiting fill", "pending": not flat}, 200
+        except Exception as exc:
+            return False, {"status": "error", "message": str(exc)}, 503
+        finally:
+            _notify_risk_monitor()
+
     split_chunk = 0  # max whole-lot quantity per order (0 => no chunking)
     if _is_derivative(exchange):
         from database.symbol import SymToken
@@ -854,6 +972,15 @@ def close_all():
     tracked = get_tracked_symbols(mode=_current_mode())
     if not tracked:
         return jsonify({"status": "success", "message": "No scalping positions to close", "results": []})
+
+    if broker == "deltaexchange" and _current_mode() == "live":
+        results = []
+        for t in tracked:
+            ok, resp, _ = _reducing_exit(t["symbol"], t["exchange"], t["product"], "SELL", 0, auth_token, broker, api_key)
+            results.append({"symbol": t["symbol"], **resp})
+        _notify_risk_monitor()
+        failed = any(r.get("status") != "success" for r in results)
+        return jsonify({"status": "error" if failed else "success", "message": "Closure requested; check pending orders and positions", "results": results}), (503 if failed else 200)
 
     from services.positionbook_service import get_positionbook
 
@@ -995,7 +1122,17 @@ def upsert_sl():
     if "is_active" in data:
         cleaned["is_active"] = bool(data["is_active"])
 
-    result = upsert_sl_state(cleaned)
+    auth, broker, _key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+    try:
+        if broker == "deltaexchange" and _current_mode() == "live":
+            from services.scalping_delta_execution import edit_protection
+            result = edit_protection(symbol, exchange, product, auth, lambda: upsert_sl_state(cleaned), new_target=cleaned.get("target"))
+        else:
+            result = upsert_sl_state(cleaned)
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
     if result is None:
         return jsonify({"status": "error", "message": "Failed to save SL state"}), 500
     _notify_risk_monitor()
@@ -1016,6 +1153,16 @@ def delete_sl():
     if not symbol or exchange not in VALID_LEG_EXCHANGES or product not in VALID_PRODUCTS:
         return jsonify({"status": "error", "message": "Invalid symbol/exchange/product"}), 400
 
-    deleted = delete_sl_state(symbol, exchange, product, mode=_current_mode())
+    auth, broker, _key, err, code = _resolve_session_auth()
+    if err:
+        return jsonify(err), code
+    try:
+        if broker == "deltaexchange" and _current_mode() == "live":
+            from services.scalping_delta_execution import edit_protection
+            deleted = edit_protection(symbol, exchange, product, auth, lambda: delete_sl_state(symbol, exchange, product, mode="live"), clearing=True)
+        else:
+            deleted = delete_sl_state(symbol, exchange, product, mode=_current_mode())
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
     _notify_risk_monitor()
     return jsonify({"status": "success", "deleted": deleted})

@@ -33,7 +33,8 @@ def format_position_data(position_data):
     }
     # Fields that must preserve full float precision (must NOT be rounded to 2dp).
     # lot_size can be as small as 0.001 (BTCUSD.P) — rounding to 2dp gives 0.0.
-    passthrough_fields = {"lot_size"}
+    # A crypto fee or funding payment on one contract is a fraction of a cent.
+    passthrough_fields = {"lot_size", "fees_paid", "fee_voucher", "funding", "mark_price"}
 
     if isinstance(position_data, list):
         return [
@@ -78,7 +79,7 @@ def import_broker_module(broker_name: str) -> dict[str, Any] | None:
 
 
 def get_positionbook_with_auth(
-    auth_token: str, broker: str, original_data: dict[str, Any] = None
+    auth_token: str, broker: str, original_data: dict[str, Any] = None, strict: bool = False
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get position book details using provided auth token.
@@ -121,7 +122,12 @@ def get_positionbook_with_auth(
 
     try:
         # Get positions data using broker's implementation
-        positions_data = broker_funcs["get_positions"](auth_token)
+        # Delta's display reader omits unavailable halves of the position book.
+        # Stop decisions require a complete read: partial data cannot prove flat.
+        if strict and broker == "deltaexchange":
+            positions_data = broker_funcs["get_positions"](auth_token, strict=True)
+        else:
+            positions_data = broker_funcs["get_positions"](auth_token)
 
         if "status" in positions_data and positions_data["status"] == "error":
             return (
@@ -151,7 +157,8 @@ def get_positionbook_with_auth(
 
 
 def get_positionbook(
-    api_key: str | None = None, auth_token: str | None = None, broker: str | None = None
+    api_key: str | None = None, auth_token: str | None = None, broker: str | None = None,
+    strict: bool = False,
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Get position book details.
@@ -174,11 +181,11 @@ def get_positionbook(
         if AUTH_TOKEN is None:
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
         original_data = {"apikey": api_key}
-        return get_positionbook_with_auth(AUTH_TOKEN, broker_name, original_data)
+        return get_positionbook_with_auth(AUTH_TOKEN, broker_name, original_data, strict=strict)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_positionbook_with_auth(auth_token, broker, None)
+        return get_positionbook_with_auth(auth_token, broker, None, strict=strict)
 
     # Case 3: Invalid parameters
     else:

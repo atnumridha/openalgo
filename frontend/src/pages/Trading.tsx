@@ -1,3 +1,5 @@
+import { CryptoStrategyLab } from '@/components/trading/CryptoStrategyLab'
+import { LiquidityStrategy } from '@/components/trading/LiquidityStrategy'
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { type ChartObjects, createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import type { WorkspaceDocument, WorkspacePayload } from 'openalgo-charts/workspace'
@@ -77,6 +79,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { useChartWorkspaceCatalog } from '@/hooks/useChartWorkspaceCatalog'
+import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { useWorkspaceAutosave } from '@/hooks/useWorkspaceAutosave'
 import { useWorkspaceGridTransition } from '@/hooks/useWorkspaceGridTransition'
 import type { AgentChartCommand } from '@/lib/agent/stream'
@@ -223,6 +226,7 @@ export default function Trading() {
 
 function TradingWorkspace({ account }: { account: string | null }) {
   const workspaceCatalog = useChartWorkspaceCatalog(account)
+  const { isCrypto } = useSupportedExchanges()
   const workspacePending = useRef(false)
   const visibleGrid = useRef<PreparedChartGrid | null>(null)
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
@@ -1031,8 +1035,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
       [
         {
           id: 'p0',
-          symbol: 'BHEL',
-          exchange: 'NSE',
+          symbol: isCrypto ? 'BTCUSDFUT' : 'BHEL',
+          exchange: isCrypto ? 'CRYPTO' : 'NSE',
           interval: '5m',
           chartType: 'candlestick',
           chart: { version: 1 },
@@ -1762,6 +1766,8 @@ function TradingWorkspace({ account }: { account: string | null }) {
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}
         </main>
+        {isCrypto && apiKey && wsUrl && <LiquidityStrategy target={panelTarget} />}
+        {isCrypto && apiKey && wsUrl && <CryptoStrategyLab target={panelTarget} />}
 
         {/* The bottom dock: orders, positions and trades across every symbol.
             Under the rails and the side panel, full width, because the books

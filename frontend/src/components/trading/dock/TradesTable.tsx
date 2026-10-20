@@ -25,10 +25,17 @@ interface Props {
   trades: DockTrade[]
   activeSymbol?: string | null
   onPick(row: SearchRow): void
+  formatAmount?: (value: number) => string
   isLoading?: boolean
 }
 
-export function TradesTable({ trades, activeSymbol, onPick, isLoading }: Props) {
+export function TradesTable({
+  trades,
+  activeSymbol,
+  onPick,
+  isLoading,
+  formatAmount = fmt2,
+}: Props) {
   return (
     <table className="w-full border-collapse text-sm">
       <thead>
@@ -83,8 +90,8 @@ export function TradesTable({ trades, activeSymbol, onPick, isLoading }: Props) 
               <td className={cn(TD, 'font-medium', sideClass(t.action))}>{t.action}</td>
               <td className={cn(TD, 'text-muted-foreground')}>{t.product}</td>
               <td className={TD_NUM}>{t.quantity}</td>
-              <td className={TD_NUM}>{fmt2(t.average_price)}</td>
-              <td className={TD_NUM}>{fmt2(t.trade_value)}</td>
+              <td className={TD_NUM}>{formatAmount(t.average_price)}</td>
+              <td className={TD_NUM}>{formatAmount(t.trade_value)}</td>
             </tr>
           )
         })}

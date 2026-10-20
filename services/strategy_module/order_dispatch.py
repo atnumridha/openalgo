@@ -84,7 +84,14 @@ class OrderStatusResult:
 # read as a validation rule that ran somewhere and did not: the product is
 # translated per venue below rather than refused, so a legal value for the
 # venue is produced instead of being demanded from the caller.
-DERIVATIVE_EXCHANGES_FOR_PRODUCT = frozenset({"NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO"})
+DERIVATIVE_EXCHANGES_FOR_PRODUCT = frozenset(
+    {"NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO", "CRYPTO"}
+)
+
+#: Venues whose orders can be marked reduce-only, so an exit can only ever
+#: shrink the position it closes. Two exits racing on one leg then cannot
+#: leave the account positioned the other way.
+REDUCE_ONLY_EXCHANGES = frozenset({"CRYPTO"})
 
 
 def product_for_exchange(product: str, exchange: str) -> str:
@@ -120,13 +127,15 @@ def build_order(
     pricetype: str = "MARKET",
     price: float = 0,
     trigger_price: float = 0,
+    reduce_only: bool = False,
 ) -> dict[str, Any]:
     """The order payload, in the shape the placement services expect.
 
     Quantity is a string because that is what the rest of the order path uses;
     passing an int works today but diverges from every other caller.
+    ``reduce_only`` is carried only on a venue that honours it.
     """
-    return {
+    order = {
         "symbol": symbol,
         "exchange": exchange,
         "action": action.upper(),
@@ -140,6 +149,9 @@ def build_order(
         # Tags the order so it is attributable in the orderbook and in logs.
         "strategy": strategy_name,
     }
+    if reduce_only and (exchange or "").upper() in REDUCE_ONLY_EXCHANGES:
+        order["reduce_only"] = True
+    return order
 
 
 def exit_action(position: str) -> str:

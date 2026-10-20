@@ -27,11 +27,15 @@ def format_trade_data(trade_data):
         "filled_quantity",
         "traded_quantity",
     }
+    # A crypto fill's fee is a fraction of a cent on one contract.
+    passthrough_fields = {"commission", "contract_value", "position_after"}
 
     if isinstance(trade_data, list):
         return [
             {
-                key: (int(value) if value == int(value) else value)
+                key: value
+                if key.lower() in passthrough_fields
+                else (int(value) if value == int(value) else value)
                 if (key.lower() in quantity_fields and isinstance(value, (int, float)))
                 else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 for key, value in item.items()
@@ -123,8 +127,11 @@ def get_tradebook_with_auth(
             )
 
         # Transform data using mapping functions
+        expected_fills = len(trade_data) if broker == "deltaexchange" and isinstance(trade_data, list) else None
         trade_data = broker_funcs["map_trade_data"](trade_data=trade_data)
         trade_data = broker_funcs["transform_tradebook_data"](trade_data)
+        if expected_fills is not None and (not isinstance(trade_data, list) or len(trade_data) != expected_fills):
+            raise RuntimeError("Incomplete Delta fill mapping; complete P&L unavailable")
 
         # Format numeric values to 2 decimal places
         formatted_trades = format_trade_data(trade_data)

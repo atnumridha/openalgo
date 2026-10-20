@@ -1,5 +1,6 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import { Activity, Briefcase, Calendar, Download, Package, Settings } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,7 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn, makeFormatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 
 interface DailyPnL {
@@ -85,7 +86,8 @@ function getPnLColor(value: number): string {
 
 export default function SandboxPnL() {
   const { user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerCurrencyFormatter(user?.broker)
+  const formatPrice = useBrokerPriceFormatter(user?.broker)
   const [data, setData] = useState<SandboxData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('daily')
@@ -371,9 +373,9 @@ export default function SandboxPnL() {
                           </TableCell>
                           <TableCell className="text-right">{pos.quantity}</TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(pos.average_price)}
+                            {formatPrice(pos.average_price)}
                           </TableCell>
-                          <TableCell className="text-right">{formatCurrency(pos.ltp)}</TableCell>
+                          <TableCell className="text-right">{formatPrice(pos.ltp)}</TableCell>
                           <TableCell
                             className={cn('text-right', getPnLColor(pos.today_realized_pnl))}
                           >
@@ -444,10 +446,10 @@ export default function SandboxPnL() {
                           </TableCell>
                           <TableCell className="text-right">{holding.quantity}</TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(holding.average_price)}
+                            {formatPrice(holding.average_price)}
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(holding.ltp)}
+                            {formatPrice(holding.ltp)}
                           </TableCell>
                           <TableCell
                             className={cn('text-right', getPnLColor(holding.unrealized_pnl))}
@@ -520,7 +522,7 @@ export default function SandboxPnL() {
                           </TableCell>
                           <TableCell className="text-right">{trade.quantity}</TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(trade.price)}
+                            {formatPrice(trade.price)}
                           </TableCell>
                           <TableCell>
                             <Badge

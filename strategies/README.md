@@ -3,6 +3,220 @@
 ## Overview
 A complete web-based strategy hosting and scheduling system for OpenAlgo, accessible at `/python`.
 
+## BTCUSD eight-indicator confluence strategy
+
+Entry script: [`examples/delta_confluence_strategy.py`](examples/delta_confluence_strategy.py).
+Implementation: [`confluence/`](confluence/). This is a separate, deterministic
+Python strategy using public Delta India data. In the OpenAlgo host it follows
+the current Analyze/Live setting (`--mode auto`). Analyze uses the existing isolated
+paper ledger; Live selects a separate Delta executor using the existing OpenAlgo connection. It does not
+replace Scalping Terminal ML Defaults or call an LLM. First-start paper funding makes one GET-only request
+using the existing private Delta connection. Credentials are never logged,
+returned in the snapshot or stored in the paper ledger.
+
+### Signals and exits
+
+The strategy evaluates **LONG, SHORT or HOLD**, using completed one-minute candles.
+At least six of eight votes must agree, including ADX/DMI and VWMA. The default
+ADX threshold is 20. Each result contains both directional counts, each vote,
+indicator values, entry/stop/target plans and the reason for the selected action.
+The agreement count is **not a calibrated probability or a measured win rate**.
+
+| Input | Long vote | Short vote |
+|---|---|---|
+| Value Area | Close above previous session VAH | Close below previous session VAL |
+| CPR | Close above TC | Close below BC |
+| Camarilla | Close above R3 | Close below S3 |
+| ADX / DMI (14) | ADX ≥ 20 and +DI > −DI | ADX ≥ 20 and −DI > +DI |
+| RSI (14) | 55–70 | 30–45 |
+| MACD (12,26,9) | Positive, nondecreasing histogram | Negative, nonincreasing histogram |
+| VWMA (20) | Close above VWMA and rising over three bars | Close below VWMA and falling over three bars |
+| Option chain | Put 25-delta IV minus call 25-delta IV < −0.01 | That IV skew > +0.01 |
+
+Flat/disagreeing inputs vote zero. The option-chain vote is a research heuristic;
+high put/call OI by itself is not treated as bullish/bearish positioning. The
+report includes put/call OI ratio, OI walls, IV skew and local max pain, using
+paired liquid strikes within 5% of spot from one eligible expiry. These are
+**local-window statistics**, not a complete-market max-pain calculation. OI uses
+Delta's `oi_contracts`, and freshness uses quote `timestamp`, not last trade `time`.
+Missing, stale or inadequate option coverage produces HOLD.
+
+CPR, Camarilla and Value Area use the previous **00:00–24:00 Asia/Kolkata**
+session. Value Area distributes each candle's volume across its high/low range
+and expands contiguously from the POC to cover at least 70%. It is an explicitly
+labelled approximation; exact volume-at-price requires tick data. There must be
+1,440 complete prior-session candles, with no missing minutes.
+
+The initial stop uses the last five completed candles' low/high with a buffer
+of max(two ticks, 0.25 × ATR14). A fee-aware target solves for at least **$1 net
+profit and 3× planned net risk**. This is a minimum reward ratio, not necessarily
+a 1:3 price-distance ratio. A small position may require a distant target. No
+target hit or profitable trade is guaranteed by these calculations.
+
+- Default leverage **25×**, configurable 1–200× subject to product limits.
+- Planned loss ≤ **$1** including fees/reserve; initial margin ≤ **$5**;
+  notional ≤ **$1,000**; whole contracts and available paper cash enforced.
+- Product maker/taker fees plus **18% GST**, charged once. No promotional waiver
+  assumed. At least **$0.10** exit slippage reserve, raised for observed depth impact.
+- Maker entry at best bid/ask, 15-second entry timeout, one attempt per completed
+  candle; one simulated position or pending entry at a time.
+- Maker targets; taker SL, shutdown, feed-gap and 29-minute deadline exits.
+- Net profit peaks tighten the stop: $0.50 → floor −$0.10; $1.50 → 60% retained;
+  $3 → 70%; $5 → 80%. Stops never loosen and use conservative tick rounding.
+- Halt after a $3 realized net daily loss or three consecutive losses. Resuming
+  requires `--resume` on a later India-time day. Restart does not clear a halt.
+- Avoid the next funding window. The adapter checks the product's 8-hour interval
+  against Delta's published BTC schedule; a changed interval produces HOLD.
+
+### Run it
+
+Use the OpenAlgo virtual environment, from the repository root:
+
+```bash
+# Read-only current indicators, both plans and signal. No ledger or orders.
+.venv/bin/python strategies/examples/delta_confluence_strategy.py --once
+
+# First continuous paper run: read actual available USD from the connected Delta account.
+.venv/bin/python strategies/examples/delta_confluence_strategy.py run --mode paper \
+  --account-balance
+
+# Inspect while the controller runs; all results are simulated.
+.venv/bin/python strategies/examples/delta_confluence_strategy.py report
+
+# Restart after Ctrl+C / host Stop, preserving ledger and the original leverage.
+.venv/bin/python strategies/examples/delta_confluence_strategy.py run --resume
+```
+
+OpenAlgo's **Start** button automatically uses the connected Delta account for
+the first initialization. No snapshot filename or API credentials need to be
+entered in the strategy editor. The startup account reader makes only a
+wallet GET request, returns the USD available balance and closes its connection.
+It runs within the host process limits and does not spawn a helper process.
+Authentication, permission or IP-allowlist failures stop initialization and
+produce an actionable log message; no zero or hypothetical balance is substituted.
+An existing paper ledger is never refreshed from the live wallet on restart.
+
+As an alternative, pass `--wallet-snapshot /absolute/path/delta-wallet-snapshot.json`.
+The sanitized wallet snapshot must be less than ten minutes old:
+
+```json
+{
+  "environment": "india_prod",
+  "captured_at": 1791288000,
+  "result": [{"asset_symbol": "USD", "available_balance": "12.34"}]
+}
+```
+
+The time and balance above are **schema examples**, not your account balance.
+Use a fresh read-only wallet response from the Delta desk. No API key or secret
+belongs in this file. A subsequent run must omit initialization arguments. The
+cash ledger is seeded once and then changes with its own simulated P&L; it does
+not keep overwriting results with a changing live balance. The `--once` command
+uses the $5 planning cap and explicitly reports that it has not read account cash.
+
+For a deliberately synthetic test, `--capital-usd 20 --db /tmp/confluence-test.sqlite
+--iterations 5` supplies hypothetical capital and terminates after five polls.
+It is labelled hypothetical, never account-funded. Standalone commands default
+to paper. Explicit `--mode live` also requires OpenAlgo Live mode and all live gates.
+
+For OpenAlgo's `/python` host, upload the example wrapper, select **CRYPTO**,
+and click **Start**. First initialization reads the existing Delta account
+connection automatically. Optional parameters are `CONFLUENCE_DB` and
+`CONFLUENCE_LEVERAGE`. The wrapper and `strategies/confluence/` package must be in
+the same OpenAlgo installation. A blocked wallet read leaves the paper ledger
+uninitialized. A normal scheduled shutdown records its reason, so the next scheduled
+start can resume without changing cash, fills or loss history. A manual Stop stays
+stopped until an explicit UI Start (or CLI `--resume`). Daily halts are never cleared
+by cron; they need explicit `--resume` on a later India-time day. On this installation,
+changing the UI mode stops hosted strategies; press Start again in the selected mode.
+
+### Live routing and qualification
+
+`--mode auto` reads `/api/v1/analyzer` afresh. Unknown/inconsistent mode blocks
+entries; Live never falls back to paper. A mode change cancels unfilled entries,
+and owned fills continue to be managed in their original mode. A live journal with
+unresolved exposure or intents must recover before paper can start. The Python host's
+mode-change Stop behavior remains in force. Paper and live use different ledgers.
+
+For hosted runs, **Live mode + Start** is the activation step. This was updated
+at the user's request on 7 October 2026. The strategy reads the connected Delta
+account from OpenAlgo and uses the existing server broker secret in memory; it
+does not copy credentials into another file or claim that key rotation was verified.
+The current OpenAlgo account must be active, authenticated and in automatic order
+mode. Existing semi-auto order approvals cannot be bypassed. The mode API uses the
+local Flask listener rather than the public webhook/tunnel URL.
+
+Testnet qualification is a **reported warning**, not a launch prerequisite for this
+confluence strategy. Missing or stale qualification is never relabeled as passed.
+Exchange lifecycle validation remains unverified. The original standalone scalper's
+qualification rules are unchanged. Standalone confluence live commands still require
+`--arm-live` (or `CONFLUENCE_ARM_LIVE=1`) and secure configured credentials.
+
+Risk checks remain: isolated margin with top-up off, verified configured leverage
+(25× default), fresh quotes, sufficient collateral, fee-adjusted $1 loss/$5 margin/
+$1,000 notional limits and no unrelated BTCUSD orders/positions. Daily halts and
+manual pauses remain in force. The controller does not change account settings.
+If account access or activation is unavailable, the process continues public signal
+monitoring and shows the concrete issue with `execution_enabled: false`. Such plans
+use a labeled planning cap; they are not account-funded orders or simulated fills.
+The same monitoring behavior applies to an unmet account preflight check.
+
+Readiness is a local, non-mutating command:
+
+```sh
+.venv/bin/python strategies/examples/delta_confluence_strategy.py readiness
+```
+
+Live uses the installed `delta-scalper` execution engine for durable intents,
+client-ID reconciliation, attached initial protection, stop handover/amendment,
+post-only entries/targets, reduce-only market SL/emergency exits and actual
+fills/wallet-fee reconciliation. Its account/controller locks exclude the original
+scalper. It requires that personal skill installation; it is not a standalone broker
+library. Separate live state is `~/.local/state/delta-confluence/live.sqlite`.
+Qualification warnings are independent of recovery; existing owned exposure is
+reconciled before new entries or mode changes. No qualification record is fabricated.
+
+### Timing, persistence and paper limitations
+
+Quotes and management run on a **one-second polling cadence**, subject to network
+latency; there is no hard real-time guarantee. Candles refresh from a five-second
+bounded cache, option chains every fifteen seconds, and product metadata every
+minute. Indicators use completed bars; they do not invent a new candle each second.
+While a position or entry is active, the loop prioritizes book/tape and risk
+management over history/option requests. The latest decision may therefore refer
+to the entry scan while the position is managed.
+
+REST fills are conservative: touching a limit does not fill it. Subsequent
+aggressor trades must go **through** the price and consume the observed queue
+plus the simulated quantity. Entries fill in whole size only; partial-fill
+mechanics are not modelled. Delta's public REST tape lacks unique fill IDs, so
+duplicate tuples and later prints at an already-seen timestamp are deliberately
+undercounted. Target queue modelling requires trade-through and sufficient
+volume, but cannot reconstruct a live queue position. A simultaneous observed
+stop breach takes precedence over a target fill.
+
+Runtime state defaults to `~/.local/state/delta-confluence/paper.sqlite`.
+SQLite commits state/events/trades atomically; a process lock prevents two
+controllers from using that ledger. Read-only reports work while it is running.
+Pending entries are cancelled on restart; persisted positions are reconciled
+against a fresh quote. A gap over ten seconds forces a simulated market exit
+on reconnect. Stop with Ctrl+C or the host's Stop action; an unavailable quote
+leaves exposure explicitly unresolved. No paper stop is exchange-held, and the
+runner must remain awake to manage it. Gaps can exceed planned losses; funding
+through an extended outage is not reconstructed by this research simulator.
+
+Reports include gross/net P&L, entry/exit/full fees and separate assumed slippage,
+USD and INR at **85 INR/USD**, win rate, expectancy, profit factor, realized
+drawdown, holding time, maker entry fill rate and entry fill latency. Undefined
+metrics are null when no trades exist. Current public request latency is stored
+separately from simulated entry-to-fill latency. Trade/event history remains in
+SQLite; report memory is bounded to the latest 50 trades.
+
+Sources: [Delta API](https://docs.delta.exchange/),
+[funding schedule](https://www.delta.exchange/support/solutions?articleId=80001183756&categoryId=null&folderId=null),
+[Value Area](https://www.tradingview.com/support/solutions/43000502040-volume-profile-indicators-basic-concepts/),
+[pivot formulas](https://www.tradingview.com/support/solutions/43000521824-pivot-points-standard/).
+
 ## Features
 - **Upload & Manage**: Upload Python strategy scripts through web interface
 - **Start/Stop**: Control strategy execution with one click

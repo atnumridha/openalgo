@@ -1188,7 +1188,7 @@ describe('freshSignalLeg', () => {
 
 describe('signal mode universe', () => {
   it('offers only the tabs that have something for a signal leg to trade', () => {
-    expect(SIGNAL_MODE_TABS).toEqual(['stocks_fno', 'mcx'])
+    expect(SIGNAL_MODE_TABS).toEqual(['stocks_fno', 'mcx', 'crypto'])
     expect(SIGNAL_MODE_TABS).not.toContain('weekly_monthly')
     expect(SIGNAL_MODE_TABS).not.toContain('monthly_only')
   })

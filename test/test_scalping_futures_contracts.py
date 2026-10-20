@@ -19,12 +19,23 @@ def client(monkeypatch):
     return app.test_client()
 
 
+def _patch_symbol_session(monkeypatch, rows):
+    engine = create_engine("sqlite:///:memory:")
+    symbol_db.Base.metadata.create_all(engine)
+    db_session = sessionmaker(bind=engine)()
+    db_session.add_all(rows)
+    db_session.commit()
+    monkeypatch.setattr(symbol_db, "db_session", db_session)
+    return db_session
+
+
 def test_futures_contract_serialization_preserves_master_contract_metadata():
     row = SimpleNamespace(
         symbol="NIFTY27AUG26FUT",
         expiry="27-AUG-26",
         lotsize=75,
         tick_size=0.05,
+        instrumenttype="FUT",
     )
 
     assert _serialize_futures_contract(row) == {
@@ -32,6 +43,25 @@ def test_futures_contract_serialization_preserves_master_contract_metadata():
         "expiry": "27-AUG-26",
         "lotsize": 75,
         "tick_size": 0.05,
+        "instrumenttype": "FUT",
+    }
+
+
+def test_perpetual_futures_contract_serialization_uses_perp_label():
+    row = SimpleNamespace(
+        symbol="BTCUSDFUT",
+        expiry="",
+        lotsize=1,
+        tick_size=0.5,
+        instrumenttype="PERPFUT",
+    )
+
+    assert _serialize_futures_contract(row) == {
+        "symbol": "BTCUSDFUT",
+        "expiry": "PERP",
+        "lotsize": 1,
+        "tick_size": 0.5,
+        "instrumenttype": "PERPFUT",
     }
 
 
@@ -51,10 +81,8 @@ def test_futures_route_requires_a_valid_session(client, monkeypatch):
 def test_futures_route_filters_master_contracts_and_forwards_canonical_metadata(
     client, monkeypatch
 ):
-    engine = create_engine("sqlite:///:memory:")
-    symbol_db.Base.metadata.create_all(engine)
-    db_session = sessionmaker(bind=engine)()
-    db_session.add_all(
+    _patch_symbol_session(
+        monkeypatch,
         [
             symbol_db.SymToken(
                 symbol="NIFTY27AUG26FUT",
@@ -106,10 +134,8 @@ def test_futures_route_filters_master_contracts_and_forwards_canonical_metadata(
                 instrumenttype="OPTIDX",
                 tick_size=0.05,
             ),
-        ]
+        ],
     )
-    db_session.commit()
-    monkeypatch.setattr(symbol_db, "db_session", db_session)
 
     response = client.get("/scalping/api/futures?underlying=nifty&exchange=nfo")
 
@@ -122,12 +148,59 @@ def test_futures_route_filters_master_contracts_and_forwards_canonical_metadata(
                 "expiry": "27-AUG-26",
                 "lotsize": 65,
                 "tick_size": 0.05,
+                "instrumenttype": "FUT",
             },
             {
                 "symbol": "NIFTY24SEP26FUT",
                 "expiry": "24-SEP-26",
                 "lotsize": 65,
                 "tick_size": 0.1,
+                "instrumenttype": "FUT",
             },
+        ],
+    }
+
+
+@pytest.mark.parametrize("underlying", ["BTCUSD", "BTCUSDFUT"])
+def test_crypto_futures_route_resolves_delta_perpetual(client, monkeypatch, underlying):
+    _patch_symbol_session(
+        monkeypatch,
+        [
+            symbol_db.SymToken(
+                symbol="BTCUSDFUT",
+                brsymbol="BTCUSD",
+                name="BTCUSDFUT",
+                exchange="CRYPTO",
+                expiry="",
+                lotsize=1,
+                instrumenttype="PERPFUT",
+                tick_size=0.5,
+            ),
+            symbol_db.SymToken(
+                symbol="ETHUSDFUT",
+                brsymbol="ETHUSD",
+                name="ETHUSDFUT",
+                exchange="CRYPTO",
+                expiry="",
+                lotsize=1,
+                instrumenttype="PERPFUT",
+                tick_size=0.05,
+            ),
+        ],
+    )
+
+    response = client.get(f"/scalping/api/futures?underlying={underlying}&exchange=CRYPTO")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "success",
+        "data": [
+            {
+                "symbol": "BTCUSDFUT",
+                "expiry": "PERP",
+                "lotsize": 1,
+                "tick_size": 0.5,
+                "instrumenttype": "PERPFUT",
+            }
         ],
     }

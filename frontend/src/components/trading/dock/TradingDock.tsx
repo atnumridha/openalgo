@@ -1,3 +1,4 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 /**
  * The dock, assembled: the books from useBlotter, live prices over the
  * position rows, the shell around them, and every action the rows offer.
@@ -11,7 +12,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { tradingApi } from '@/api/trading'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import type { SearchRow } from '@/lib/trading/terminal'
-import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -72,7 +72,8 @@ export function TradingDock({
 }: Props) {
   const appMode = useThemeStore((s) => s.appMode)
   const broker = useAuthStore((s) => s.user?.broker)
-  const formatCurrency = useMemo(() => makeFormatCurrency(broker), [broker])
+  const formatCurrency = useBrokerCurrencyFormatter(broker)
+  const formatPrice = useBrokerPriceFormatter(broker)
   const { orders, positions, trades, isLoading, error, refresh } = useBlotter({ apiKey, appMode })
   const [modifying, setModifying] = useState<DockOrder | null>(null)
 
@@ -208,6 +209,7 @@ export function TradingDock({
       )}
       {tab === 'orders' && (
         <OrdersTable
+          formatAmount={formatPrice}
           orders={orders}
           activeSymbol={activeSymbol}
           onPick={onPick}
@@ -218,6 +220,8 @@ export function TradingDock({
       )}
       {tab === 'positions' && (
         <PositionsTable
+          formatPrice={formatPrice}
+          formatAmount={formatCurrency}
           positions={livePositions}
           activeSymbol={activeSymbol}
           onPick={onPick}
@@ -227,6 +231,7 @@ export function TradingDock({
       )}
       {tab === 'trades' && (
         <TradesTable
+          formatAmount={formatPrice}
           trades={trades}
           activeSymbol={activeSymbol}
           onPick={onPick}

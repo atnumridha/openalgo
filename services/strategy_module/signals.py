@@ -338,6 +338,26 @@ def _started_before_today(run: Any) -> bool:
     return _session_day(started_ist) < _session_day(_now_ist())
 
 
+def run_holds_positions(run_id: int) -> bool:
+    """Whether a run still holds or is still opening anything.
+
+    Unknown state counts as holding: a caller deciding whether a new signal is
+    safe to send should refuse rather than guess.
+    """
+    snapshot = state.get_run_state(run_id)
+    if snapshot is None:
+        return True
+    for leg in (snapshot.get("legs") or {}).values():
+        if leg.get("status") == "open" or leg.get("superseded"):
+            return True
+    return bool(snapshot.get("signal_entry_claims"))
+
+
+def started_before_today(run: Any) -> bool:
+    """Public name for the session check, for callers outside this module."""
+    return _started_before_today(run)
+
+
 def _finalise_stale_run(strategy: Any, run_id: int) -> bool:
     """Stop one stale run and say whether confirmed flatness won."""
     from services.strategy_module import engine
@@ -376,8 +396,20 @@ def handle_signal(
     leg_id: Any = None,
     symbol: str | None = None,
     exchange: str | None = None,
+    overrides: dict[str, Any] | None = None,
+    bracket: dict[str, Any] | None = None,
 ) -> SignalResult:
-    """Apply one signal to one leg."""
+    """Apply one signal to one leg.
+
+    ``overrides`` lets an entry carry its own quantity and risk levels instead
+    of the leg's configured ones: ``quantity`` (units), ``sl_pts``,
+    ``target_pts``, ``risk_unit`` and ``trail`` (``{"x", "y"}``). They are
+    written into the run's leg state, so the risk engine evaluates this trade's
+    levels and a restart recovers them from the checkpoint. ``bracket`` adds
+    exchange-held protective fields (Delta's ``bracket_*``) to the entry order.
+    Only an in-process caller can pass either: the webhook payload is never
+    read for them.
+    """
     if action not in SIGNAL_ACTIONS:
         return SignalResult(ok=False, error=f"Unknown signal action: {action!r}")
 
@@ -428,8 +460,45 @@ def handle_signal(
                 leg_id=resolved_leg_id,
                 run_id=run_id,
             )
-        return _enter(strategy, run_id, leg, side)
+        return _enter(strategy, run_id, _with_overrides(leg, overrides, bracket), side)
     return _exit(strategy, run_id, leg, side)
+
+
+#: Keys an entry override may set on a leg, and nothing else.
+_OVERRIDE_KEYS = ("quantity", "sl_pts", "target_pts", "risk_unit", "trail")
+
+
+def _entry_risk(leg: dict) -> dict[str, Any] | None:
+    """The risk levels an entry carries, for its order row. None when it carries none."""
+    trail = leg.get("trail") or {}
+    if leg.get("sl_pts") is None and leg.get("target_pts") is None and not trail.get("x"):
+        return None
+    return {
+        "risk_unit": leg.get("risk_unit") or "points",
+        "sl_pts": leg.get("sl_pts"),
+        "target_pts": leg.get("target_pts"),
+        "trail": {"x": trail.get("x") or 0, "y": trail.get("y") or 0},
+    }
+
+
+def _with_overrides(
+    leg: dict, overrides: dict[str, Any] | None, bracket: dict[str, Any] | None = None
+) -> dict:
+    """The leg with an entry's own quantity and risk levels laid over it."""
+    if not overrides and not bracket:
+        return leg
+    merged = dict(leg)
+    for key in _OVERRIDE_KEYS:
+        if not overrides or key not in overrides or overrides[key] is None:
+            continue
+        if key == "quantity":
+            merged["qty"] = overrides["quantity"]
+            merged["qty_mode"] = "units"
+        else:
+            merged[key] = overrides[key]
+    if bracket:
+        merged["bracket"] = dict(bracket)
+    return merged
 
 
 def _held_side(run_id: int, leg_id: Any) -> str | None:
@@ -606,6 +675,7 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
         "target_pts": leg.get("target_pts"),
         "trail": leg.get("trail") or {},
         "risk_unit": leg.get("risk_unit") or "points",
+        "bracket": leg.get("bracket"),
     }, None
 
 
@@ -734,7 +804,14 @@ def _place(
         product=strategy_product,
         strategy_name=strategy_name,
         pricetype=order_dispatch.EXIT_PRICETYPE if exiting else strategy_pricetype,
+        reduce_only=exiting,
     )
+    if not exiting and leg.get("bracket"):
+        # A protective stop held on the exchange itself, for a venue that
+        # supports it: it still closes the position if this process stops.
+        order.update(
+            {key: str(value) for key, value in leg["bracket"].items() if value is not None}
+        )
     # Durable intent before the broker is called, exactly as the batch path
     # does. Recording afterwards meant a crash or a database failure between
     # broker acceptance and the insert left a real position that no row
@@ -753,6 +830,7 @@ def _place(
             "pricetype": order.get("pricetype", "MARKET"),
             "status": "pending",
             "position_ref": leg.get("position_ref"),
+            "risk": None if exiting else _entry_risk(leg),
         },
     )
     if row is None and not exiting:

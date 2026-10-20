@@ -22,6 +22,8 @@ export interface DepthLevel {
 
 export interface MarketData {
   ltp?: number
+  /** Exchange mark price, where the venue marks positions to it (Delta). */
+  mark_price?: number
   open?: number
   high?: number
   low?: number
@@ -582,6 +584,7 @@ export class MarketDataManager {
 
           Object.assign(newData, {
             ltp: marketDataPayload.ltp ?? newData.ltp,
+            mark_price: marketDataPayload.mark_price ?? newData.mark_price,
             open: marketDataPayload.open ?? newData.open,
             high: marketDataPayload.high ?? newData.high,
             low: marketDataPayload.low ?? newData.low,

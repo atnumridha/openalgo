@@ -759,7 +759,7 @@ def set_resource_limits():
         logger.warning(f"Could not set resource limits: {e}")
 
 
-def start_strategy_process(strategy_id):
+def start_strategy_process(strategy_id, *, start_reason="manual"):
     """Start a strategy in a new process - cross-platform implementation"""
     # Refused once shutdown has begun, checked before the lock and again under
     # it: a scheduled start already running when cleanup takes its snapshot
@@ -868,6 +868,8 @@ def start_strategy_process(strategy_id):
             # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
             strategy_env = os.environ.copy()
             strategy_env["STRATEGY_ID"] = strategy_id
+            strategy_env["OPENALGO_START_REASON"] = start_reason
+            strategy_env["OPENALGO_STRATEGY_CONFIG"] = str(Path(CONFIG_FILE).resolve())
             strategy_env["STRATEGY_NAME"] = config.get("name", strategy_id)
             strategy_env["OPENALGO_STRATEGY_EXCHANGE"] = normalize_exchange(config.get("exchange"))
             strategy_env.setdefault("OPENALGO_HOST", "http://127.0.0.1:5000")
@@ -978,7 +980,7 @@ def start_strategy_process(strategy_id):
             return False, f"Failed to start strategy: {str(e)}"
 
 
-def stop_strategy_process(strategy_id, keep_record=False):
+def stop_strategy_process(strategy_id, keep_record=False, *, stop_reason="manual"):
     """Stop a running strategy process - cross-platform implementation.
 
     Waiting for the process to die happens **outside** PROCESS_LOCK. The lock
@@ -1024,6 +1026,19 @@ def stop_strategy_process(strategy_id, keep_record=False):
             if orphan_pid is None:
                 return False, "Strategy not running"
 
+        config = STRATEGY_CONFIGS.get(strategy_id)
+        if config is not None:
+            config["shutdown_request"] = {
+                "pid": orphan_pid or strategy_info.get("pid"),
+                "at": get_ist_time().timestamp(),
+                "reason": "server_shutdown" if keep_record else stop_reason,
+            }
+            try:
+                save_configs()
+            except Exception:
+                if strategy_info is not None:
+                    RUNNING_STRATEGIES[strategy_id] = strategy_info
+                raise
         STOPPING_STRATEGIES.add(strategy_id)
 
     try:
@@ -1690,7 +1705,7 @@ def _start_unless_stopped_by_trader(strategy_id: str):
         if config is not None and config.get("manually_stopped"):
             logger.info(f"Strategy {strategy_id} was stopped by the trader - not starting it")
             return False, MANUAL_STOP_REFUSAL
-        return start_strategy_process(strategy_id)
+        return start_strategy_process(strategy_id, start_reason="scheduled")
 
 
 def scheduled_stop_strategy(strategy_id: str):
@@ -1700,7 +1715,7 @@ def scheduled_stop_strategy(strategy_id: str):
     """
     # Always stop - this is a safety measure to prevent strategies from running after hours
     logger.info(f"Scheduled stop triggered for strategy {strategy_id}")
-    stop_strategy_process(strategy_id)
+    stop_strategy_process(strategy_id, stop_reason="schedule")
 
 
 def is_trading_day_enforcement_enabled() -> bool:
@@ -1720,6 +1735,48 @@ def _is_strategy_running(strategy_id: str, config: dict) -> bool:
     if pid and check_process_status(pid):
         return True
     return False
+
+
+def stop_all_for_mode_change(new_mode: str) -> list[str]:
+    """Stop every running strategy because the Analyze/Live switch moved.
+
+    Recorded as a manual stop, exactly as the Stop button records it, so the
+    schedule, the trading-day enforcer and the restore pass all leave it
+    stopped until the trader presses Start. A strategy started under one mode
+    must not keep placing orders under the other.
+
+    Returns:
+        The names of the strategies that were stopped.
+    """
+    stopped = []
+    for strategy_id, config in snapshot_strategy_configs():
+        with PROCESS_LOCK:
+            running = (
+                strategy_id in RUNNING_STRATEGIES
+                or strategy_id in STOPPING_STRATEGIES
+                or config.get("is_running", False)
+            )
+            if not running:
+                continue
+            previous_flag = config.get("manually_stopped", _NOT_SET)
+            config["manually_stopped"] = True
+
+        success, message = stop_strategy_process(strategy_id)
+        if success:
+            stopped.append(config.get("name") or strategy_id)
+            logger.info(
+                f"Strategy {strategy_id} stopped: switched to {new_mode} mode. "
+                "Start it again to trade in the new mode."
+            )
+        else:
+            with PROCESS_LOCK:
+                if previous_flag is _NOT_SET:
+                    config.pop("manually_stopped", None)
+                else:
+                    config["manually_stopped"] = previous_flag
+            logger.warning(f"Could not stop {strategy_id} on mode change: {message}")
+    save_configs()
+    return stopped
 
 
 def daily_trading_day_check():

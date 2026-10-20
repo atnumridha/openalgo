@@ -1,0 +1,75 @@
+//@version=6
+indicator("Liquidity | 1H 4H 1D", overlay = true, max_lines_count = 6, max_labels_count = 6)
+
+show1H = input.bool(true, "1 hour", group = "Levels")
+show4H = input.bool(true, "4 hours", group = "Levels")
+show1D = input.bool(true, "1 day", group = "Levels")
+lineWidth = input.int(3, "Line thickness", minval = 2, maxval = 6, group = "Appearance")
+highColor = input.color(#168b75, "High / buy-side liquidity", group = "Appearance")
+lowColor = input.color(#d65259, "Low / sell-side liquidity", group = "Appearance")
+textSize = input.string("Normal", "Label size", options = ["Small", "Normal", "Large"], group = "Appearance")
+showPanel = input.bool(true, "Always-visible right-side prices", group = "Appearance", tooltip = "Keeps all prices readable even when a level is outside the visible price scale.")
+
+// Standard, confirmed OHLC from the selected TradingView feed and its sessions.
+// The offset is essential: lookahead_on without [1] would leak future prices.
+symbol = ticker.standard(syminfo.tickerid)
+[h1, l1] = request.security(symbol, "60", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[h4, l4] = request.security(symbol, "240", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+[hd, ld] = request.security(symbol, "1D", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+chartSeconds = timeframe.in_seconds()
+sizeValue = textSize == "Small" ? size.small : textSize == "Large" ? size.large : size.normal
+
+// Viewport times trigger recalculation on pan/zoom. Labels grow leftwards from
+// the rightmost visible bar, rather than disappearing beyond the latest bar.
+rightTime = chart.right_visible_bar_time
+leftTime = chart.left_visible_bar_time
+var lines = array.new<line>()
+var labels = array.new<label>()
+var panel = table.new(position.bottom_right, 2, 8, border_width = 1)
+
+if barstate.islast
+    for item in lines
+        line.delete(item)
+    array.clear(lines)
+    for item in labels
+        label.delete(item)
+    array.clear(labels)
+    table.clear(panel, 0, 0, 1, 7)
+
+    prices = array.from(h1, l1, h4, l4, hd, ld)
+    names = array.from("1H", "1H", "4H", "4H", "1D", "1D")
+    enabled = array.from(show1H and chartSeconds <= 3600, show1H and chartSeconds <= 3600, show4H and chartSeconds <= 14400, show4H and chartSeconds <= 14400, show1D and chartSeconds <= 86400, show1D and chartSeconds <= 86400)
+    used = array.new<bool>(6, false)
+    int row = 1
+    if showPanel
+        table.cell(panel, 0, 0, "LIQUIDITY", bgcolor = #202833, text_color = color.white, text_size = size.small)
+        table.cell(panel, 1, 0, "Prior completed", bgcolor = #202833, text_color = color.white, text_size = size.small)
+    for i = 0 to 5
+        price = array.get(prices, i)
+        if array.get(enabled, i) and not array.get(used, i) and not na(price)
+            tf = array.get(names, i)
+            int strongest = i
+            // Merge coincident same-side levels to avoid overprinted labels.
+            if i < 5
+                for j = i + 1 to 5
+                    if j % 2 == i % 2 and array.get(enabled, j) and not na(array.get(prices, j)) and math.round_to_mintick(array.get(prices, j)) == math.round_to_mintick(price)
+                        tf += " / " + array.get(names, j)
+                        array.set(used, j, true)
+                        strongest := j
+            isHigh = i % 2 == 0
+            tint = isHigh ? highColor : lowColor
+            side = isHigh ? "High" : "Low"
+            title = tf + " Liquidity " + side
+            priceText = str.tostring(price, format.mintick)
+            style = strongest >= 4 ? line.style_solid : strongest >= 2 ? line.style_dashed : line.style_dotted
+            // Lines are viewport-wide visual references, not historical signals.
+            array.push(lines, line.new(leftTime, price, rightTime == leftTime ? rightTime + 1 : rightTime, price, xloc = xloc.bar_time, extend = extend.both, color = tint, width = lineWidth, style = style))
+            array.push(labels, label.new(rightTime, price, title + "  " + priceText, xloc = xloc.bar_time, style = label.style_label_right, color = tint, textcolor = color.white, size = sizeValue, tooltip = (isHigh ? "Potential buy-side liquidity" : "Potential sell-side liquidity") + " at the previous completed " + tf + " range. Price reference only; resting orders are not measured."))
+            if showPanel
+                table.cell(panel, 0, row, title, bgcolor = color.new(tint, 15), text_color = color.white, text_size = size.small, text_halign = text.align_left)
+                table.cell(panel, 1, row, priceText, bgcolor = #202833, text_color = color.white, text_size = size.small, text_halign = text.align_right)
+                row += 1
+    if showPanel
+        note = chartSeconds > 3600 ? "Use 1H or below for all levels" : "Latest references | " + syminfo.currency
+        table.cell(panel, 0, 7, note, bgcolor = #202833, text_color = color.silver, text_size = size.small)
+        table.cell(panel, 1, 7, "", bgcolor = #202833)

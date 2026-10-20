@@ -53,8 +53,11 @@ def authenticate_broker(code):
         logger.info("Verifying Delta Exchange credentials via GET /v2/profile")
         response = client.get(url, headers=headers)
 
-        logger.debug(f"Profile response status: {response.status_code}")
-        logger.debug(f"Profile response body: {response.text}")
+        logger.info(
+            "Delta profile response status=%s body=%s",
+            response.status_code,
+            response.text[:500],
+        )
 
         if response.status_code == 200:
             data = response.json()
@@ -72,7 +75,23 @@ def authenticate_broker(code):
                 return None, msg
 
         elif response.status_code == 401:
-            msg = "Invalid API key or signature — check BROKER_API_KEY and BROKER_API_SECRET"
+            error_code = ""
+            client_ip = ""
+            try:
+                error = response.json().get("error") or {}
+                error_code = str(error.get("code") or "")
+                client_ip = str((error.get("context") or {}).get("client_ip") or "")
+            except Exception:
+                error_code = ""
+            if error_code == "ip_not_whitelisted_for_api_key":
+                ip_note = f" ({client_ip})" if client_ip else ""
+                msg = (
+                    "Delta Exchange rejected this machine's IP"
+                    f"{ip_note}. Add it to the API key whitelist in the "
+                    "Delta Exchange India dashboard, then connect again."
+                )
+            else:
+                msg = "Invalid API key or signature — check BROKER_API_KEY and BROKER_API_SECRET"
             logger.error(msg)
             return None, msg
 

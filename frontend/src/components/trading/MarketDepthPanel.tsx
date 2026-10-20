@@ -1,3 +1,5 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
+import { useAuthStore } from '@/stores/authStore'
 // components/trading/MarketDepthPanel.tsx
 // Collapsible market depth display for PlaceOrderDialog
 
@@ -32,6 +34,8 @@ function DepthRow({
   maxQty: number
   side: 'buy' | 'sell'
 }) {
+  const {user} = useAuthStore()
+  const display = useBrokerPriceFormatter(user?.broker)
   const pct = maxQty > 0 ? Math.min((quantity / maxQty) * 100, 100) : 0
 
   return (
@@ -53,7 +57,7 @@ function DepthRow({
           side === 'buy' ? 'text-emerald-400' : 'text-rose-400'
         )}
       >
-        {price.toFixed(2)}
+        {user?.broker === 'deltaexchange' ? display(price) : price.toFixed(2)}
       </span>
       <span className="relative z-10 font-mono text-xs text-muted-foreground">
         {quantity.toLocaleString()}

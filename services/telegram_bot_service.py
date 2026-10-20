@@ -86,10 +86,19 @@ MODE_CHANGE_SLOW_MESSAGE = (
 
 
 def _write_analyze_mode_only(requested: bool) -> bool:
-    """The Telegram mode buttons outside gthread: write the mode and nothing else."""
-    from database.settings_db import set_analyze_mode
+    """The Telegram mode buttons outside gthread: write the mode and nothing else.
 
+    Python strategies are still stopped on a real change, as the web toggle
+    does, so none keeps trading in the mode it was not started in.
+    """
+    from database.settings_db import get_analyze_mode, set_analyze_mode
+
+    previous = bool(get_analyze_mode())
     set_analyze_mode(requested)
+    if bool(requested) != previous:
+        from services.analyzer_service import _stop_python_strategies
+
+        _stop_python_strategies(bool(requested))
     return requested
 
 #: Seconds between reconnect attempts' stop checks while backing off.

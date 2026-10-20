@@ -182,7 +182,7 @@ def test_manually_stopped_not_resumed_by_enforcer(ps_module, monkeypatch):
 
     started = []
     monkeypatch.setattr(
-        ps_module, "start_strategy_process", lambda sid: started.append(sid) or (True, "ok")
+        ps_module, "start_strategy_process", lambda sid, **kw: started.append(sid) or (True, "ok")
     )
     monkeypatch.setattr(ps_module, "_is_strategy_running", lambda sid, cfg: False)
 
@@ -208,7 +208,7 @@ def test_scheduled_start_skips_manually_stopped(ps_module, monkeypatch):
     }
     started = []
     monkeypatch.setattr(
-        ps_module, "start_strategy_process", lambda sid: started.append(sid) or (True, "ok")
+        ps_module, "start_strategy_process", lambda sid, **kw: started.append(sid) or (True, "ok")
     )
 
     p = _patch_now(date(2026, 4, 14), 17, 0)
@@ -257,10 +257,10 @@ def test_multi_strategy_per_exchange_decisions(ps_module, monkeypatch):
     started = []
     stopped = []
     monkeypatch.setattr(
-        ps_module, "start_strategy_process", lambda sid: started.append(sid) or (True, "ok")
+        ps_module, "start_strategy_process", lambda sid, **kw: started.append(sid) or (True, "ok")
     )
     monkeypatch.setattr(
-        ps_module, "stop_strategy_process", lambda sid: stopped.append(sid) or (True, "ok")
+        ps_module, "stop_strategy_process", lambda sid, **kw: stopped.append(sid) or (True, "ok")
     )
     monkeypatch.setattr(ps_module, "_is_strategy_running", lambda sid, cfg: False)
     monkeypatch.setattr(ps_module, "save_configs", lambda: None)
@@ -314,7 +314,7 @@ def test_multi_strategy_daily_check(ps_module, monkeypatch):
 
     stopped = []
     monkeypatch.setattr(
-        ps_module, "stop_strategy_process", lambda sid: stopped.append(sid) or (True, "ok")
+        ps_module, "stop_strategy_process", lambda sid, **kw: stopped.append(sid) or (True, "ok")
     )
     monkeypatch.setattr(ps_module, "_is_strategy_running", lambda sid, cfg: True)
     monkeypatch.setattr(ps_module, "save_configs", lambda: None)
@@ -504,6 +504,8 @@ def test_subprocess_env_includes_strategy_exchange(ps_module, monkeypatch, tmp_p
     assert captured_env.get("OPENALGO_STRATEGY_EXCHANGE") == "MCX"
     assert captured_env.get("STRATEGY_ID") == "envtest"
     assert captured_env.get("STRATEGY_NAME") == "EnvTest"
+    assert captured_env.get("OPENALGO_START_REASON") == "manual"
+    assert Path(captured_env["OPENALGO_STRATEGY_CONFIG"]).is_absolute()
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +736,7 @@ def test_crypto_manually_stopped_not_resumed(ps_module, monkeypatch):
 
     started = []
     monkeypatch.setattr(
-        ps_module, "start_strategy_process", lambda sid: started.append(sid) or (True, "ok")
+        ps_module, "start_strategy_process", lambda sid, **kw: started.append(sid) or (True, "ok")
     )
     monkeypatch.setattr(ps_module, "_is_strategy_running", lambda sid, cfg: False)
     monkeypatch.setattr(ps_module, "save_configs", lambda: None)

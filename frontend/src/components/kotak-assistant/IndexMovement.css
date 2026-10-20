@@ -1,0 +1,26 @@
+.index-movement {
+  --movement-up: #166534;
+  --movement-up-surface: #f0fdf4;
+  --movement-down: #991b1b;
+  --movement-down-surface: #fef2f2;
+}
+
+.dark .index-movement,
+.analyzer .index-movement {
+  --movement-up: #86efac;
+  --movement-up-surface: #052e16;
+  --movement-down: #fca5a5;
+  --movement-down-surface: #450a0a;
+}
+
+.index-movement__direction[data-direction='UP'] {
+  color: var(--movement-up);
+  background-color: var(--movement-up-surface);
+  border-color: currentColor;
+}
+
+.index-movement__direction[data-direction='DOWN'] {
+  color: var(--movement-down);
+  background-color: var(--movement-down-surface);
+  border-color: currentColor;
+}

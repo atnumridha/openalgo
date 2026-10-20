@@ -1,3 +1,8 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
+import { useDeltaDisplayCurrency } from '@/hooks/useDeltaDisplayCurrency'
+import { deltaMoney, type DeltaDisplayCurrency } from '@/lib/deltaCurrency'
+import { DeltaProfitProtection } from '@/components/positions/DeltaProfitProtection'
+import type { ProfitProtectionPlan } from '@/api/deltaProfitProtection'
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -15,7 +20,13 @@ import {
   X,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type RiskOverview, riskApi, type StrategyRiskPosition } from '@/api/risk'
 import { tradingApi } from '@/api/trading'
+import {
+  PositionRiskPanel,
+  shortStrategyName,
+  strategiesForPosition,
+} from '@/components/positions/PositionRiskPanel'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -40,6 +51,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -54,14 +66,19 @@ import { useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { positionFees, totalNetAfterFees as sumNetAfterFees, withProfile } from '@/lib/cryptoFees'
+import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
-import { EmptyState } from '@/components/ui/empty-state'
 
 const STORAGE_KEY = 'openalgo_positions_prefs'
+
+function feeCountdown(minutes: number): string {
+  const seconds = Math.max(0, Math.ceil(minutes * 60 - 1e-8))
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
 
 type GroupingType = 'none' | 'underlying' | 'underlying_expiry'
 type SortColumn = 0 | 3 | 4 | 6 | 7 | null
@@ -147,7 +164,14 @@ const PRODUCT_COLORS: Record<string, string> = {
 export default function Positions() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const [displayCurrency, setCurrencyPreference] = useDeltaDisplayCurrency(user?.username)
+  const isDelta = user?.broker === 'deltaexchange'
+  const formatPrice = useBrokerPriceFormatter(user?.broker)
+  const formatMoney = useCallback(
+    (value: number | null | undefined, digits = 2) =>
+      isDelta ? deltaMoney(value, displayCurrency, digits) : formatPrice(value ?? 0),
+    [isDelta, displayCurrency, formatPrice]
+  )
   const [positions, setPositions] = useState<Position[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -169,6 +193,17 @@ export default function Positions() {
   const [sortColumn, setSortColumn] = useState<SortColumn>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [risk, setRisk] = useState<RiskOverview | null>(null)
+  const [profitPlans, setProfitPlans] = useState<ProfitProtectionPlan[]>([])
+  const [feeNow, setFeeNow] = useState(Date.now)
+  const needsFeeClock = isCrypto && isVisible
+
+  useEffect(() => {
+    if (!needsFeeClock) return
+    setFeeNow(Date.now())
+    const timer = setInterval(() => setFeeNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [needsFeeClock])
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
   // Automatically pauses when tab is hidden
@@ -246,6 +281,25 @@ export default function Positions() {
     fetchPositions()
     lastFetchRef.current = Date.now()
   }, [fetchPositions, isVisible])
+
+  // Leverage, fees and each running strategy's SL/TP. Crypto only: the stop
+  // and target levels come from the strategy managing the trade, not the
+  // broker, so they are polled while the page is visible.
+  const fetchRisk = useCallback(async () => {
+    if (!isCrypto) return
+    try {
+      setRisk(await riskApi.getOverview())
+    } catch {
+      setRisk(null)
+    }
+  }, [isCrypto])
+
+  useEffect(() => {
+    if (!isCrypto || !isVisible) return
+    fetchRisk()
+    const timer = setInterval(fetchRisk, 5000)
+    return () => clearInterval(timer)
+  }, [isCrypto, isVisible, fetchRisk])
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchPositions, {
@@ -395,6 +449,18 @@ export default function Positions() {
     const totalPnl = filteredPositions.reduce((sum, p) => sum + (p.pnl || 0), 0)
     return { total, long, short, totalPnl }
   }, [filteredPositions])
+
+  // Columns before P&L: crypto drops Product and adds Leverage, SL, TP, Fees.
+  const leadColumns = isCrypto ? 9 : 6
+
+  const feeProfile = useMemo(() => withProfile(risk?.fee_profile), [risk])
+
+  // Cash net of every fee paid and still due, and funding, per position.
+  // A Diwali Fee Voucher is a fee credit, so it is shown beside this, not in it.
+  const totalNetAfterFees = useMemo(
+    () => sumNetAfterFees(filteredPositions, feeProfile, feeNow),
+    [filteredPositions, feeProfile, feeNow]
+  )
 
   const handleSort = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -626,6 +692,31 @@ export default function Positions() {
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {isDelta && (
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              Amounts
+              <select
+                aria-label="Position display currency"
+                className="h-8 rounded-md border bg-background px-2"
+                value={displayCurrency}
+                onChange={(e) => {
+                  const next = e.target.value as DeltaDisplayCurrency
+                  setCurrencyPreference(next)
+                }}
+              >
+                <option value="INR">INR ₹</option>
+                <option value="USD">USD $</option>
+              </select>
+              <a
+                className="text-xs text-muted-foreground underline"
+                href="https://www.delta.exchange/support/solutions?articleId=80001200076"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Delta India: US$1 = ₹85 (fixed)
+              </a>
+            </label>
+          )}
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
@@ -847,18 +938,38 @@ export default function Positions() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Total P&L</CardDescription>
+            <CardDescription>{isCrypto ? 'Net P&L' : 'Total P&L'}</CardDescription>
             <CardTitle
               className={cn(
                 'text-2xl',
-                isProfit(stats.totalPnl) ? 'text-green-600' : 'text-red-600'
+                isProfit(isCrypto ? totalNetAfterFees : stats.totalPnl)
+                  ? 'text-green-600'
+                  : 'text-red-600'
               )}
             >
-              {formatCurrency(stats.totalPnl)}
+              {formatMoney(isCrypto ? totalNetAfterFees : stats.totalPnl)}
             </CardTitle>
+            {isCrypto && (
+              <CardDescription>before fees {formatMoney(stats.totalPnl)}</CardDescription>
+            )}
           </CardHeader>
         </Card>
       </div>
+
+      {/* Leverage, liquidation, fees, and each open trade's SL/TP (crypto) */}
+      {isCrypto && (
+        <PositionRiskPanel overview={risk} positions={enhancedPositions} money={formatMoney} />
+      )}
+      {user?.broker === 'deltaexchange' && (
+        <DeltaProfitProtection
+          key={user.username || 'session'}
+          positions={enhancedPositions}
+          now={feeNow}
+          visible={isVisible}
+          scope={user.username || 'session'}
+          onPlans={setProfitPlans}
+        />
+      )}
 
       {/* Positions Table */}
       <Card>
@@ -874,10 +985,12 @@ export default function Positions() {
               icon={ChartCandlestick}
               title="No positions match your filters"
               description="Try adjusting or clearing your filters to see results."
-              action={hasActiveFilters ?
-                <Button variant="ghost" size="sm" onClick={clearFilters}>
-                  Clear Filters
-                </Button> : undefined
+              action={
+                hasActiveFilters ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear Filters
+                  </Button>
+                ) : undefined
               }
             />
           ) : (
@@ -889,9 +1002,30 @@ export default function Positions() {
                     <TableHead className="w-[80px]">Exchange</TableHead>
                     {!isCrypto && <TableHead className="w-[80px]">Product</TableHead>}
                     <SortableHeader column={3} label="Qty" className="w-[80px] text-right" />
-                    <SortableHeader column={4} label="Avg Price" className="w-[120px] text-right" />
-                    <TableHead className="w-[120px] text-right">LTP</TableHead>
+                    <SortableHeader
+                      column={4}
+                      label={isDelta ? `Avg Price · USD` : 'Avg Price'}
+                      className="w-[120px] text-right"
+                    />
+                    <TableHead className="w-[120px] text-right">
+                      LTP{isDelta ? ` · USD` : ''}
+                    </TableHead>
+                    {isCrypto && (
+                      <>
+                        <TableHead className="w-[80px] text-right">Leverage</TableHead>
+                        <TableHead className="w-[130px] text-right">
+                          Stop Loss{isDelta ? ` · USD` : ''}
+                        </TableHead>
+                        <TableHead className="w-[130px] text-right">
+                          Take Profit{isDelta ? ` · USD` : ''}
+                        </TableHead>
+                        <TableHead className="w-[110px] text-right">Fees</TableHead>
+                      </>
+                    )}
                     <SortableHeader column={6} label="P&L" className="w-[120px] text-right" />
+                    {isCrypto && (
+                      <TableHead className="w-[120px] text-right">Net after fees</TableHead>
+                    )}
                     <SortableHeader column={7} label="P&L %" className="w-[100px] text-right" />
                     <TableHead className="w-[60px] text-right">Action</TableHead>
                   </TableRow>
@@ -910,7 +1044,7 @@ export default function Positions() {
                             className="bg-muted/50 cursor-pointer hover:bg-muted"
                             onClick={() => toggleGroup(groupKey)}
                           >
-                            <TableCell colSpan={6}>
+                            <TableCell colSpan={leadColumns}>
                               <div className="flex items-center gap-3 py-1 font-semibold">
                                 {isCollapsed ? (
                                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
@@ -930,8 +1064,9 @@ export default function Positions() {
                               )}
                             >
                               {groupStats.totalPnl >= 0 ? '+' : ''}
-                              {formatCurrency(groupStats.totalPnl)}
+                              {formatMoney(groupStats.totalPnl)}
                             </TableCell>
+                            {isCrypto && <TableCell />}
                             <TableCell
                               className={cn(
                                 'text-right font-semibold',
@@ -962,6 +1097,35 @@ export default function Positions() {
                             // coerces for the same reason.
                             const quantity = Number(position.quantity) || 0
                             const isOpen = quantity !== 0
+                            const managers = isCrypto ? strategiesForPosition(risk, position) : []
+                            const guard = profitPlans.find(
+                              (p) =>
+                                p.symbol === position.symbol &&
+                                p.enabled &&
+                                p.entry === Number(position.average_price) &&
+                                p.quantity * quantity > 0
+                            )
+                            const brokerRisk = risk?.broker_positions?.find(
+                              (p) =>
+                                p.symbol === position.symbol &&
+                                p.entry === Number(position.average_price) &&
+                                p.quantity === quantity &&
+                                feeNow / 1000 - p.checked_at >= 0 &&
+                                feeNow / 1000 - p.checked_at < 15
+                            )
+                            const shared = managers.length > 1
+                            const lev =
+                              brokerRisk?.leverage ??
+                              managers[0]?.leverage ??
+                              risk?.leverage ??
+                              null
+                            const contract = Number(position.lot_size) || 1
+                            const avg = Number(position.average_price) || 0
+                            const notional = Math.abs(quantity) * contract * avg
+                            const fees = isCrypto
+                              ? positionFees(position, feeProfile, {}, feeNow)
+                              : null
+                            const netPnl = fees ? fees.net : Number(position.pnl) || 0
 
                             return (
                               <TableRow key={`${position.symbol}-${position.exchange}-${index}`}>
@@ -1001,11 +1165,193 @@ export default function Positions() {
                                   {position.quantity}
                                 </TableCell>
                                 <TableCell className="w-[120px] text-right font-mono">
-                                  {formatCurrency(position.average_price)}
+                                  {formatPrice(position.average_price)}
                                 </TableCell>
                                 <TableCell className="w-[120px] text-right font-mono">
-                                  {position.ltp !== undefined ? formatCurrency(position.ltp) : '-'}
+                                  {position.ltp !== undefined ? formatPrice(position.ltp) : '-'}
                                 </TableCell>
+                                {isCrypto && (
+                                  <>
+                                    <TableCell className="w-[80px] text-right">
+                                      {isOpen ? (
+                                        <div>
+                                          <div className="font-mono font-medium">
+                                            {lev ? `${lev}x` : 'Default'}
+                                          </div>
+                                          {lev ? (
+                                            <div className="text-xs text-muted-foreground">
+                                              {brokerRisk?.leverage
+                                                ? 'broker leverage · est. margin'
+                                                : managers[0]?.leverage
+                                                  ? 'margin'
+                                                  : 'app setting · est. margin'}{' '}
+                                              {formatMoney(notional / lev)}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="w-[130px] text-right">
+                                      {isOpen && brokerRisk && brokerRisk.stops.length > 0 ? (
+                                        <div>
+                                          {brokerRisk.stops.map((p) => (
+                                            <div className="font-mono" key={p}>
+                                              {formatPrice(p)}
+                                            </div>
+                                          ))}
+                                          <div className="text-xs text-muted-foreground">
+                                            Broker SL
+                                          </div>
+                                        </div>
+                                      ) : isOpen && managers.length > 0 ? (
+                                        <div className="space-y-1">
+                                          {managers.map((m) => {
+                                            const p = m.position as StrategyRiskPosition
+                                            const move =
+                                              (((p.side === 'LONG' ? 1 : -1) *
+                                                (p.stop_price - p.entry)) /
+                                                p.entry) *
+                                              100
+                                            return (
+                                              <div key={m.strategy_id || m.strategy}>
+                                                <div
+                                                  className={cn(
+                                                    'font-mono font-medium',
+                                                    move >= 0 ? 'text-green-600' : 'text-red-600'
+                                                  )}
+                                                >
+                                                  {formatPrice(p.stop_price)}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">
+                                                  {shared
+                                                    ? `${shortStrategyName(m.strategy)} · `
+                                                    : ''}
+                                                  {p.trailing ? 'trailing ' : ''}
+                                                  {`${move > 0 ? '+' : ''}${move.toFixed(2)}%`}
+                                                </div>
+                                              </div>
+                                            )
+                                          })}
+                                        </div>
+                                      ) : isOpen && guard ? (
+                                        <div>
+                                          <div className="font-mono">{formatPrice(guard.stop)}</div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Last confirmed broker SL
+                                          </div>
+                                        </div>
+                                      ) : isOpen ? (
+                                        <span
+                                          className="text-xs text-amber-600"
+                                          title="No strategy or fresh broker evidence confirms protection for this position"
+                                        >
+                                          Not verified
+                                        </span>
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="w-[130px] text-right">
+                                      {isOpen && brokerRisk && brokerRisk.targets.length > 0 ? (
+                                        <div>
+                                          {brokerRisk.targets.map((p) => (
+                                            <div className="font-mono" key={p}>
+                                              {formatPrice(p)}
+                                            </div>
+                                          ))}
+                                          <div className="text-xs text-muted-foreground">
+                                            Broker TP
+                                          </div>
+                                        </div>
+                                      ) : isOpen && managers.length > 0 ? (
+                                        <div className="space-y-1">
+                                          {managers.map((m) => {
+                                            const p = m.position as StrategyRiskPosition
+                                            const fixedTarget =
+                                              p.target_type === 'fixed' && p.target_price != null
+                                            return (
+                                              <div key={m.strategy_id || m.strategy}>
+                                                <div className="font-mono font-medium text-green-600">
+                                                  {formatPrice(
+                                                    fixedTarget
+                                                      ? (p.target_price as number)
+                                                      : p.trail_arm_price
+                                                  )}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">
+                                                  {shared
+                                                    ? `${shortStrategyName(m.strategy)} · `
+                                                    : ''}
+                                                  {fixedTarget
+                                                    ? 'fixed target'
+                                                    : p.trailing
+                                                      ? `trail ${p.trail_gap_pct.toFixed(2)}% behind best`
+                                                      : `trail arms, then ${p.trail_gap_pct.toFixed(2)}% gap`}
+                                                </div>
+                                              </div>
+                                            )
+                                          })}
+                                        </div>
+                                      ) : isOpen && guard ? (
+                                        <div>
+                                          <div className="font-mono">
+                                            {formatPrice(guard.target)}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Original 1:{guard.reward_multiple} · server target
+                                          </div>
+                                        </div>
+                                      ) : isOpen ? (
+                                        <span className="text-xs text-amber-600">Not verified</span>
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="w-[110px] text-right">
+                                      {fees && (isOpen || fees.feesPaid > 0 || fees.funding) ? (
+                                        <div>
+                                          <div className="font-mono">
+                                            {formatMoney(fees.feesPaid + fees.exitFeeNow)}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            {fees.feesReported ? 'paid' : 'est.'}{' '}
+                                            {formatMoney(fees.feesPaid)}
+                                            {isOpen
+                                              ? fees.exitFeeNow === 0 &&
+                                                fees.windowRemainingMinutes != null &&
+                                                fees.windowRemainingMinutes > 0
+                                                ? ` · close free for ${feeCountdown(fees.windowRemainingMinutes)}`
+                                                : ` · close ${formatMoney(fees.exitFeeNow)}`
+                                              : ''}
+                                          </div>
+                                          {fees.funding !== 0 && (
+                                            <div className="text-xs text-muted-foreground">
+                                              funding {fees.funding > 0 ? '+' : ''}
+                                              {formatMoney(fees.funding)}
+                                            </div>
+                                          )}
+                                          {fees.voucherNow > 0 && (
+                                            <div className="text-xs text-emerald-600">
+                                              voucher {formatMoney(fees.voucherNow)}
+                                              {fees.voucherWindowRemainingMinutes != null
+                                                ? ` if closed in ${feeCountdown(fees.voucherWindowRemainingMinutes)}`
+                                                : ''}
+                                            </div>
+                                          )}
+                                          {fees.breakEven != null && (
+                                            <div className="text-xs text-muted-foreground">
+                                              b/e {formatPrice(fees.breakEven)}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <span className="text-muted-foreground">-</span>
+                                      )}
+                                    </TableCell>
+                                  </>
+                                )}
                                 <TableCell
                                   className={cn(
                                     'w-[120px] text-right font-medium',
@@ -1018,9 +1364,25 @@ export default function Positions() {
                                     ) : (
                                       <TrendingDown className="h-4 w-4" />
                                     )}
-                                    {formatCurrency(position.pnl)}
+                                    {formatMoney(position.pnl)}
                                   </div>
                                 </TableCell>
+                                {isCrypto && (
+                                  <TableCell
+                                    className={cn(
+                                      'w-[120px] text-right font-medium',
+                                      isProfit(netPnl) ? 'text-green-600' : 'text-red-600'
+                                    )}
+                                  >
+                                    <div className="font-mono">{formatMoney(netPnl)}</div>
+                                    {isOpen && lev && notional > 0 ? (
+                                      <div className="text-xs text-muted-foreground">
+                                        {((netPnl / (notional / lev)) * 100).toFixed(1)}% of est.
+                                        margin
+                                      </div>
+                                    ) : null}
+                                  </TableCell>
+                                )}
                                 <TableCell
                                   className={cn(
                                     'w-[100px] text-right',
@@ -1054,7 +1416,7 @@ export default function Positions() {
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-muted/50">
-                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                    <TableCell colSpan={leadColumns} className="text-right text-muted-foreground">
                       Total P&L:
                     </TableCell>
                     <TableCell
@@ -1064,8 +1426,19 @@ export default function Positions() {
                       )}
                     >
                       {stats.totalPnl >= 0 ? '+' : ''}
-                      {formatCurrency(stats.totalPnl)}
+                      {formatMoney(stats.totalPnl)}
                     </TableCell>
+                    {isCrypto && (
+                      <TableCell
+                        className={cn(
+                          'w-[120px] text-right font-bold',
+                          isProfit(totalNetAfterFees) ? 'text-green-600' : 'text-red-600'
+                        )}
+                      >
+                        {totalNetAfterFees >= 0 ? '+' : ''}
+                        {formatMoney(totalNetAfterFees)}
+                      </TableCell>
+                    )}
                     <TableCell colSpan={2} />
                   </TableRow>
                 </TableFooter>

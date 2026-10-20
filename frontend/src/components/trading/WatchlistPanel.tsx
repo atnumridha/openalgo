@@ -1,3 +1,4 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 /**
  * The watchlist panel on the right of the charting terminal.
  *
@@ -222,6 +223,14 @@ function rowGrid(columns: typeof COLUMNS): string {
 }
 
 export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) {
+  const moneyDisplay = useBrokerPriceFormatter('deltaexchange')
+  const monetaryQuote = (quote: Quote, id: string) => {
+    const raw = (quote as unknown as Record<string, unknown>)[id === 'last' ? 'ltp' : id]
+    if (raw == null) return '-'
+    const value = Number(raw)
+    return `${id === 'change' && value > 0 ? '+' : ''}${moneyDisplay(value)}`
+  }
+
   const [lists, setLists] = useState<Watchlist[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -982,7 +991,12 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                       !column.tone && quote && 'text-foreground'
                     )}
                   >
-                    {quote ? column.get(quote) : '-'}
+                    {quote
+                      ? item.exchange === 'CRYPTO' &&
+                        ['last', 'change', 'high', 'low', 'open'].includes(column.id)
+                        ? monetaryQuote(quote, column.id)
+                        : column.get(quote)
+                      : '-'}
                   </span>
                 ))}
 

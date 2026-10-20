@@ -17,6 +17,10 @@ import {
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
+import {
+  StrategyExecutionPanel,
+  supportsExecutionPanel,
+} from '@/components/python-strategy/StrategyExecutionPanel'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -424,6 +428,9 @@ export default function PythonStrategyIndex() {
               </CardHeader>
 
               <CardContent className="space-y-4 flex-1 flex flex-col">
+                {supportsExecutionPanel(strategy.file_name) && (
+                  <StrategyExecutionPanel strategyId={strategy.id} compact />
+                )}
                 {/* Schedule Info - always show */}
                 <div className="text-sm p-2 rounded min-h-[52px] bg-blue-500/10 border border-blue-500/20">
                   <div className="flex items-center gap-2">

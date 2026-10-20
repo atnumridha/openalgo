@@ -41,6 +41,7 @@ export interface PositionsPanelProps {
   isUpdating?: boolean
   /** True when no broker session — disables Execute. */
   executeDisabled?: boolean
+  formatPrice?: (value: number) => string
   formatCurrency: (value: number) => string
 }
 
@@ -114,6 +115,7 @@ export function PositionsPanel({
   isUpdating = false,
   executeDisabled = false,
   formatCurrency,
+  formatPrice = formatCurrency,
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
@@ -298,7 +300,7 @@ export function PositionsPanel({
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                           : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                       )}
-                      title={`Entry ${formatCurrency(leg.price)} → Exit ${formatCurrency(leg.exitPrice ?? 0)}`}
+                      title={`Entry ${formatPrice(leg.price)} → Exit ${formatPrice(leg.exitPrice ?? 0)}`}
                     >
                       {formatCurrency(realisedPnl)}
                     </span>
@@ -307,11 +309,11 @@ export function PositionsPanel({
                       className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
                       title={
                         leg.marketPrice !== undefined
-                          ? `Current mark ${formatCurrency(leg.marketPrice)}`
+                          ? `Current mark ${formatPrice(leg.marketPrice)}`
                           : undefined
                       }
                     >
-                      {formatCurrency(leg.price)}
+                      {formatPrice(leg.price)}
                     </span>
                   )}
 
@@ -448,7 +450,7 @@ export function PositionsPanel({
                 key={i}
                 className="rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-foreground"
               >
-                {formatCurrency(b)}
+                {formatPrice(b)}
               </span>
             ))}
           </div>

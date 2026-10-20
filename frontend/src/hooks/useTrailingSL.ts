@@ -6,7 +6,7 @@
  * after the user navigates away from /scalping or closes the browser. This hook is
  * therefore deliberately NOT an executor — it only:
  *  - loads the active SL states for display (position book SL/TP/TSL columns), and
- *    polls them so server-side trailing updates + auto-clears are reflected live;
+ *    refreshes them on server events and every 5 seconds for reconciliation;
  *  - persists SL config (setSL) / clears it (clearSL) to the backend, which the
  *    server monitor then enforces.
  *
@@ -22,7 +22,11 @@ import { showToast } from '@/utils/toast'
 import { useOrderEventRefresh } from './useOrderEventRefresh'
 
 const MIN_TRAIL_PROFIT = 1 // don't trail until >= 1 rupee in profit
-const PERSIST_THROTTLE_MS = 2000
+
+function errorMessage(error: unknown): string {
+  const response = (error as { response?: { data?: { message?: string } } })?.response
+  return response?.data?.message || (error instanceof Error ? error.message : 'Request failed')
+}
 
 export interface SLState {
   symbol: string
@@ -113,9 +117,9 @@ export function evaluateTrail(
     let currentSl = sl.currentSl
     if (sl.trailingEnabled && sl.trailingStep > 0 && sl.entry - ltp >= MIN_TRAIL_PROFIT) {
       const candidate = lowest + sl.trailingStep
-      if (candidate < currentSl) currentSl = candidate
+      if (currentSl <= 0 || candidate < currentSl) currentSl = candidate
     }
-    const slHit = ltp >= currentSl // short: stop sits ABOVE price
+    const slHit = currentSl > 0 && ltp >= currentSl // short: stop sits ABOVE price
     const targetHit = sl.target > 0 && ltp <= sl.target // short: target BELOW price
     return {
       next: { ...sl, lowestPrice: lowest, currentSl },
@@ -131,7 +135,7 @@ export function evaluateTrail(
     const candidate = highest - sl.trailingStep
     if (candidate > currentSl) currentSl = candidate
   }
-  const slHit = ltp <= currentSl // long: stop sits BELOW price
+  const slHit = currentSl > 0 && ltp <= currentSl // long: stop sits BELOW price
   const targetHit = sl.target > 0 && ltp >= sl.target // long: target ABOVE price
   return {
     next: { ...sl, highestPrice: highest, currentSl },
@@ -144,24 +148,35 @@ export function evaluateTrail(
 // it changes, so the displayed SLs match the active trading mode.
 export function useTrailingSL(reloadSignal?: unknown) {
   const [slMap, setSlMap] = useState<Record<string, SLState>>({})
-  const lastPersistRef = useRef<Record<string, number>>({})
+  const [slAvailable, setSlAvailable] = useState(false)
+  const loadSerialRef = useRef(0)
+  const revisionRef = useRef(0)
+  const scopeGenerationRef = useRef(0)
+  const scopeRef = useRef(reloadSignal)
+  scopeRef.current = reloadSignal
 
   const warnedRef = useRef(false)
-  // Load active SL states for display. Fully event-driven — refreshed when the
-  // server-side risk monitor pushes a 'scalping_sl_update' (trail/clear) or on
-  // any order event (e.g. the monitor's auto-exit). No polling interval.
+  // Refresh on risk-monitor/order events and reconcile every 5 seconds in case
+  // an event was missed. Only the newest request may replace displayed state.
   const loadStates = useCallback(() => {
+    const serial = ++loadSerialRef.current
+    const revision = revisionRef.current
+    const scope = scopeRef.current
     scalpingApi
       .getSLStates()
       .then((resp) => {
-        if (resp.status !== 'success') return
+        if (resp.status !== 'success') throw new Error('Failed to load stop-losses')
+        if (serial !== loadSerialRef.current || revision !== revisionRef.current || scope !== scopeRef.current) return
         const restored: Record<string, SLState> = {}
         for (const s of resp.data) {
           restored[slKey(s.symbol, s.exchange, s.product)] = fromBackend(s)
         }
         setSlMap(restored)
+        setSlAvailable(true)
       })
       .catch(() => {
+        if (serial !== loadSerialRef.current || revision !== revisionRef.current || scope !== scopeRef.current) return
+        setSlAvailable(false)
         if (!warnedRef.current) {
           warnedRef.current = true
           showToast.error('Failed to load active stop-losses — verify manually', 'orders')
@@ -173,7 +188,13 @@ export function useTrailingSL(reloadSignal?: unknown) {
   // reloadSignal is a deliberate re-run trigger (not used inside the effect).
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadSignal is an intentional refresh trigger
   useEffect(() => {
+    scopeGenerationRef.current++
+    revisionRef.current++
+    setSlMap({})
+    setSlAvailable(false)
     loadStates()
+    const timer = setInterval(loadStates, 5000)
+    return () => clearInterval(timer)
   }, [loadStates, reloadSignal])
 
   useOrderEventRefresh(loadStates, {
@@ -181,34 +202,60 @@ export function useTrailingSL(reloadSignal?: unknown) {
     delay: 200,
   })
 
-  const persist = useCallback((sl: SLState, force = false) => {
-    const key = slKey(sl.symbol, sl.exchange, sl.product)
-    const now = Date.now()
-    if (!force && now - (lastPersistRef.current[key] ?? 0) < PERSIST_THROTTLE_MS) return
-    lastPersistRef.current[key] = now
-    scalpingApi.saveSL(toBackend(sl)).catch(() => {})
-  }, [])
-
-  // Save SL config. The server-side monitor enforces it on the next poll; we
-  // also reflect it locally immediately for a responsive UI.
+  // A displayed stop must have a server acknowledgement. Transport failures
+  // can have uncertain outcomes, so preserve the last confirmed state and warn.
   const setSL = useCallback(
-    (sl: SLState) => {
-      setSlMap((prev) => ({ ...prev, [slKey(sl.symbol, sl.exchange, sl.product)]: sl }))
-      persist(sl, true)
+    async (sl: SLState): Promise<boolean> => {
+      const scope = scopeRef.current
+      const generation = scopeGenerationRef.current
+      revisionRef.current++
+      try {
+        const response = await scalpingApi.saveSL(toBackend(sl))
+        if (response.status !== 'success' || !response.data) {
+          throw new Error(response.message || 'Stop-loss save was not confirmed')
+        }
+        if (scope === scopeRef.current && generation === scopeGenerationRef.current) {
+          revisionRef.current++
+          // Request, commit and response order can differ. Always re-read the
+          // canonical state; an acknowledgement is not the latest configuration.
+          loadStates()
+        }
+        return true
+      } catch (error) {
+        showToast.error(
+          `Stop-loss save not confirmed: ${errorMessage(error)}. Verify the saved SL before trading.`,
+          'orders'
+        )
+        return false
+      }
     },
-    [persist]
+    [loadStates]
   )
 
-  const clearSL = useCallback((symbol: string, exchange: string, product: string) => {
-    const key = slKey(symbol, exchange, product)
-    setSlMap((prev) => {
-      const next = { ...prev }
-      delete next[key]
-      return next
-    })
-    delete lastPersistRef.current[key]
-    scalpingApi.deleteSL(symbol, exchange, product).catch(() => {})
-  }, [])
+  const clearSL = useCallback(
+    async (symbol: string, exchange: string, product: string): Promise<boolean> => {
+      const scope = scopeRef.current
+      const generation = scopeGenerationRef.current
+      revisionRef.current++
+      try {
+        const response = await scalpingApi.deleteSL(symbol, exchange, product)
+        if (response.status !== 'success' || response.deleted !== true)
+          throw new Error('Stop-loss removal was not confirmed')
+        if (scope === scopeRef.current && generation === scopeGenerationRef.current) {
+          revisionRef.current++
+          loadStates()
+        }
+        return true
+      } catch (error) {
+        showToast.error(
+          `Stop-loss removal not confirmed: ${errorMessage(error)}. Verify the saved SL.`,
+          'orders'
+        )
+        return false
+      }
+    },
+    [loadStates]
+  )
 
-  return { slMap, setSL, clearSL }
+  return { slMap, slAvailable, setSL, clearSL }
 }

@@ -1009,6 +1009,24 @@ def _rebuild_legacy_leg(
         sign = 1.0 if position == "B" else -1.0
         realized = (float(exit_avg) - float(entry_avg)) * applied_exit_qty * sign
 
+    # An entry that carried its own levels wins over the leg's configuration:
+    # the configuration describes the leg, the order row describes this trade.
+    entry_risk = (entry or {}).get("risk") or {}
+    if entry_risk:
+        config_leg = {
+            **config_leg,
+            "risk_unit": entry_risk.get("risk_unit"),
+            "sl_pts": entry_risk.get("sl_pts"),
+            "target_pts": entry_risk.get("target_pts"),
+            "trail": entry_risk.get("trail") or {},
+        }
+        if cp_leg.get("sl_pts") is None and cp_leg.get("target_pts") is None:
+            cp_leg = {
+                **cp_leg,
+                "risk_unit": entry_risk.get("risk_unit"),
+                "trail_x": (entry_risk.get("trail") or {}).get("x"),
+                "trail_y": (entry_risk.get("trail") or {}).get("y"),
+            }
     sl_pts, target_pts, trail_x, trail_y, lots = _risk_params(cp_leg, config_leg)
 
     # Set only while an exit is filled or still working. A dead exit must leave
@@ -1066,6 +1084,7 @@ def _rebuild_legacy_leg(
         "status": status,
         "tick_source": "ws",
         # Risk levels
+        "risk_unit": str(cp_leg.get("risk_unit") or config_leg.get("risk_unit") or "points"),
         "sl_pts": sl_pts,
         "target_pts": target_pts,
         "trail_x": trail_x,

@@ -1,3 +1,4 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import {
   ArrowDown,
   ArrowUp,
@@ -54,7 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type OrderEventType, useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 // Note: AlertDialog still used for Cancel All Orders
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
@@ -131,7 +132,7 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 export default function OrderBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerPriceFormatter(user?.broker)
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)

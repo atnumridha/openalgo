@@ -209,38 +209,40 @@ def get_order_book(auth):
 
 
 def get_trade_book(auth):
-    """Fetch closed / filled orders (fills) for today only."""
-    try:
-        from datetime import datetime
-        import pytz
-        
-        # Get today's date in IST
-        ist = pytz.timezone("Asia/Kolkata")
-        today_date = datetime.now(ist).date()
-        
-        result = get_api_response("/v2/fills", auth, method="GET")
-        logger.debug(f"[DeltaExchange] /v2/fills count={len(result.get('result', []))}")
-        if result.get("success"):
-            all_trades = result.get("result", [])
-            today_trades = []
-            for trade in all_trades:
-                created_at = trade.get("created_at")
-                if created_at:
-                    try:
-                        # Parse UTC timestamp and convert to IST
-                        dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
-                        dt_ist = dt_utc.astimezone(ist)
-                        if dt_ist.date() == today_date:
-                            today_trades.append(trade)
-                    except Exception as e:
-                        logger.warning(f"Error parsing date {created_at}: {e}")
-            return today_trades
-            
-        logger.warning(f"[DeltaExchange] get_trade_book unexpected response: {result}")
-        return []
-    except Exception as e:
-        logger.error(f"[DeltaExchange] Exception in get_trade_book: {e}")
-        return []
+    """Fetch the complete IST day's fills, or fail without returning a partial book."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    start_us = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1_000_000)
+    end_us = int(now.timestamp() * 1_000_000)
+    params = {"start_time": start_us, "end_time": end_us, "page_size": 100}
+    fills, cursors = {}, set()
+    # Bound work per request; exceeding this is unavailable, never a truncated total.
+    for _ in range(100):
+        result = get_api_response("/v2/fills", auth, method="GET", params=dict(params))
+        if not result.get("success") or not isinstance(result.get("result"), list):
+            raise RuntimeError("Delta trade history unavailable; complete P&L cannot be calculated")
+        for fill in result["result"]:
+            if not isinstance(fill, dict) or not fill.get("id"):
+                raise RuntimeError("Invalid Delta fill; complete P&L cannot be calculated")
+            try:
+                timestamp = datetime.fromisoformat(fill["created_at"].replace("Z", "+00:00"))
+                if timestamp.tzinfo is None:
+                    raise ValueError("Missing timezone")
+                time_us = int(timestamp.timestamp() * 1_000_000)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError("Invalid Delta fill timestamp") from exc
+            if start_us <= time_us <= end_us:
+                fills.setdefault(str(fill["id"]), fill)
+        cursor = (result.get("meta") or {}).get("after")
+        if not cursor:
+            return sorted(fills.values(), key=lambda row: row["created_at"], reverse=True)
+        if cursor in cursors:
+            raise RuntimeError("Delta fill pagination repeated; complete P&L unavailable")
+        cursors.add(cursor)
+        params["after"] = cursor
+    raise RuntimeError("Delta fill page limit reached; complete P&L unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +397,11 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 # Order placement
 # ---------------------------------------------------------------------------
 
-def _set_leverage(product_id: int, leverage: str, auth: str) -> None:
+class DeltaOrderNotSubmitted(RuntimeError):
+    not_submitted = True
+
+
+def _set_leverage(product_id: int, leverage: str, auth: str, *, strict=False) -> None:
     """
     Set leverage for a product before placing an order.
 
@@ -410,12 +416,21 @@ def _set_leverage(product_id: int, leverage: str, auth: str) -> None:
     (the default) a warning is logged and the order proceeds at the broker's
     current leverage for that product.
     """
-    abort = os.getenv("DELTA_ABORT_ON_LEVERAGE_FAILURE", "false").strip().lower() == "true"
+    abort = strict or os.getenv("DELTA_ABORT_ON_LEVERAGE_FAILURE", "false").strip().lower() == "true"
 
     endpoint = f"/v2/products/{product_id}/orders/leverage"
     payload = json.dumps({"leverage": leverage})
     result = get_api_response(endpoint, auth, method="POST", payload=payload)
     if result.get("success"):
+        if strict:
+            from decimal import Decimal, InvalidOperation
+            verified = get_api_response(endpoint, auth, method="GET")
+            try:
+                confirmed = verified.get("success") and Decimal(str(verified.get("result", {}).get("leverage"))) == Decimal(leverage)
+            except (InvalidOperation, TypeError, ValueError):
+                confirmed = False
+            if not confirmed:
+                raise DeltaOrderNotSubmitted("Delta did not confirm the requested leverage; entry blocked")
         logger.debug(
             f"[DeltaExchange] Leverage set to {leverage}x for product_id={product_id}"
         )
@@ -426,7 +441,7 @@ def _set_leverage(product_id: int, leverage: str, auth: str) -> None:
         )
         if abort:
             logger.error(msg)
-            raise RuntimeError(msg)
+            raise DeltaOrderNotSubmitted(msg)
         else:
             logger.warning(msg)
 
@@ -465,8 +480,15 @@ def place_order_api(data, auth):
             logger.warning(f"[DeltaExchange] Could not read leverage config: {e}")
     if not leverage:
         leverage = os.getenv("DELTA_DEFAULT_LEVERAGE", "")
-    if leverage and leverage != "0":
-        _set_leverage(int(token), leverage, auth)
+    if leverage and leverage != "0" and data.get("reduce_only") is not True:
+        # An explicit UI/API choice must never silently fall back to account leverage.
+        explicit = data.get("leverage") is not None
+        if explicit:
+            from decimal import Decimal
+            value = Decimal(leverage)
+            if not value.is_finite() or value != value.to_integral_value() or not 1 <= value <= 200:
+                raise ValueError("Leverage must be a whole number from 1 to 200")
+        _set_leverage(int(token), leverage, auth, strict=explicit)
 
     newdata = transform_data(data, token)
     payload = json.dumps(newdata)
@@ -487,7 +509,10 @@ def place_order_api(data, auth):
         error = result.get("error", {})
         msg = error.get("message") or error.get("code") or str(error)
         logger.error(f"[DeltaExchange] Order placement failed: {msg}")
-        response_dict = {"status": "error", "message": msg}
+        response_dict = {"status": "error", "message": msg,
+                         "submission_uncertain": error.get("code") in (
+                             "request_error", "no_response", "empty_response", "json_parse_error"
+                         )}
 
     # Minimal response shim for callers that check .status_code
     class _Resp:

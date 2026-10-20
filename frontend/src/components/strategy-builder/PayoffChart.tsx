@@ -16,6 +16,7 @@ export interface PayoffChartProps {
   /** If true, show the dashed current-value scenario curve in addition to expiry. */
   showTplus0?: boolean
   height?: number
+  formatPrice?: (value: number) => string
   formatCurrency: (value: number) => string
 }
 
@@ -65,6 +66,7 @@ export function PayoffChart({
   showTplus0 = true,
   height = 440,
   formatCurrency,
+  formatPrice = formatCurrency,
 }: PayoffChartProps) {
   const regionHeadingId = useId()
   const { mode, appMode } = useThemeStore()
@@ -137,7 +139,7 @@ export function PayoffChart({
       '<extra></extra>'
     const hoverData = (values: number[]) =>
       samples.map((sample, index) => [
-        formatCurrency(sample.underlying),
+        formatPrice(sample.underlying),
         pctFromSpot[index],
         formatCurrency(values[index]),
       ])
@@ -410,6 +412,7 @@ export function PayoffChart({
     colors,
     isDark,
     formatCurrency,
+    formatPrice,
     height,
   ])
 
@@ -481,7 +484,7 @@ export function PayoffChart({
       />
       <div className="space-y-3 border-t px-3 py-3 text-xs">
         <output aria-live="polite" aria-atomic="true" className="block text-muted-foreground">
-          Scenario spot <strong className="text-foreground">{formatCurrency(scenario.spot)}</strong>
+          Scenario spot <strong className="text-foreground">{formatPrice(scenario.spot)}</strong>
           .
           {scenarioSample && (
             <>
@@ -515,7 +518,7 @@ export function PayoffChart({
             <dt className="text-muted-foreground">Breakevens</dt>
             <dd data-testid="breakeven-summary" className="font-semibold tabular-nums">
               {payoff.breakevens.length > 0
-                ? `${summaryBreakevens.map(formatCurrency).join(', ')}${
+                ? `${summaryBreakevens.map(formatPrice).join(', ')}${
                     payoff.breakevens.length > summaryBreakevens.length
                       ? ` (${summaryBreakevens.length} of ${payoff.breakevens.length} shown)`
                       : ''
@@ -564,7 +567,7 @@ export function PayoffChart({
             {representativeSelection.samples.map((sample) => (
               <tr key={sample.underlying} className="border-b last:border-0">
                 <th scope="row" className="break-words px-2 py-1 font-medium tabular-nums">
-                  {formatCurrency(sample.underlying)}
+                  {formatPrice(sample.underlying)}
                 </th>
                 <td className="break-words px-2 py-1 tabular-nums">
                   {formatCurrency(sample.expiry)}

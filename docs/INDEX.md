@@ -45,6 +45,11 @@ need → drill into the specific file. Don't load everything at once.
 |---|---|
 | Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
+| ML Signals (`/ml-signals`): Delta perpetual signals, one-click Sandbox/Live trades, smart exit, nightly retrain, crypto fees and the Scalper/Diwali offers | [CHANGELOG.md](CHANGELOG.md) (ML Signals and crypto fees) · signal entries with their own levels: [prompt/strategy_rms_documentation.md](prompt/strategy_rms_documentation.md) (Signal mode semantics) |
+| Source-backed Delta crypto chart strategies | [research/crypto-strategy-sources.md](research/crypto-strategy-sources.md) |
+| Liquidity extra-confirmation BTCUSD execution: configuration, partials, trailing and recovery | [userguide/liquidity-execution.md](userguide/liquidity-execution.md) |
+| Offline BTCUSD, NIFTY, BANKNIFTY and SENSEX chart-combination research | [research/multi-market-chart-research.md](research/multi-market-chart-research.md) |
+| 1H, 4H and daily liquidity, source-guided Entry / SL / Target chart plans | [research/htf-liquidity-indicator.md](research/htf-liquidity-indicator.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |
 | Telegram chart rendering | [telegram-chart-rendering.md](telegram-chart-rendering.md) |

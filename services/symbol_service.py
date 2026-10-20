@@ -63,6 +63,9 @@ def get_symbol_info_with_auth(
             "instrumenttype": result.instrumenttype,
             "tick_size": result.tick_size,
             "freeze_qty": freeze_qty,
+            # Units of the underlying in one contract (0.001 BTC on BTCUSD).
+            # Only crypto sets it; elsewhere a contract is the lot.
+            "contract_value": getattr(result, "contract_value", None),
         }
 
         response_data = {"data": symbol_info, "status": "success"}

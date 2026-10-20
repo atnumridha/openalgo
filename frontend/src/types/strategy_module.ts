@@ -98,7 +98,7 @@ export type WebhookResult =
  * server (30 chars), so this union is the set the UI offers rather than a
  * constraint the API enforces.
  */
-export type UniverseTab = 'weekly_monthly' | 'monthly_only' | 'stocks_fno' | 'mcx'
+export type UniverseTab = 'weekly_monthly' | 'monthly_only' | 'stocks_fno' | 'mcx' | 'crypto'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -438,13 +438,20 @@ export interface Checkpoint {
 // Wizard vocabulary
 // ---------------------------------------------------------------------------
 
-export const UNIVERSE_TABS: UniverseTab[] = ['weekly_monthly', 'monthly_only', 'stocks_fno', 'mcx']
+export const UNIVERSE_TABS: UniverseTab[] = [
+  'weekly_monthly',
+  'monthly_only',
+  'stocks_fno',
+  'mcx',
+  'crypto',
+]
 
 export const UNIVERSE_TAB_LABELS: Record<UniverseTab, string> = {
   weekly_monthly: 'Weekly & Monthly Expiries',
   monthly_only: 'Monthly Only Expiry',
   stocks_fno: 'Stocks – Cash / F&O',
   mcx: 'Commodities (MCX)',
+  crypto: 'Crypto (Delta)',
 }
 
 export const UNIVERSE_TAB_HINT: Record<UniverseTab, string> = {
@@ -452,6 +459,7 @@ export const UNIVERSE_TAB_HINT: Record<UniverseTab, string> = {
   monthly_only: 'MIDCPNIFTY, BANKNIFTY, FINNIFTY, BANKEX',
   stocks_fno: 'Any NSE or BSE stock',
   mcx: 'CRUDEOIL, NATURALGAS, GOLD, SILVER, …',
+  crypto: 'BTC, ETH, SOL — perpetuals and options',
 }
 
 /** Universe tab label, tolerant of a value the UI does not know. */
@@ -479,6 +487,7 @@ export const TAB_EXPIRIES: Record<UniverseTab, ExpiryRank[]> = {
   monthly_only: ['monthly', 'next_month'],
   stocks_fno: ['monthly', 'next_month'],
   mcx: ['monthly', 'next_month'],
+  crypto: ['monthly', 'next_month'],
 }
 
 export const TAB_SEGMENTS: Record<UniverseTab, Segment[]> = {
@@ -486,6 +495,7 @@ export const TAB_SEGMENTS: Record<UniverseTab, Segment[]> = {
   monthly_only: ['futures', 'options'],
   stocks_fno: ['cash', 'futures', 'options'],
   mcx: ['futures', 'options'],
+  crypto: ['futures', 'options'],
 }
 
 export interface UnderlyingChoice {
@@ -524,6 +534,11 @@ export const TAB_DEFAULT_UNDERLYINGS: Record<UniverseTab, UnderlyingChoice[]> = 
     { symbol: 'GOLD', name: 'Gold', exchange: 'MCX' },
     { symbol: 'SILVER', name: 'Silver', exchange: 'MCX' },
   ],
+  crypto: [
+    { symbol: 'BTC', name: 'Bitcoin perpetual', exchange: 'CRYPTO' },
+    { symbol: 'ETH', name: 'Ether perpetual', exchange: 'CRYPTO' },
+    { symbol: 'SOL', name: 'Solana perpetual', exchange: 'CRYPTO' },
+  ],
 }
 
 /** Whether the tab's universe is closed (a dropdown) or open (type-ahead). */
@@ -532,6 +547,7 @@ export const TAB_UNDERLYING_IS_CLOSED_SET: Record<UniverseTab, boolean> = {
   monthly_only: true,
   stocks_fno: false,
   mcx: false,
+  crypto: false,
 }
 
 /**
@@ -548,6 +564,7 @@ export const TAB_UNDERLYING_EXCHANGES: Record<UniverseTab, string[]> = {
   monthly_only: ['NSE_INDEX', 'BSE_INDEX'],
   stocks_fno: ['NSE', 'BSE'],
   mcx: ['MCX'],
+  crypto: ['CRYPTO'],
 }
 
 /** The exchange a typed underlying defaults to on an open-universe tab. */
@@ -556,6 +573,7 @@ export const TAB_DEFAULT_EXCHANGE: Record<UniverseTab, string> = {
   monthly_only: 'NSE_INDEX',
   stocks_fno: 'NSE',
   mcx: 'MCX',
+  crypto: 'CRYPTO',
 }
 
 /** A strike named relative to the money - the validator's `ATM_OFFSETS`. */
@@ -601,7 +619,7 @@ export const LEG_SIDE_LABELS: Record<LegSide, string> = {
  * Signal mode does not do option spreads - a signal leg carries no option
  * fields at all - so the two index-options tabs have nothing to offer it.
  */
-export const SIGNAL_MODE_TABS: UniverseTab[] = ['stocks_fno', 'mcx']
+export const SIGNAL_MODE_TABS: UniverseTab[] = ['stocks_fno', 'mcx', 'crypto']
 
 /** Segments a signal leg may take. Narrower than a batch leg's: no options. */
 export const SIGNAL_LEG_SEGMENTS: Segment[] = ['cash', 'futures']
@@ -635,6 +653,7 @@ export const SIGNAL_LEG_EXCHANGES = [
   'BCD',
   'NCDEX',
   'NCO',
+  'CRYPTO',
 ]
 
 /**
@@ -670,6 +689,7 @@ export const TAB_INTRADAY_DEFAULTS: Record<UniverseTab, { entry: string; exit: s
   monthly_only: { entry: '09:35', exit: '15:15' },
   stocks_fno: { entry: '09:35', exit: '15:15' },
   mcx: { entry: '09:00', exit: '23:25' },
+  crypto: { entry: '00:00', exit: '23:55' },
 }
 
 export const MAX_LEGS = 10
@@ -900,7 +920,7 @@ export function freshBatchLeg(id: number, tab: UniverseTab): Leg {
  * invites a strategy that trades something nobody chose.
  */
 export function freshSignalLeg(id: number, tab: UniverseTab): Leg {
-  const segment: Segment = tab === 'mcx' ? 'futures' : 'cash'
+  const segment: Segment = tab === 'mcx' || tab === 'crypto' ? 'futures' : 'cash'
   const exchange =
     segment === 'futures'
       ? derivativeExchangeFor(TAB_DEFAULT_EXCHANGE[tab])

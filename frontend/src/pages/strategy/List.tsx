@@ -95,6 +95,10 @@ export default function StrategyList() {
       </div>
 
       <Card>
+        <CardHeader><CardTitle>Delta AI scalper</CardTitle><CardDescription>BTCUSD paper runs · Codex or local DeepSeek · Live analysis, P&L and three-symbol training results</CardDescription></CardHeader>
+        <CardContent><Button onClick={() => navigate('/strategy/delta-scalper')}>Open Delta scalper</Button></CardContent>
+      </Card>
+      <Card>
         <CardHeader>
           <CardTitle>Saved strategies</CardTitle>
           <CardDescription>

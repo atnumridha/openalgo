@@ -1,7 +1,12 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { scalpingApi } from '@/api/scalping'
+import { scalpingApi, type MLPlan } from '@/api/scalping'
 import { type QuotesData, tradingApi } from '@/api/trading'
+import { IndicatorSignal } from '@/components/scalping/IndicatorSignal'
+import { MlEntryPlan } from '@/components/scalping/MlEntryPlan'
+import { MlDefaultsControls } from '@/components/scalping/MlDefaultsControls'
+import { DeltaExecutionControls } from '@/components/scalping/DeltaExecutionControls'
 import { ScalpChart } from '@/components/scalping/ScalpChart'
 import { SetSLDialog } from '@/components/scalping/SetSLDialog'
 import { Badge } from '@/components/ui/badge'
@@ -30,11 +35,16 @@ import { useMarketData } from '@/hooks/useMarketData'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { findLegSL, type SLState, useTrailingSL } from '@/hooks/useTrailingSL'
 import { priceDecimals } from '@/lib/scalpingPrice'
+import { atrStopDistance, predefinedProtection, executionProtection } from '@/lib/scalpingRisk'
+import { mlDefaultsTicket, mlManualEntryBlock } from '@/lib/scalpingMlDefaults'
+import { chartPosition, grossLabel } from '@/lib/scalpingChartPosition'
 import { buildPositionRows } from '@/lib/scalpingRows'
+import { isTradingDay as isTodayTs } from '@/lib/scalpingSession'
 import { mergeTick, type TickView } from '@/lib/scalpingTick'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import type {
+  FuturesContract,
   OptionChainRow,
   OptionType,
   ScalpingAction,
@@ -50,16 +60,13 @@ const DEFAULT_STRIKE_COUNT = 10
 const MAX_LOTS = 20
 const ORDER_COOLDOWN_MS = 120 // min gap between two order fires (anti double-fire)
 const ARMED_STORAGE_KEY = 'scalping.armed'
-// Live charts are OFF by default (opt-in). Three live candlestick charts each
-// open their own market-data subscription and poll broker history, so keeping
-// them off unless wanted spares CPU/network. The choice persists across reloads.
-const CHARTS_STORAGE_KEY = 'scalping.showCharts'
+// Charts stay mounted; the selected timeframe persists across reloads.
 const CHART_TF_STORAGE_KEY = 'scalping.chartTf'
 const CHART_TIMEFRAMES = ['1m', '5m', '15m'] as const
 
-// NSE/BSE = equity; NFO/BFO/MCX/CDS = derivatives (options + futures).
-type ScalpingExchange = 'NSE' | 'BSE' | 'NFO' | 'BFO' | 'MCX' | 'CDS'
-const EXCHANGES: ScalpingExchange[] = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
+// NSE/BSE = equity; other entries are derivatives (options + futures/perps).
+type ScalpingExchange = 'NSE' | 'BSE' | 'NFO' | 'BFO' | 'MCX' | 'CDS' | 'CRYPTO'
+const EXCHANGES: ScalpingExchange[] = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO']
 
 // Default underlying per F&O exchange (user can change via search).
 const DEFAULT_UNDERLYING: Record<string, string> = {
@@ -67,22 +74,11 @@ const DEFAULT_UNDERLYING: Record<string, string> = {
   BFO: 'SENSEX',
   MCX: 'CRUDEOIL',
   CDS: 'USDINR',
+  CRYPTO: 'BTCUSD',
 }
 
 const isEquityExchange = (e: ScalpingExchange) => e === 'NSE' || e === 'BSE'
-
-// Keep the Order/Trade books to TODAY only. Broker/sandbox books are already
-// session-scoped server-side; this is a belt-and-suspenders guard so a stale or
-// multi-day book can never show prior-day rows. Timestamps come through as
-// "YYYY-MM-DD HH:MM:SS" (IST); unknown/unparseable formats are kept (not hidden).
-const isTodayTs = (ts?: string): boolean => {
-  if (!ts) return true
-  const todayKey = new Date().toLocaleDateString('en-CA') // local YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}/.test(ts)) return ts.slice(0, 10) === todayKey
-  const d = new Date(ts)
-  if (Number.isNaN(d.getTime())) return true
-  return d.toLocaleDateString('en-CA') === todayKey
-}
+const isCryptoExchange = (e: ScalpingExchange) => e === 'CRYPTO'
 
 // Order/position events that should refresh the books (event-driven, no polling).
 const BOOK_EVENTS = [
@@ -109,20 +105,10 @@ interface SLTarget {
   optionType: OptionType
 }
 
-// Read the persisted One-Click arm state (captured across reloads).
+// Read the persisted One-Click on/off state (captured across reloads).
 function loadArmed(): boolean {
   try {
     return localStorage.getItem(ARMED_STORAGE_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-// Read the persisted charts on/off preference. Defaults to OFF (charts are
-// opt-in) — a missing key reads as off.
-function loadShowCharts(): boolean {
-  try {
-    return localStorage.getItem(CHARTS_STORAGE_KEY) === '1'
   } catch {
     return false
   }
@@ -193,6 +179,9 @@ function RangeBar({
   low?: number
   decimals?: number
 }) {
+  const {user} = useAuthStore()
+  const display = useBrokerPriceFormatter(user?.broker)
+  const show = (value: number) => user?.broker === 'deltaexchange' ? display(value) : value.toFixed(decimals)
   if (ltp == null || high == null || low == null || high <= low) {
     return <div className="my-3 h-px w-full bg-border" />
   }
@@ -201,21 +190,21 @@ function RangeBar({
   return (
     <div className="my-1">
       <div className="flex justify-between font-mono text-[11px] text-muted-foreground">
-        <span>L: {low.toFixed(decimals)}</span>
-        <span>{high.toFixed(decimals)} :H</span>
+        <span>L: {show(low)}</span>
+        <span>{show(high)} :H</span>
       </div>
       <div className="relative my-2 h-1 rounded bg-muted">
         {openPct != null && (
           <span
             className="-translate-x-1/2 -translate-y-1/2 absolute top-1/2 h-2.5 w-2.5 rounded-full border-2 border-muted-foreground bg-background"
             style={{ left: `${openPct}%` }}
-            title={`Open ${open?.toFixed(decimals)}`}
+            title={`Open ${open == null ? '—' : show(open)}`}
           />
         )}
         <span
           className="-translate-x-1/2 -top-1 absolute text-[10px] text-foreground"
           style={{ left: `${ltpPct}%` }}
-          title={`LTP ${ltp.toFixed(decimals)}`}
+          title={`LTP ${show(ltp)}`}
         >
           ▲
         </span>
@@ -235,6 +224,9 @@ function Ticker({
   low,
   decimals = 2,
 }: TickerProps) {
+  const {user} = useAuthStore()
+  const display = useBrokerPriceFormatter(user?.broker)
+  const show = (value: number) => user?.broker === 'deltaexchange' ? display(value) : value.toFixed(decimals)
   const isUp = (changePercent ?? change ?? 0) >= 0
   return (
     <Card>
@@ -246,19 +238,19 @@ function Ticker({
         <RangeBar ltp={ltp} open={open} high={high} low={low} decimals={decimals} />
         <div className="flex items-baseline gap-2">
           <span className="font-mono text-2xl font-semibold tabular-nums">
-            {ltp != null ? ltp.toFixed(decimals) : '—'}
+            {ltp != null ? show(ltp) : '—'}
           </span>
           {(change != null || changePercent != null) && (
             <span className={`font-mono text-sm ${isUp ? 'text-green-600' : 'text-red-600'}`}>
               {isUp ? '+' : ''}
-              {change != null ? change.toFixed(decimals) : ''}
+              {change != null ? show(change) : ''}
               {changePercent != null ? ` (${changePercent.toFixed(2)}%)` : ''}
             </span>
           )}
         </div>
         {open != null && (
           <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-            O {open.toFixed(decimals)}
+            O {show(open)}
           </div>
         )}
       </CardContent>
@@ -267,20 +259,32 @@ function Ticker({
 }
 
 export default function Scalping() {
-  const apiKey = useAuthStore((s) => s.apiKey)
+  const displayAmount = useBrokerCurrencyFormatter('deltaexchange')
+  const displayPrice = useBrokerPriceFormatter('deltaexchange')
+  const grossDisplay = (value: number | null, currency: 'USD' | 'INR') => currency === 'USD' ? (value == null ? 'unavailable' : displayAmount(value)) : grossLabel(value, currency)
+  const { apiKey, user } = useAuthStore()
+  const isDelta = user?.broker === 'deltaexchange'
+  const [leverage, setLeverage] = useState(25)
+  const [mlDefaults, setMlDefaults] = useState(true)
+  const [mlPlan, setMlPlan] = useState<MLPlan | undefined>()
+  const [mlPreviewSide, setMlPreviewSide] = useState<ScalpingAction>('BUY')
   const appMode = useThemeStore((s) => s.appMode) // 'live' | 'analyzer'
   const queryClient = useQueryClient()
+  const isDeltaBroker = user?.broker === 'deltaexchange'
 
-  // Exchange / segment. NSE/BSE = Equity; NFO/BFO/MCX/CDS = derivatives with
-  // Options (dual-leg CE/PE) or Futures (single instrument). Default = NFO.
-  const [exchange, setExchange] = useState<ScalpingExchange>('NFO')
-  const [segment, setSegment] = useState<Segment>('OPTIONS')
+  // Exchange / segment. NSE/BSE = Equity; CRYPTO uses Delta futures/perps only;
+  // other derivative exchanges support Options (dual-leg CE/PE) or Futures.
+  const [exchange, setExchange] = useState<ScalpingExchange>(isDeltaBroker ? 'CRYPTO' : 'NFO')
+  const [segment, setSegment] = useState<Segment>(isDeltaBroker ? 'FUTURES' : 'OPTIONS')
   const isEquityExch = isEquityExchange(exchange)
-  const optionsMode = !isEquityExch && segment === 'OPTIONS' // dual-leg CE/PE
+  const isCryptoExch = isCryptoExchange(exchange)
+  const optionsMode = !isEquityExch && !isCryptoExch && segment === 'OPTIONS' // dual-leg CE/PE
   const isSingle = !optionsMode // equity + futures use a single instrument
 
   // Derivative underlying (default per exchange, searchable). Equity uses `instrument`.
-  const [underlying, setUnderlying] = useState<string>(DEFAULT_UNDERLYING.NFO)
+  const [underlying, setUnderlying] = useState<string>(
+    isDeltaBroker ? DEFAULT_UNDERLYING.CRYPTO : DEFAULT_UNDERLYING.NFO
+  )
   const [underlyingQuery, setUnderlyingQuery] = useState('')
   const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [expiry, setExpiry] = useState<string>('')
@@ -292,17 +296,16 @@ export default function Scalping() {
   const [instrument, setInstrument] = useState<SearchInstrument | null>(null)
   const [equityShares, setEquityShares] = useState(1)
 
-  // Order-entry controls. The One-Click arm state is captured/persisted across reloads.
+  // Order-entry controls. The One-Click state is captured/persisted across reloads.
   const [armed, setArmed] = useState<boolean>(loadArmed)
   const [lots, setLots] = useState(1)
   const [product, setProduct] = useState<ScalpingProduct>('NRML')
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
+  const [entryFeedback, setEntryFeedback] = useState<{kind: 'pending' | 'success' | 'error'; message: string} | null>(null)
+  const entryInFlight = useRef(false)
 
-  // Live charts are opt-in (default off) and heavy — when off, the ScalpChart
-  // components don't mount, so they open no feed subscriptions. Both this toggle
-  // and the timeframe below persist browser-side so the terminal reopens the way
-  // you left it.
-  const [showCharts, setShowCharts] = useState<boolean>(loadShowCharts)
+  // Always display charts as requested.
+  const showCharts = true
 
   // Shared timeframe for the live charts (OpenAlgo interval format). One switch
   // flips every chart (CE / underlying / PE, or the single instrument) at once.
@@ -310,12 +313,14 @@ export default function Scalping() {
 
   // Global predefined SL / Target — when enabled, auto-attached to every new entry.
   // Value is in points or percent of entry (default points).
-  const [predefSlOn, setPredefSlOn] = useState(false)
+  const [predefSlOn, setPredefSlOn] = useState(true)
   const [predefSlValue, setPredefSlValue] = useState('')
+  const [predefSlAuto, setPredefSlAuto] = useState(true)
+  const [atrSuggestion, setAtrSuggestion] = useState<{ symbol: string; exchange: string; atr?: number; asof?: number } | null>(null)
   const [predefSlUnit, setPredefSlUnit] = useState<'PTS' | 'PCT'>('PTS')
-  const [predefTgtOn, setPredefTgtOn] = useState(false)
-  const [predefTgtValue, setPredefTgtValue] = useState('')
-  const [predefTgtUnit, setPredefTgtUnit] = useState<'PTS' | 'PCT'>('PTS')
+  const [predefTgtOn, setPredefTgtOn] = useState(true)
+  const [predefTgtValue, setPredefTgtValue] = useState('3')
+  const [predefTgtUnit, setPredefTgtUnit] = useState<'PTS' | 'PCT' | 'RR'>('RR')
 
   useEffect(() => {
     try {
@@ -325,15 +330,7 @@ export default function Scalping() {
     }
   }, [armed])
 
-  // Persist the charts on/off and timeframe choices browser-side.
-  useEffect(() => {
-    try {
-      localStorage.setItem(CHARTS_STORAGE_KEY, showCharts ? '1' : '0')
-    } catch {
-      // ignore storage failures (private mode, etc.)
-    }
-  }, [showCharts])
-
+  // Persist only the timeframe.
   useEffect(() => {
     try {
       localStorage.setItem(CHART_TF_STORAGE_KEY, chartTf)
@@ -342,12 +339,15 @@ export default function Scalping() {
     }
   }, [chartTf])
 
-  // Exchange change: equity → EQUITY segment; F&O → keep Options/Futures (default
-  // Options) + default underlying. Reset transient selections.
+  // Exchange change: equity -> EQUITY segment; CRYPTO -> Futures only; other
+  // derivative exchanges keep Options/Futures. Reset transient selections.
   // biome-ignore lint/correctness/useExhaustiveDependencies: run only on exchange change
   useEffect(() => {
     if (isEquityExch) {
       setSegment('EQUITY')
+    } else if (isCryptoExch) {
+      setSegment('FUTURES')
+      setUnderlying(DEFAULT_UNDERLYING.CRYPTO)
     } else {
       setSegment((s) => (s === 'OPTIONS' || s === 'FUTURES' ? s : 'OPTIONS'))
       setUnderlying(DEFAULT_UNDERLYING[exchange] || '')
@@ -421,7 +421,7 @@ export default function Scalping() {
     queryFn: () => scalpingApi.futures(underlying, exchange),
     enabled: !isEquityExch && segment === 'FUTURES' && !!underlying,
   })
-  const futContracts = futResp?.data ?? []
+  const futContracts: FuturesContract[] = futResp?.data ?? []
 
   // Default the futures contract to the nearest expiry when the list loads (and
   // keep a valid selection across underlying/exchange changes), so the Futures
@@ -476,35 +476,40 @@ export default function Scalping() {
             optionType: 'CE', // unused for non-options; kept for the shared leg shape
             strike: 0,
             lotsize: instrument.lotsize || 1,
-            tickSize: 0,
+            tickSize: instrument.tick_size ?? futContracts.find((c) => c.symbol === instrument.symbol)?.tick_size ?? 0,
           }
         : null,
-    [instrument]
+    [instrument, futContracts]
   )
 
-  // Books (positions / orders / trades). Fully event-driven (no polling):
+  // Books refresh on order events; positions also reconcile every 5 seconds.
   // prices/MTM stream over the WebSocket feed, and these fetches refresh on broker
   // order events (useOrderEventRefresh below) — including the server-side risk
   // monitor's auto-exits, which emit order events. refetchOnWindowFocus is an
   // event (tab focus), not an interval. The query key includes appMode so toggling
   // Analyze/Live re-fetches the corresponding (sandbox vs live) positions/books.
-  const { data: posResp } = useQuery({
+  const { data: posResp, isError: posError, dataUpdatedAt: posUpdatedAt } = useQuery({
     queryKey: ['scalping', 'positions', appMode],
     queryFn: () => tradingApi.getPositions(apiKey ?? ''),
     enabled: !!apiKey,
     refetchOnWindowFocus: true,
+    refetchInterval: 5000,
+    retry: false,
   })
   const { data: ordResp } = useQuery({
     queryKey: ['scalping', 'orders', appMode],
     queryFn: () => tradingApi.getOrders(apiKey ?? ''),
     enabled: !!apiKey,
     refetchOnWindowFocus: true,
+    refetchInterval: 5000,
   })
-  const { data: trdResp } = useQuery({
+  const { data: trdResp, isError: trdError } = useQuery({
     queryKey: ['scalping', 'trades', appMode],
     queryFn: () => tradingApi.getTrades(apiKey ?? ''),
     enabled: !!apiKey,
     refetchOnWindowFocus: true,
+    refetchInterval: 5000,
+    retry: false,
   })
   // The scalping list: instruments this terminal has traded (scopes the book to
   // the scalping strategy, since broker positions carry no strategy tag).
@@ -669,20 +674,27 @@ export default function Scalping() {
   )
 
   // Latest live data + predefined config for the (stable) order handler.
-  const marketDataRef = useRef(marketData)
-  marketDataRef.current = marketData
+  const getTickRef = useRef(getTick)
+  getTickRef.current = getTick
+  const autoSl = predefSlAuto && isSingle
+  const atrFresh = singleLeg && atrSuggestion?.symbol === singleLeg.symbol && atrSuggestion.exchange === singleLeg.exchange && atrSuggestion.asof && Date.now() / 1000 - atrSuggestion.asof <= 90
+  const atrDistance = atrFresh ? atrStopDistance(atrSuggestion?.atr, singleLeg?.tickSize ?? 0) : null
+  const effectiveSlValue = autoSl ? (atrDistance == null ? '' : String(atrDistance)) : predefSlValue
+  const effectiveSlUnit = autoSl ? 'PTS' : predefSlUnit
   const predefRef = useRef({
     slOn: predefSlOn,
-    slValue: predefSlValue,
-    slUnit: predefSlUnit,
+    slValue: effectiveSlValue,
+    slUnit: effectiveSlUnit,
+    slAsOf: autoSl ? atrSuggestion?.asof ?? 0 : undefined,
     tgtOn: predefTgtOn,
     tgtValue: predefTgtValue,
     tgtUnit: predefTgtUnit,
   })
   predefRef.current = {
     slOn: predefSlOn,
-    slValue: predefSlValue,
-    slUnit: predefSlUnit,
+    slValue: effectiveSlValue,
+    slUnit: effectiveSlUnit,
+    slAsOf: autoSl ? atrSuggestion?.asof ?? 0 : undefined,
     tgtOn: predefTgtOn,
     tgtValue: predefTgtValue,
     tgtUnit: predefTgtUnit,
@@ -692,17 +704,32 @@ export default function Scalping() {
   // fires exits runs SERVER-SIDE (services/scalping_risk_monitor_service.py) so
   // stops keep working after you leave /scalping or close the browser. This hook
   // only persists the config and reflects the server's live updates/auto-clears.
-  const { slMap, setSL, clearSL } = useTrailingSL(appMode)
+  const { slMap, slAvailable, setSL, clearSL } = useTrailingSL(appMode)
+  // Updated endpoints confirm complete reads; failures must not appear as flat
+  // or as a complete day's P&L. Older servers have no completeness marker.
+  const positionsComplete = !!apiKey && !posError && posResp?.status === 'success' &&
+    Date.now() - posUpdatedAt < 15000 && (!isDelta || appMode !== 'live' || posResp.complete === true)
+  const tradesComplete = !trdError && trdResp?.status === 'success' &&
+    (!isDelta || appMode !== 'live' || trdResp.complete === true)
+  const chartView = (symbol: string, exchange: string) => chartPosition(
+    positions, findLegSL(slMap, symbol, exchange, product), symbol, exchange, product,
+    liveLtp(symbol, exchange), positionsComplete, slAvailable
+  )
 
   // Position book: derived rows from positions + today's trades + SL,
   // with realtime LTP from the live feed (recomputes on each tick).
   const positionRows = useMemo(
-    () => buildPositionRows(positions, trades, slMap, liveLtp, trackedKeys),
-    [positions, trades, slMap, liveLtp, trackedKeys]
+    () => buildPositionRows(positions, scopedTrades, slAvailable ? slMap : {}, liveLtp, trackedKeys, { positionsComplete, tradesComplete }),
+    [positions, scopedTrades, slMap, slAvailable, liveLtp, trackedKeys, positionsComplete, tradesComplete]
   )
   // Summary reflects the displayed rows (scalping book), not raw account totals.
-  const netQty = positionRows.reduce((a, r) => a + r.netQty, 0)
-  const mtm = positionRows.reduce((a, r) => a + r.totalPnl, 0)
+  const netQty = positionsComplete ? positionRows.reduce((a, r) => a + (r.netQty ?? 0), 0) : null
+  const grossTotals = (['USD', 'INR'] as const).flatMap((currency) => {
+    const rows = positionRows.filter(r => r.currency === currency)
+    if (!rows.length) return []
+    return [{ currency, value: rows.some(r => r.totalPnl == null) ? null : rows.reduce((sum, r) => sum + r.totalPnl!, 0) }]
+  })
+  const workingOrders = scopedOrders.filter(o => ['open', 'pending', 'trigger pending'].includes(o.order_status))
 
   // Set-SL dialog targets one (symbol, exchange, product) leg at a time. The
   // product is carried on the target so a per-row SL edits the correct MIS/NRML SL.
@@ -719,7 +746,7 @@ export default function Scalping() {
           p.product === slDialogTarget.product
       )
     : undefined
-  const slDialogEntry = slDialogPos?.average_price ?? slDialogTick?.ltp ?? 0
+  const slDialogEntry = Number(slDialogPos?.average_price ?? slDialogTick?.ltp ?? 0)
   // A stop-loss is only meaningful for an actual open position — qty is 0 when
   // flat, which blocks the dialog's Save (prevents an SL that would open a fresh
   // naked position on "exit").
@@ -748,6 +775,18 @@ export default function Scalping() {
   const openLegSL = (leg: SelectedLeg | null) => {
     if (leg) setSlDialogTarget({ ...leg, product })
   }
+  const hasOpenLeg = (leg: SelectedLeg | null) => positionsComplete && !!leg && positions.some(p =>
+    p.symbol === leg.symbol && p.exchange === leg.exchange && p.product === product && Number(p.quantity) !== 0)
+
+  const mlSupported = isDelta && isSingle && singleLeg?.symbol === 'BTCUSDFUT'
+  const useMlDefaults = !!mlSupported && mlDefaults
+  const mlContext = {symbol: singleLeg?.symbol ?? '', quantity: lots * (singleLeg?.lotsize ?? 1), leverage, previewSide: mlPreviewSide}
+  const mlBuyBlock = useMlDefaults ? mlManualEntryBlock(mlPlan, 'BUY', mlContext) : null
+  const mlSellBlock = useMlDefaults ? mlManualEntryBlock(mlPlan, 'SELL', mlContext) : null
+  useEffect(() => {
+    if (mlPlan?.action === 'LONG') setMlPreviewSide('BUY')
+    if (mlPlan?.action === 'SHORT') setMlPreviewSide('SELL')
+  }, [mlPlan?.action])
 
   // Latest order-entry state for the (stable) keyboard handler — avoids stale closures.
   const stateRef = useRef({
@@ -760,6 +799,11 @@ export default function Scalping() {
     appMode,
     segment,
     equityShares,
+    leverage,
+    isDelta,
+    useMlDefaults,
+    mlPlan,
+    mlPreviewSide,
   })
   stateRef.current = {
     armed,
@@ -771,6 +815,11 @@ export default function Scalping() {
     appMode,
     segment,
     equityShares,
+    leverage,
+    isDelta,
+    useMlDefaults,
+    mlPlan,
+    mlPreviewSide,
   }
 
   // Min gap between two order fires. Bounds the rate (prevents accidental
@@ -778,60 +827,25 @@ export default function Scalping() {
   // scalping. Held-key auto-repeat is additionally filtered via e.repeat below.
   const lastFireRef = useRef(0)
 
-  // After an entry, auto-attach the global predefined SL / Target (points or %
-  // of the fill LTP) so the websocket SL engine manages the exit.
-  const attachPredefinedSL = useCallback(
-    (leg: SelectedLeg, action: ScalpingAction, quantity: number, prod: ScalpingProduct) => {
-      const cfg = predefRef.current
-      if (!cfg.slOn && !cfg.tgtOn) return
-      const ltp = marketDataRef.current.get(`${leg.exchange}:${leg.symbol}`)?.data?.ltp
-      if (!ltp || ltp <= 0) return
-      const toPts = (val: string, unit: 'PTS' | 'PCT') => {
-        const n = Number(val)
-        if (!Number.isFinite(n) || n <= 0) return 0
-        return unit === 'PCT' ? (ltp * n) / 100 : n
-      }
-      const slPts = cfg.slOn ? toPts(cfg.slValue, cfg.slUnit) : 0
-      const tgtPts = cfg.tgtOn ? toPts(cfg.tgtValue, cfg.tgtUnit) : 0
-      if (slPts <= 0 && tgtPts <= 0) return
-      const isBuy = action === 'BUY'
-      // No-SL sentinel that never triggers (target-only): below for long, far above for short.
-      const initialSl =
-        slPts > 0 ? (isBuy ? ltp - slPts : ltp + slPts) : isBuy ? 0 : Number.MAX_SAFE_INTEGER
-      const target = tgtPts > 0 ? (isBuy ? ltp + tgtPts : ltp - tgtPts) : 0
-      setSL({
-        symbol: leg.symbol,
-        exchange: leg.exchange,
-        product: prod,
-        side: action,
-        entry: ltp,
-        quantity,
-        initialSl,
-        trailingEnabled: false,
-        trailingStep: 0,
-        highestPrice: ltp,
-        lowestPrice: ltp,
-        currentSl: initialSl,
-        target,
-        active: true,
-      })
-    },
-    [setSL]
-  )
-
   const submitOrder = useCallback(
     async (leg: SelectedLeg | null, action: ScalpingAction) => {
       const s = stateRef.current
+      const fail = (message: string) => {
+        setEntryFeedback({kind: 'error', message})
+        showToast.error(message, 'orders')
+      }
+      // The ref also covers keyboard shortcuts and clicks before React renders.
+      if (entryInFlight.current) return
       if (!s.armed) {
-        showToast.error('One-Click is disarmed — enable it to trade', 'orders')
+        fail('One-Click is off - switch it on to trade')
         return
       }
       if (!leg) {
-        showToast.error('No instrument selected', 'orders')
+        fail('No instrument selected')
         return
       }
       if (!leg.lotsize) {
-        showToast.error('Lot/contract size unavailable for this instrument', 'orders')
+        fail('Lot/contract size unavailable for this instrument')
         return
       }
       const now = Date.now()
@@ -842,19 +856,37 @@ export default function Scalping() {
       const quantity = isEquity ? s.equityShares : s.lots * leg.lotsize
       const sentLots = isEquity ? undefined : s.lots
       if (quantity <= 0) {
-        showToast.error('Quantity must be positive', 'orders')
+        fail('Quantity must be positive')
         return
       }
       const t0 = performance.now()
-      // Order placement notifications (success AND broker/sandbox rejection) are
-      // shown ONCE by the global SocketProvider — order_event in live mode,
-      // analyzer_update in analyzer mode. We don't toast success here (latency is
-      // in the header). We only toast an error in LIVE mode, where the backend
-      // emits no socket event on failure, or on a transport error (no response).
+      // Validation can reject before any socket event is emitted. Keep a durable
+      // result next to the buttons, including when global toasts are muted.
+      entryInFlight.current = true
+      setEntryFeedback({kind: 'pending', message: `Submitting ${action} ${leg.symbol}…`})
       // The live LTP from the WS feed — sent so the sandbox engine can price the fill
       // without its own (slow, retry-prone) per-order quote fetch. Ignored in live mode.
-      const legLtp = marketDataRef.current.get(`${leg.exchange}:${leg.symbol}`)?.data?.ltp
+      const legLtp = getTickRef.current(leg.symbol, leg.exchange)?.ltp
       try {
+        // Validate once before order submission; use this snapshot even if the feed
+        // changes while awaiting the broker response. Never silently skip protection.
+        const context = {symbol: leg.symbol, quantity, leverage: s.leverage, previewSide: s.mlPreviewSide}
+        if (s.useMlDefaults) {
+          const blocked = mlManualEntryBlock(s.mlPlan, action, context)
+          if (blocked) throw new Error(blocked)
+        }
+        const ticket = s.useMlDefaults ? mlDefaultsTicket(s.mlPlan, action, context) : null
+        if (s.useMlDefaults && !ticket) throw new Error('Waiting for a fresh ML ticket.')
+        if (ticket) setMlPreviewSide(action)
+        const protectionConfig = ticket?.config ?? { ...predefRef.current }
+        const protection = predefinedProtection(
+          leg,
+          action,
+          quantity,
+          s.product,
+          ticket?.entry ?? legLtp,
+          protectionConfig
+        )
         const res = await scalpingApi.placeOrder({
           symbol: leg.symbol,
           exchange: leg.exchange,
@@ -862,29 +894,38 @@ export default function Scalping() {
           quantity,
           product: s.product,
           lots: sentLots,
+          leverage: s.isDelta ? s.leverage : undefined,
+          ml_defaults: ticket?.stamp,
+          protection: s.isDelta ? executionProtection(protectionConfig, protection) : undefined,
           ltp: legLtp != null && legLtp > 0 ? legLtp : undefined,
         })
         setLastLatencyMs(Math.round(performance.now() - t0))
         if (res.status === 'success') {
-          attachPredefinedSL(leg, action, quantity, s.product)
-          // Books refresh from this order's SocketIO event (order_event / analyzer_update)
-          // via useOrderEventRefresh — no manual refetch here, to avoid a double refresh.
-        } else if (s.appMode === 'live') {
-          showToast.error(res.message ?? 'Order failed', 'orders')
+          refreshBooks()
+          if (protection && !res.protection_saved && !(await setSL(protection))) {
+            throw new Error(
+              'Order accepted, but SL/target save was not confirmed. Check the position immediately.'
+            )
+          }
+          setEntryFeedback({kind: 'success', message:
+            `${action} order accepted${res.orderid ? ` · ${res.orderid}` : ''}. ${s.isDelta ? 'Post-only limit; acceptance does not mean filled. ' : ''}See Order Book for its status.`})
+        } else {
+          fail(res.message ?? 'Order failed')
         }
       } catch (e) {
         setLastLatencyMs(Math.round(performance.now() - t0))
-        const handledGlobally = s.appMode === 'analyzer' && !!(e as { response?: unknown }).response
-        if (!handledGlobally) showToast.error(apiErrorMessage(e), 'orders')
+        fail(apiErrorMessage(e))
+      } finally {
+        entryInFlight.current = false
       }
     },
-    [attachPredefinedSL]
+    [setSL, refreshBooks]
   )
 
   // Note: close-all / cancel-all (F6/F7) and the trailing-SL auto-exit are
-  // intentionally NOT gated by `armed`. "Armed" guards only NEW risk-increasing
+  // intentionally NOT gated by One-Click. It guards only NEW risk-increasing
   // entries; risk-reducing actions (flatten, cancel, stop-loss) must always work
-  // even when one-click is off — disarming must never disable your stops.
+  // even when One-Click is off, so your stops stay active.
   // Success/rejection toasts for close-all and cancel-all are shown globally by
   // SocketProvider (close_position_event / cancel_order_event / analyzer_update).
   // We only surface an error here when the global handler won't (live mode or a
@@ -918,7 +959,7 @@ export default function Scalping() {
   // Close a single position-book row (risk-reducing, opposite side, live net qty).
   const doCloseRow = useCallback(
     async (row: ScalpingPositionRow) => {
-      if (row.netQty === 0) return
+      if (row.netQty == null || row.netQty === 0) return
       const action: ScalpingAction = row.netQty > 0 ? 'SELL' : 'BUY'
       try {
         const res = await scalpingApi.closeLeg({
@@ -964,6 +1005,7 @@ export default function Scalping() {
         t &&
         (t.tagName === 'INPUT' ||
           t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
           t.isContentEditable ||
           t.getAttribute('role') === 'combobox')
       ) {
@@ -1049,7 +1091,7 @@ export default function Scalping() {
             <span className="font-mono text-xs text-muted-foreground">order {lastLatencyMs}ms</span>
           )}
           <Badge variant={armed ? 'destructive' : 'secondary'}>
-            One-Click {armed ? 'ARMED' : 'off'}
+            One-Click {armed ? 'on' : 'off'}
           </Badge>
           <Badge variant={wsBadge.variant}>{wsBadge.label}</Badge>
         </div>
@@ -1095,6 +1137,8 @@ export default function Scalping() {
               <SelectContent>
                 {isEquityExch ? (
                   <SelectItem value="EQUITY">Equity</SelectItem>
+                ) : isCryptoExch ? (
+                  <SelectItem value="FUTURES">Futures</SelectItem>
                 ) : (
                   <>
                     <SelectItem value="OPTIONS">Options</SelectItem>
@@ -1180,6 +1224,13 @@ export default function Scalping() {
             </div>
           )}
 
+          <div className="col-span-full">
+            <IndicatorSignal leg={singleLeg ?? ceLeg} onAtr={setAtrSuggestion} />
+          </div>
+          {isDelta && <div className="col-span-full">
+            <MlEntryPlan leg={singleLeg ?? ceLeg} quantity={lots * (singleLeg?.lotsize ?? ceLeg?.lotsize ?? 1)} leverage={leverage} onPlan={setMlPlan} />
+          </div>}
+
           {/* Options: expiry + CE/PE strikes (dual-leg) */}
           {optionsMode && (
             <>
@@ -1258,7 +1309,7 @@ export default function Scalping() {
                 <SelectContent>
                   {futContracts.map((c) => (
                     <SelectItem key={c.symbol} value={c.symbol}>
-                      {c.expiry}
+                      {c.expiry || (c.instrumenttype === 'PERPFUT' ? 'PERP' : c.symbol)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1321,13 +1372,12 @@ export default function Scalping() {
         </div>
       )}
 
-      {/* Live charts (candles + volume + OHLC legend), shared timeframe. Charts
-          are off by default and only mount when toggled on — off means no chart
-          feed subscriptions. The Charts switch + timeframe both persist. */}
+      {/* Live charts remain mounted, follow the current market and share the
+          persisted timeframe. Position/SL/target overlays use confirmed data. */}
       <div className="flex flex-wrap items-center gap-4">
         <label className="flex items-center gap-2">
-          <Switch checked={showCharts} onCheckedChange={setShowCharts} />
-          <span className="text-sm font-medium">Charts</span>
+          <Switch checked disabled aria-label="Charts always on" />
+          <span className="text-sm font-medium">Charts always on</span>
         </label>
         {showCharts && (
           <div className="flex items-center gap-1.5">
@@ -1355,39 +1405,43 @@ export default function Scalping() {
       {showCharts &&
         (isSingle ? (
           <div className="grid grid-cols-1 gap-3">
-            <div className="h-[340px]">
+            <div className="h-[400px]">
               <ScalpChart
                 symbol={singleLeg?.symbol ?? ''}
                 exchange={singleLeg?.exchange ?? ''}
                 interval={chartTf}
                 title={segment === 'EQUITY' ? 'Equity' : 'Futures'}
+                position={chartView(singleLeg?.symbol ?? '', singleLeg?.exchange ?? '')}
               />
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div className="h-[340px]">
+            <div className="h-[400px]">
               <ScalpChart
                 symbol={ceLeg?.symbol ?? ''}
                 exchange={ceLeg?.exchange ?? ''}
                 interval={chartTf}
                 title="Call (CE)"
+                position={chartView(ceLeg?.symbol ?? '', ceLeg?.exchange ?? '')}
               />
             </div>
-            <div className="h-[340px]">
+            <div className="h-[400px]">
               <ScalpChart
                 symbol={underlyingSym}
                 exchange={underlyingExch}
                 interval={chartTf}
                 title={underlying || 'Underlying'}
+                position={chartView(underlyingSym, underlyingExch)}
               />
             </div>
-            <div className="h-[340px]">
+            <div className="h-[400px]">
               <ScalpChart
                 symbol={peLeg?.symbol ?? ''}
                 exchange={peLeg?.exchange ?? ''}
                 interval={chartTf}
                 title="Put (PE)"
+                position={chartView(peLeg?.symbol ?? '', peLeg?.exchange ?? '')}
               />
             </div>
           </div>
@@ -1471,15 +1525,33 @@ export default function Scalping() {
 
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">Order Type</span>
-              <Select value="MARKET" disabled>
+              <Select value={isDelta ? 'POST_ONLY' : 'MARKET'} disabled>
                 <SelectTrigger className="w-28">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="MARKET">Market</SelectItem>
+                  <SelectItem value="POST_ONLY">Post-only limit</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+
+            {isDelta && (
+              <DeltaExecutionControls leverage={leverage} onLeverageChange={setLeverage} netTarget={useMlDefaults} />
+            )}
+
+            {mlSupported && <div className="flex w-full items-center gap-2 text-sm">
+              <label htmlFor="scalper-defaults">Order defaults</label>
+              <select id="scalper-defaults" className="rounded-md border bg-background p-2"
+                value={mlDefaults ? 'ml' : 'manual'} onChange={e => setMlDefaults(e.target.value === 'ml')}>
+                <option value="ml">ML defaults</option><option value="manual">Manual</option>
+              </select>
+              <span className="text-xs text-muted-foreground">{mlDefaults ? 'Entry, SL and target fill automatically for each side.' : 'Manual SL and target settings.'}</span>
+            </div>}
+            {useMlDefaults && <MlDefaultsControls data={mlPlan} action={mlPreviewSide}
+              context={mlContext} mode={appMode} onAction={setMlPreviewSide} />}
+
+            {!useMlDefaults && <>
 
             {/* Global predefined SL — auto-attached to every entry when enabled */}
             <div className="flex items-center gap-1.5" title="Auto stop-loss on every entry">
@@ -1489,14 +1561,15 @@ export default function Scalping() {
                 type="number"
                 inputMode="decimal"
                 disabled={!predefSlOn}
-                value={predefSlValue}
-                onChange={(e) => setPredefSlValue(e.target.value)}
-                placeholder="0"
+                value={effectiveSlValue}
+                onChange={(e) => { setPredefSlAuto(false); setPredefSlValue(e.target.value) }}
+                placeholder={autoSl ? 'ATR…' : 'SL'}
+                aria-label="Initial SL distance"
                 className="w-16"
               />
               <Select
-                value={predefSlUnit}
-                onValueChange={(v) => setPredefSlUnit(v as 'PTS' | 'PCT')}
+                value={effectiveSlUnit}
+                onValueChange={(v) => { setPredefSlAuto(false); setPredefSlUnit(v as 'PTS' | 'PCT') }}
               >
                 <SelectTrigger className="w-20">
                   <SelectValue />
@@ -1509,60 +1582,75 @@ export default function Scalping() {
             </div>
 
             {/* Global predefined Target — auto take-profit on every entry */}
-            <div className="flex items-center gap-1.5" title="Auto target on every entry">
+            {isSingle && <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox checked={predefSlAuto} onCheckedChange={(v) => setPredefSlAuto(v === true)} />
+              Auto SL · 1× completed 1m ATR14
+            </label>}
+            <div
+              className="flex items-center gap-1.5"
+              title="Initial target is three times the entry-to-stop distance; fees are excluded"
+            >
               <Checkbox checked={predefTgtOn} onCheckedChange={(v) => setPredefTgtOn(v === true)} />
               <span className="text-sm text-muted-foreground">Target</span>
               <Input
                 type="number"
                 inputMode="decimal"
-                disabled={!predefTgtOn}
-                value={predefTgtValue}
+                disabled={!predefTgtOn || predefTgtUnit === 'RR'}
+                value={predefTgtUnit === 'RR' ? '3' : predefTgtValue}
                 onChange={(e) => setPredefTgtValue(e.target.value)}
                 placeholder="0"
                 className="w-16"
               />
               <Select
                 value={predefTgtUnit}
-                onValueChange={(v) => setPredefTgtUnit(v as 'PTS' | 'PCT')}
+                onValueChange={(v) => setPredefTgtUnit(v as 'PTS' | 'PCT' | 'RR')}
               >
                 <SelectTrigger className="w-20">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="RR">1:3 R</SelectItem>
                   <SelectItem value="PTS">Pts</SelectItem>
                   <SelectItem value="PCT">%</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
+            </>}
             <div
               className="ml-auto flex items-center gap-6 font-mono"
               title="Sum across the position-book rows below (open + today's closed trades)"
             >
               <span>
-                Net Qty: <span className="font-semibold">{netQty}</span>
+                Net Qty: <span className="font-semibold">{netQty ?? 'unavailable'}</span>
               </span>
               <span>
-                MTM:{' '}
-                <span className={`font-semibold ${mtm >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {mtm.toFixed(2)}
-                </span>
+                Gross P&amp;L:{' '}
+                {grossTotals.length ? grossTotals.map(total => <span key={total.currency} className={`font-semibold ${total.value == null ? '' : total.value >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {grossDisplay(total.value, total.currency)}{' '}
+                </span>) : positionsComplete && tradesComplete ? '0.00' : 'unavailable'}
               </span>
             </div>
           </div>
 
+          {entryFeedback && <div
+            role={entryFeedback.kind === 'error' ? 'alert' : 'status'}
+            className={`mb-3 rounded-md border p-3 text-sm ${entryFeedback.kind === 'error' ? 'border-red-500/50 text-red-600 dark:text-red-400' : ''}`}
+          >{entryFeedback.message}</div>}
           {isSingle ? (
             <div className="grid grid-cols-2 gap-3">
               <Button
                 className="bg-green-600 hover:bg-green-700"
-                disabled={!singleLeg}
+                disabled={!singleLeg || !!mlBuyBlock || entryFeedback?.kind === 'pending'}
+                title={mlBuyBlock ?? (useMlDefaults ? 'Manual Buy using the LONG entry, SL and target' : undefined)}
                 onClick={() => submitOrder(singleLeg, 'BUY')}
               >
                 ↑ Buy {segment === 'EQUITY' ? 'Stock' : ''}
               </Button>
               <Button
                 className="bg-red-600 hover:bg-red-700"
-                disabled={!singleLeg}
+                disabled={!singleLeg || !!mlSellBlock || entryFeedback?.kind === 'pending'}
+                title={mlSellBlock ?? (useMlDefaults ? 'Manual Sell using the SHORT entry, SL and target' : undefined)}
                 onClick={() => submitOrder(singleLeg, 'SELL')}
               >
                 ↓ Sell {segment === 'EQUITY' ? 'Stock' : ''}
@@ -1599,7 +1687,7 @@ export default function Scalping() {
 
           <div className="flex flex-wrap items-center gap-3">
             {isSingle ? (
-              <Button variant="outline" disabled={!singleLeg} onClick={() => openLegSL(singleLeg)}>
+              <Button variant="outline" disabled={!hasOpenLeg(singleLeg)} onClick={() => openLegSL(singleLeg)}>
                 {singleLeg && findLegSL(slMap, singleLeg.symbol, singleLeg.exchange, product)
                   ? 'Edit SL'
                   : 'Set SL'}
@@ -1635,6 +1723,22 @@ export default function Scalping() {
       </Card>
 
       {/* Books */}
+      <p className="text-xs text-muted-foreground">
+        Gross P&amp;L excludes fees and funding. USD-settled amounts follow the configured display currency at Delta India’s fixed ₹85/USD.
+        Today’s totals include all fills for the tracked contracts, including trades made outside this terminal.
+      </p>
+      {(!positionsComplete || !tradesComplete) && <p role="alert" className="text-sm text-amber-700">
+        {!positionsComplete && 'Position data is not confirmed. '}
+        {!tradesComplete && 'Complete trade history is unavailable. '}
+        Unavailable values are not zero.
+      </p>}
+      {workingOrders.length > 0 && <section aria-label="Working orders" className="space-y-1 rounded-lg border p-3 text-sm">
+        <h3 className="font-medium">Working orders — limit prices, not filled positions</h3>
+        {workingOrders.map(o => <div key={o.orderid} className="font-mono">
+          {o.symbol} · {o.action} · {o.quantity} · limit {o.exchange === 'CRYPTO' ? displayPrice(Number(o.price)) : Number(o.price).toFixed(priceDecimals(o.exchange))} · {o.order_status} · {o.orderid}
+        </div>)}
+        <p className="text-xs text-muted-foreground">Post-only entries wait for a maker fill and may remain unfilled as the market moves.</p>
+      </section>}
       <Tabs defaultValue="positions">
         <TabsList>
           <TabsTrigger value="positions">Positions</TabsTrigger>
@@ -1656,9 +1760,9 @@ export default function Scalping() {
                   <TableHead className="text-right">TP</TableHead>
                   <TableHead className="text-right">TSL</TableHead>
                   <TableHead>Risk</TableHead>
-                  <TableHead className="text-right">R. P&amp;L</TableHead>
-                  <TableHead className="text-right">UR. P&amp;L</TableHead>
-                  <TableHead className="text-right">P&amp;L</TableHead>
+                  <TableHead className="text-right">Realized · gross</TableHead>
+                  <TableHead className="text-right">Open · gross</TableHead>
+                  <TableHead className="text-right">Total · gross</TableHead>
                   <TableHead>Action</TableHead>
                   <TableHead className="text-right">Avg Price</TableHead>
                   <TableHead className="text-right">Buy Qty</TableHead>
@@ -1669,7 +1773,7 @@ export default function Scalping() {
               </TableHeader>
               <TableBody>
                 {positionRows.map((r) => {
-                  const open = r.netQty !== 0
+                  const open = r.netQty != null && r.netQty !== 0
                   const dec = priceDecimals(r.exchange)
                   return (
                     <TableRow key={`${r.exchange}:${r.symbol}:${r.product}`}>
@@ -1687,16 +1791,16 @@ export default function Scalping() {
                         {r.side}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        {r.netQty}
+                        {r.netQty ?? 'unavailable'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        {r.ltp ? r.ltp.toFixed(dec) : '—'}
+                        {r.ltp ? (r.currency === 'USD' ? displayPrice(r.ltp) : r.ltp.toFixed(dec)) : '—'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        {r.sl != null ? r.sl.toFixed(dec) : '-'}
+                        {r.sl != null ? (r.currency === 'USD' ? displayPrice(r.sl) : r.sl.toFixed(dec)) : '-'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
-                        {r.target != null ? r.target.toFixed(dec) : '-'}
+                        {r.target != null ? (r.currency === 'USD' ? displayPrice(r.target) : r.target.toFixed(dec)) : '-'}
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         {r.trailingStep != null ? `±${r.trailingStep}` : '-'}
@@ -1722,19 +1826,19 @@ export default function Scalping() {
                         )}
                       </TableCell>
                       <TableCell
-                        className={`text-right font-mono tabular-nums ${r.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                        className={`text-right font-mono tabular-nums ${r.realizedPnl == null ? '' : r.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
                       >
-                        {r.realizedPnl.toFixed(2)}
+                        {grossDisplay(r.realizedPnl, r.currency)}
                       </TableCell>
                       <TableCell
-                        className={`text-right font-mono tabular-nums ${r.unrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                        className={`text-right font-mono tabular-nums ${r.unrealizedPnl == null ? '' : r.unrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
                       >
-                        {r.unrealizedPnl.toFixed(2)}
+                        {grossDisplay(r.unrealizedPnl, r.currency)}
                       </TableCell>
                       <TableCell
-                        className={`text-right font-mono tabular-nums font-semibold ${r.totalPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
+                        className={`text-right font-mono tabular-nums font-semibold ${r.totalPnl == null ? '' : r.totalPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}
                       >
-                        {r.totalPnl.toFixed(2)}
+                        {grossDisplay(r.totalPnl, r.currency)}
                       </TableCell>
                       <TableCell>
                         {open ? (
@@ -1782,6 +1886,7 @@ export default function Scalping() {
                 <TableHead>Symbol</TableHead>
                 <TableHead>Side</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Limit price</TableHead>
                 <TableHead>Type</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Order ID</TableHead>
@@ -1795,6 +1900,7 @@ export default function Scalping() {
                     {o.action}
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">{o.quantity}</TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">{o.pricetype === 'MARKET' ? 'Market' : o.exchange === 'CRYPTO' ? displayPrice(Number(o.price)) : Number(o.price).toFixed(priceDecimals(o.exchange))}</TableCell>
                   <TableCell>{o.pricetype}</TableCell>
                   <TableCell>{o.order_status}</TableCell>
                   <TableCell className="font-mono text-xs">{o.orderid}</TableCell>
@@ -1802,7 +1908,7 @@ export default function Scalping() {
               ))}
               {scopedOrders.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     No orders
                   </TableCell>
                 </TableRow>
@@ -1859,6 +1965,7 @@ export default function Scalping() {
         entryPrice={slDialogEntry}
         quantity={slDialogQty}
         ltp={slDialogTick?.ltp}
+        suggestedDistance={isSingle && slDialogTarget?.symbol === singleLeg?.symbol ? atrDistance : null}
         existing={slDialogExisting}
         onSave={(sl: SLState) => setSL(sl)}
         onClear={

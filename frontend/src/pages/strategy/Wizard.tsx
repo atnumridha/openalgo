@@ -1503,7 +1503,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
 
       <Card>
         <CardContent className="p-4">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
             {UNIVERSE_TABS.map((option) => {
               const unavailable = isSignal && !SIGNAL_MODE_TABS.includes(option)
               return (

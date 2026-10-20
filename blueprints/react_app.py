@@ -216,6 +216,11 @@ def react_scalping():
     return serve_react_app()
 
 
+@react_bp.route("/ml-signals", strict_slashes=False)
+def react_ml_signals():
+    return serve_react_app()
+
+
 # Search pages
 @react_bp.route("/search/token")
 def react_search_token():
@@ -499,6 +504,11 @@ def react_analyzer():
 # would push the visitor's address toward an IP ban.
 @react_bp.route("/strategy", strict_slashes=False)
 def react_strategy_index():
+    return serve_react_app()
+
+
+@react_bp.route("/strategy/delta-scalper", strict_slashes=False)
+def react_delta_scalper():
     return serve_react_app()
 
 

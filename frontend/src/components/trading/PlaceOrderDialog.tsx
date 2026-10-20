@@ -150,7 +150,7 @@ export function PlaceOrderDialog({
   onSuccess,
   onError,
 }: PlaceOrderDialogProps) {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
 
   // Form state
   const [formAction, setFormAction] = useState<'BUY' | 'SELL'>(initialAction)
@@ -545,7 +545,7 @@ export function PlaceOrderDialog({
           {/* Price Input (conditional) */}
           {needsPrice && (
             <div className="space-y-2">
-              <Label className="text-xs">Price</Label>
+              <Label className="text-xs">Price{user?.broker === "deltaexchange" ? " · broker USD" : ""}</Label>
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -582,7 +582,7 @@ export function PlaceOrderDialog({
           {/* Trigger Price Input (conditional) */}
           {needsTrigger && (
             <div className="space-y-2">
-              <Label className="text-xs">Trigger Price</Label>
+              <Label className="text-xs">Trigger Price{user?.broker === "deltaexchange" ? " · broker USD" : ""}</Label>
               <div className="flex gap-2">
                 <Button
                   type="button"

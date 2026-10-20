@@ -84,6 +84,14 @@ ADDED_COLUMNS = (
         "stop_requested_reason",
         "VARCHAR(30)",
     ),
+    # An entry's own stop, target and trail (ML trades), recovered after a
+    # restart. NULL for every existing row, which means "use the leg's config",
+    # exactly what those rows always meant, so there is nothing to backfill.
+    (
+        "sm_strategy_order",
+        "risk",
+        "JSON",
+    ),
 )
 
 

@@ -114,6 +114,7 @@
     "autoprefixer": "^10.4.23",
     "axe-core": "^4.11.1",
     "cssnano": "^7.1.2",
+    "happy-dom": "^20.14.5",
     "jest-axe": "^10.0.0",
     "jsdom": "^27.4.0",
     "svgo": "^4.1.0",

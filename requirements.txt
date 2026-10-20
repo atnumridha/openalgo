@@ -159,3 +159,8 @@ openscript==0.8.1
 litellm==1.99.0
 agno==3.0.5
 ddgs>=9.16.0
+
+# ML Signals (/ml-signals): trains and loads the per-symbol models. Without them
+# a native install shows the page but cannot train or produce a signal.
+scikit-learn==1.9.1
+joblib==1.6.0

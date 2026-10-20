@@ -185,3 +185,56 @@ def get_margin_data(auth_token):
     except Exception as e:
         logger.error(f"[DeltaExchange] Unexpected error in get_margin_data: {e}", exc_info=True)
         return DEFAULT_MARGIN_RESPONSE
+
+
+def get_usd_available(auth_token):
+    """The wallet's free USD, what Delta perpetual margin is drawn from.
+
+    ``get_margin_data`` reports INR across every wallet, which is the right
+    figure for the funds page and the wrong one for sizing a USD-settled
+    perpetual. This reads the USD wallet's ``available_balance`` directly.
+
+    Returns:
+        (available_usd, error): the balance, or None and a sentence for the
+        operator. An IP the API key is not whitelisted for is named as such,
+        because it is the most common reason the read fails.
+    """
+    api_key = auth_token
+    api_secret = os.getenv("BROKER_API_SECRET", "")
+    if not api_key or not api_secret:
+        return None, "Delta Exchange is not logged in, so the USD balance cannot be read."
+
+    path = "/v2/wallet/balances"
+    try:
+        consume(path, method="GET", bucket=PRIVATE)
+        headers = get_auth_headers(
+            method="GET",
+            path=path,
+            query_string="",
+            payload="",
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+        response = get_httpx_client().get(BASE_URL + path, headers=headers, timeout=15.0)
+        data = response.json() if response.content else {}
+    except Exception:
+        logger.exception("[DeltaExchange] Could not read the USD wallet balance")
+        return None, "Delta Exchange did not answer the balance request. Try again in a moment."
+
+    if response.status_code != 200 or not data.get("success"):
+        code = str(((data or {}).get("error") or {}).get("code") or "")
+        logger.error(f"[DeltaExchange] USD balance read refused: HTTP {response.status_code} {code}")
+        if code == "ip_not_whitelisted_for_api_key":
+            return None, (
+                "Delta Exchange refused the request because this machine's IP address is not "
+                "whitelisted for your API key. Add it in Delta's API settings."
+            )
+        return None, "Delta Exchange refused the balance request. Log in to Delta again."
+
+    for asset in data.get("result") or []:
+        if not isinstance(asset, dict):
+            continue
+        symbol = str(asset.get("asset_symbol") or (asset.get("asset") or {}).get("symbol") or "")
+        if symbol.upper() == "USD":
+            return _f(asset.get("available_balance")), None
+    return 0.0, None

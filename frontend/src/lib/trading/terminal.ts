@@ -1,3 +1,9 @@
+import { knownDeltaFeeProfile } from '@/lib/deltaFeeProfile'
+import {
+  getDeltaDisplayCurrency,
+  subscribeDeltaDisplayCurrency,
+} from '@/hooks/useDeltaDisplayCurrency'
+import { deltaMoney } from '@/lib/deltaCurrency'
 /**
  * Framework-agnostic controller for the charting terminal.
  *
@@ -52,7 +58,7 @@ import {
   OpenAlgoDataFeed,
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
-  type PriceLine,
+  PriceLine,
   type PriceScaleId,
   parseAlertsDocument,
   ReplayController,
@@ -261,7 +267,7 @@ import {
   UNSCOPED_DRAWINGS,
 } from './drawingScope'
 import { DRAW_TOOL_METADATA } from './drawingToolMetadata'
-import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
+import { fmtPrice, priceDp, snapTick, tickSize } from './format'
 import { factsFor } from './instrumentFacts'
 import {
   type IntervalData,
@@ -280,6 +286,7 @@ import {
 } from './legend'
 import { fileForScriptId, isScriptInstance } from './openscriptFiles'
 import { loadOpenScriptStudies, SCRIPT_ALERT_EVENT } from './openscriptStudies'
+import { type PositionMark, positionFromRow, positionLabel } from './positionLine'
 import { profileIntervalSupported, selectProfileInterval } from './profileIntervals'
 import { ProfileLayer, type ProfileMenuAction } from './profileLayer'
 import {
@@ -320,12 +327,6 @@ interface OrderLineRec {
   dragFrom?: number | null
 }
 
-interface PositionState {
-  net: number
-  avg: number
-  product: string
-}
-
 /** Everything the toolbar needs to render for the loaded instrument. */
 export interface SymbolView {
   symbol: string
@@ -334,6 +335,11 @@ export interface SymbolView {
   /** FnO lot-based entry (qty input means lots, × lotsize). */
   lots: boolean
   lotsize: number
+  /**
+   * Units of the underlying one contract is worth, where the venue quotes it
+   * (0.001 BTC on Delta's BTCUSD). Absent elsewhere: there a contract is a lot.
+   */
+  contractValue?: number
   /** Instrument tick size; drives all price snapping/formatting (not shown in UI). */
   tick: number
   freezeQty: number
@@ -1196,6 +1202,8 @@ export class TradingTerminal {
   private offLegendActions: (() => void) | null = null
   private offReplayPointer: (() => void) | null = null
   private depthActive = false
+  /** The feed streams each trade with its size, so depth payloads are not ticked. */
+  private tradeTicks = false
 
   private rawBars: Bar[] = []
   /**
@@ -1273,7 +1281,10 @@ export class TradingTerminal {
   private liveBucket: number | null = null
   private lastLtp: number | null = null
   private sym: SymbolView | null = null
-  private position: PositionState | null = null
+  private position: PositionMark | null = null
+  /** The position poll in flight; a second caller waits on it rather than racing it. */
+  private bookPoll: Promise<void> | null = null
+  private bookPollAgain = false
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
@@ -1285,6 +1296,7 @@ export class TradingTerminal {
    * not something to guess at.
    */
   private username = ''
+  private offDisplayCurrency: (() => void) | null = null
   private ctype = 'candlestick'
   private product = 'MIS'
   private qty = 1
@@ -1567,6 +1579,15 @@ export class TradingTerminal {
       }
     }
     if (!CHART_TYPES[this.ctype]) this.ctype = 'candlestick'
+    this.offDisplayCurrency = subscribeDeltaDisplayCurrency(() => {
+      if (this.destroyed) return
+      if (this.sym?.exchange === 'CRYPTO') {
+        this.price?.priceScale().setPriceFormatter((p: number) => this.displayPrice(p))
+        this.price?.applyOptions({})
+        this.setLegend(this.legendBar)
+        if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
+      }
+    })
   }
 
   /**
@@ -1628,6 +1649,11 @@ export class TradingTerminal {
   }
   private fmt(n: number): string {
     return fmtPrice(n, this.sym?.tick, this.refPrice())
+  }
+  private displayPrice(n: number): string {
+    return this.sym?.exchange === 'CRYPTO'
+      ? deltaMoney(n, 'USD', this.dp())
+      : this.fmt(n)
   }
   private snap(n: number): number {
     return snapTick(n, this.sym?.tick, this.refPrice())
@@ -2041,12 +2067,17 @@ export class TradingTerminal {
       bar:
         bar && !this.volumeAvailable() ? { ...bar, volume: undefined } : this.withDrawnVolume(bar),
       prevClose: this.closeBefore(bar),
-      fmt: (n) => this.fmt(n),
+      fmt: (n) => this.displayPrice(n),
       fmtVolume: compactVolume,
       volumeHidden: !this.volumeOn,
       openInterest: this.chart?.statusLineOptions().openInterest,
       hasOpenInterest: this.chart?.hasOpenInterest,
     })
+    if (sym.exchange === 'CRYPTO')
+      runs.push({
+        text: ` · Prices USD · P&L ${getDeltaDisplayCurrency(this.username)}`,
+        tone: 'meta',
+      })
     if (isProfileKind(this.ctype)) {
       runs.splice(2, 0, { text: CHART_TYPES[this.ctype].label, tone: 'meta' })
       return runs.map((run) =>
@@ -2078,45 +2109,90 @@ export class TradingTerminal {
 
   private posLabel(): string {
     if (!this.position) return ''
-    const mark = this.lastLtp != null ? this.lastLtp : this.position.avg
-    const pnl = (mark - this.position.avg) * this.position.net
-    return `@ ${this.fmt(this.position.avg)}  ${pnl >= 0 ? '+' : '-'}₹${money(Math.abs(pnl))}`
+    return positionLabel(
+      this.position,
+      this.lastLtp,
+      (n) => this.displayPrice(n),
+      knownDeltaFeeProfile(this.username),
+      Date.now(),
+      (n) => deltaMoney(n, getDeltaDisplayCurrency(this.username))
+    )
+  }
+
+  /** Every position line on the chart, including one a previous chart or poll left behind. */
+  private positionLines(): PriceLine[] {
+    if (!this.chart) return []
+    const lines: PriceLine[] = []
+    for (const pane of this.chart.panes())
+      for (const p of pane.primitives())
+        if (p instanceof PriceLine && p.options().id === 'position') lines.push(p)
+    return lines
   }
 
   private renderPosition(pos: Record<string, unknown> | undefined) {
-    if (this.posLine && this.chart) {
-      this.chart.removePrimitive(this.posLine)
+    this.position = positionFromRow(pos)
+    if (!this.chart) {
       this.posLine = null
+      return
     }
-    this.position = pos
-      ? {
-          net: Number(pos.quantity),
-          avg: Number(pos.average_price),
-          product: String(pos.product ?? ''),
-        }
-      : null
-    if (!this.position || !this.chart || this.position.net === 0) {
-      this.position = this.position && this.position.net !== 0 ? this.position : null
+    // One line per position: keep the one being updated, drop any other.
+    const keep = this.position ? this.posLine : null
+    for (const line of this.positionLines()) if (line !== keep) this.chart.removePrimitive(line)
+    if (!this.position) {
+      this.posLine = null
+      return
+    }
+    const style = {
+      price: this.position.avg,
+      color: this.position.net > 0 ? '#2e7d6b' : '#a14a52',
+      badge: this.position.net > 0 ? 'LONG' : 'SHORT',
+      qty: Math.abs(this.position.net),
+      leftLabel: this.posLabel(),
+    }
+    if (keep && this.positionLines().includes(keep)) {
+      keep.setOptions(style)
       return
     }
     this.posLine = this.chart.addPriceLine(
       {
-        price: this.position.avg,
-        color: this.position.net > 0 ? '#2e7d6b' : '#a14a52',
+        ...style,
         lineWidth: 2,
         dashed: false,
         id: 'position',
         extentFromRight: 0.3,
         closeButton: true,
-        badge: this.position.net > 0 ? 'LONG' : 'SHORT',
-        qty: Math.abs(this.position.net),
-        leftLabel: this.posLabel(),
       },
       0
     )
   }
 
-  private async pollBook() {
+  /**
+   * Read the order and position books onto the chart.
+   *
+   * One read at a time: a fill, a placement and the 8s timer can all ask
+   * within a second, and two reads answering out of order would leave the
+   * older book on screen. A caller arriving mid-read gets one more read after.
+   */
+  private pollBook(): Promise<void> {
+    if (this.bookPoll) {
+      this.bookPollAgain = true
+      return this.bookPoll
+    }
+    const run = (async () => {
+      try {
+        do {
+          this.bookPollAgain = false
+          await this.readBook()
+        } while (this.bookPollAgain && !this.destroyed)
+      } finally {
+        this.bookPoll = null
+      }
+    })()
+    this.bookPoll = run
+    return run
+  }
+
+  private async readBook() {
     if (!this.trade || !this.sym || !this.chart) return
     try {
       const orders = await this.trade.getOrders() // caches modify context
@@ -2451,7 +2527,7 @@ export class TradingTerminal {
     const theme = buildChartTheme(mode, appMode)
     this.chartTheme = theme
     this.chart = createChart(this.container, {
-      priceAxisWidth: 78,
+      priceAxisWidth: this.sym?.exchange === 'CRYPTO' ? 128 : 78,
       theme,
       // No `navigation` override. The engine's default is `mousePan: 'both'`,
       // and this used to pin it to `'horizontal'`, so dragging the plot moved
@@ -2529,6 +2605,8 @@ export class TradingTerminal {
     )
     // Trading hours for the axis past the last bar and the bottom bar's status.
     applySessionHours(this.chart, this.sym?.exchange ?? '', this.apiKey)
+    if (this.sym?.exchange === 'CRYPTO')
+      this.chart.panes()[0]?.priceScale.setPriceFormatter((p: number) => this.displayPrice(p))
     this.offBranding = this.chart.on('branding:changed', () => {
       this.cb.onBrandingChange?.(this.brandingLink())
     })
@@ -2553,7 +2631,11 @@ export class TradingTerminal {
     const priceSeries = (transform: SeriesTransformSpec | null) =>
       this.chart!.addSeries(cfg.series as SeriesType, {
         style,
-        priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
+        priceFormat: {
+          type: 'custom',
+          formatter: (p: number) =>
+            this.sym?.exchange === 'CRYPTO' ? this.displayPrice(p) : p.toFixed(dp),
+        },
         ...(transform ? { transform } : {}),
       })
     try {
@@ -6456,6 +6538,7 @@ export class TradingTerminal {
       this.builder.seed(this.rawBars[this.rawBars.length - 1])
     }
     this.depthActive = false
+    this.tradeTicks = false
     // A new subscription starts with no book: the last one's bid and ask belong to another symbol.
     this.priceAxis.setQuote(null, null)
     if (this.offLtp) {
@@ -6469,6 +6552,7 @@ export class TradingTerminal {
     this.offLtp = this.ws.onLtp((e: LtpEvent) => {
       this.cb.onWsState('live')
       this.stopLtpFallback()
+      if (typeof e.ltq === 'number' && e.ltq > 0) this.tradeTicks = true
       this.onTick(e)
     })
     this.offDepth = this.ws.onDepth((symbol: string, _exchange: string, depth: MarketDepth) => {
@@ -6480,6 +6564,10 @@ export class TradingTerminal {
         this.depthActive = true
         if (this.tradeBtns) this.tradeBtns.setPrices(bid, ask)
       }
+      // A feed that streams each trade (Delta) prices the candle from the
+      // trades; its depth payload repeats the last one, so ticking it again
+      // would only add a stale close.
+      if (this.tradeTicks) return
       // Depth is the terminal's ONLY subscription for tradeable instruments,
       // so the chart ticks off depth.ltp -- a first-class field in every mode-3
       // payload per the WebSocket protocol (docs/prompt/websockets-format.md).
@@ -6938,6 +7026,7 @@ export class TradingTerminal {
       name: String(info.name || ''),
       lotsize,
       lots,
+      contractValue: Number(info.contract_value) > 0 ? Number(info.contract_value) : undefined,
       tick: resolveTick(exchange, info.tick_size),
       freezeQty: Number(info.freeze_qty) || 1,
       quoteOnly: QUOTE_ONLY.has(exchange),
@@ -7153,8 +7242,53 @@ export class TradingTerminal {
   chartElement(): HTMLElement {
     return this.container
   }
+  /** Read-only research input: native, completed bars only, never replay future data. */
+  cryptoResearchSnapshot() {
+    if (
+      this.destroyed || this.preparingWorkspace || this.workspaceTransitionLocked ||
+      this.replayPicking || this.replayLoading || !this.sym || this.sym.synthetic ||
+      this.sym.exchange !== 'CRYPTO' || !['BTCUSD', 'BTCUSDFUT'].includes(this.sym.symbol) ||
+      this.dataUnavailable()
+    ) return null
+    const replaying = this.replayOwnsDisplay()
+    const replayTime = this.replayState()?.bar?.time
+    const step = intervalSeconds(this.interval)
+    if (!step) return null
+    const cutoff = replaying ? replayTime : nowSec()
+    if (cutoff == null) return null
+    const bars = this.rawBars.filter((bar) => bar.time + step <= cutoff).slice(-2000)
+    const last = bars.at(-1)
+    return {
+      symbol: this.sym.symbol, interval: this.interval, tick: this.tick(),
+      contractValue: this.sym.contractValue ?? null,
+      replay: replaying, fresh: !replaying && !!last && cutoff - (last.time + step) <= step + 10,
+      bars,
+    }
+  }
+
   currentInterval(): string {
     return this.interval
+  }
+
+  /** Server-owned setup prices. Read-only, native USD; suppressed during replay. */
+  showLiquidityExecutionPlan(plan: { entry: number; stop: number; target: number; mode: string } | null): void {
+    if (!this.chart || this.destroyed) return
+    if (this.replayOwnsDisplay() || !this.sym || this.sym.exchange !== 'CRYPTO' ||
+        !['BTCUSD', 'BTCUSDFUT'].includes(this.sym.symbol)) plan = null
+    const specs = plan ? [
+      { id: 'liquidity-exec:entry', price: plan.entry, color: '#2563eb', leftLabel: `${plan.mode.toUpperCase()} strategy entry` },
+      { id: 'liquidity-exec:stop', price: plan.stop, color: '#dc2626', leftLabel: 'Strategy SL' },
+      { id: 'liquidity-exec:target', price: plan.target, color: '#059669', leftLabel: 'Strategy runner target' },
+    ] : []
+    const existing = this.chart.panes().flatMap(p => [...p.primitives()])
+      .filter((p): p is PriceLine => p instanceof PriceLine && p.options().id?.startsWith('liquidity-exec:') === true)
+    for (const line of existing) if (!specs.some(s => s.id === line.options().id)) this.chart.removePrimitive(line)
+    for (const spec of specs) {
+      if (!(spec.price > 0) || !Number.isFinite(spec.price)) continue
+      const old = existing.find(line => line.options().id === spec.id)
+      if (old) old.setOptions(spec)
+      else this.chart.addPriceLine({ ...spec, lineWidth: 2, dashed: true, extentFromRight: 0.35 }, 0)
+    }
   }
   supportedIntervals(): readonly string[] {
     return this.availableIntervals
@@ -7838,7 +7972,8 @@ export class TradingTerminal {
       return
     }
 
-    // restore the last symbol; fall back to BHEL/NSE if it's gone or has no data.
+    // Restore the last symbol. Equity brokers fall back to BHEL/NSE; crypto
+    // brokers (Delta Exchange India) have no NSE book, so try BTC perpetual next.
     let loaded = false
     try {
       const saved = JSON.parse(this.lsGet('symbol') || 'null') as {
@@ -7854,12 +7989,20 @@ export class TradingTerminal {
       /* fall through to the default */
     }
     if (!loaded && !this.destroyed) {
-      try {
-        const rows = await this.search('BHEL', 'NSE')
-        const bhel = rows.find((r) => r.symbol === 'BHEL' && r.exchange === 'NSE')
-        if (bhel) await this.loadSymbol(bhel)
-      } catch {
-        /* leave the chart empty; the user can search */
+      const defaults: Array<[string, string]> = [
+        ['BHEL', 'NSE'],
+        ['BTCUSDFUT', 'CRYPTO'],
+        ['BTCINR', 'CRYPTO'],
+      ]
+      for (const [symbol, exchange] of defaults) {
+        if (loaded || this.destroyed) break
+        try {
+          const rows = await this.search(symbol, exchange)
+          const row = rows.find((r) => r.symbol === symbol && r.exchange === exchange)
+          if (row) loaded = await this.loadSymbol(row)
+        } catch {
+          /* try the next default */
+        }
       }
     }
   }
@@ -7867,6 +8010,8 @@ export class TradingTerminal {
   destroy() {
     if (this.destroyed) return
     // Optional: a terminal built without its fields (a test double) has none.
+    this.offDisplayCurrency?.()
+    this.offDisplayCurrency = null
     this.undoHistory?.destroy()
     this.replayInvalidation?.()
     this.replayInvalidation = null

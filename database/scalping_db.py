@@ -10,6 +10,7 @@ persists each active leg's SL config so it survives a page reload — keyed by
 """
 
 import logging
+import uuid
 
 from sqlalchemy import (
     Boolean,
@@ -68,6 +69,8 @@ class ScalpingSLState(Base):
     current_sl = Column(Float, nullable=True)
     target = Column(Float, nullable=True)  # take-profit price (0/None = no target)
 
+    generation = Column(String(32), default=lambda: uuid.uuid4().hex)
+    exit_reason = Column(String(10), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -106,6 +109,8 @@ def init_db():
     _migrate_add_columns()
     _migrate_mode_unique(ScalpingSLState, "scalping_sl_state")
     _migrate_mode_unique(ScalpingTrackedSymbol, "scalping_tracked_symbol")
+    from services.scalping_delta_execution import init_db as init_delta_intents
+    init_delta_intents()
 
 
 def _migrate_mode_unique(model, table_name: str):
@@ -187,6 +192,10 @@ def _migrate_add_columns():
             return
         existing = {c["name"] for c in inspector.get_columns("scalping_sl_state")}
         with engine.begin() as conn:
+            if "generation" not in existing:
+                conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN generation VARCHAR(32)"))
+            if "exit_reason" not in existing:
+                conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN exit_reason VARCHAR(10)"))
             if "lowest_price" not in existing:
                 conn.execute(text("ALTER TABLE scalping_sl_state ADD COLUMN lowest_price FLOAT"))
                 logger.info("Scalping DB: added lowest_price column")
@@ -232,6 +241,8 @@ def _to_dict(row: "ScalpingSLState") -> dict:
         "current_sl": row.current_sl,
         "target": row.target,
         "is_active": row.is_active,
+        "exit_reason": row.exit_reason,
+        "generation": row.generation,
     }
 
 
@@ -269,6 +280,7 @@ def upsert_sl_state(data: dict) -> dict | None:
             "current_sl",
             "target",
             "is_active",
+            "exit_reason",
         ):
             if field in data and data[field] is not None:
                 setattr(row, field, data[field])
@@ -370,3 +382,22 @@ def clear_tracked_symbols(mode: str | None = None) -> bool:
         logger.exception(f"Error clearing scalping tracked symbols: {e}")
         db_session.rollback()
         return False
+
+
+def latch_sl_exit(symbol, exchange, product, mode="live", reason="sl", expected_target=None, generation=None):
+    """Persist a desired-flat request without recreating a deleted stop."""
+    try:
+        query = db_session.query(ScalpingSLState).filter_by(symbol=symbol, exchange=exchange, product=product, mode=mode, is_active=True)
+        if generation is not None:
+            query = query.filter(ScalpingSLState.generation == generation)
+        if reason == "target":
+            if expected_target is not None:
+                query = query.filter(ScalpingSLState.target == expected_target)
+            from sqlalchemy import or_
+            query = query.filter(or_(ScalpingSLState.exit_reason.is_(None), ScalpingSLState.exit_reason.notin_(["sl", "close"])))
+        count = query.update({"exit_reason": reason})
+        db_session.commit()
+        return bool(count)
+    except Exception:
+        db_session.rollback()
+        raise

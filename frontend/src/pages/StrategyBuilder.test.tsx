@@ -483,7 +483,8 @@ describe('StrategyBuilder live request orchestration', () => {
     )
   })
 
-  it('formats currency output for the authenticated Delta Exchange broker', async () => {
+  it('formats currency output for the authenticated Delta Exchange broker with USD selected', async () => {
+    localStorage.setItem('openalgo_delta_position_currency_session', 'USD')
     mocks.broker = 'deltaexchange'
     renderBuilder()
     await addOneLeg()

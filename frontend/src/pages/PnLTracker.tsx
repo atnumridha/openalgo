@@ -1,8 +1,8 @@
+import { useBrokerCurrencyFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -66,7 +66,7 @@ export default function PnLTracker() {
   const { mode } = useThemeStore()
   const isDarkMode = mode === 'dark'
   const { user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerCurrencyFormatter(user?.broker)
 
   // State
   const [isLoading, setIsLoading] = useState(false)

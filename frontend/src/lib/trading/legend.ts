@@ -97,7 +97,8 @@ export interface LegendInput {
  */
 export function buildChartLegend(input: LegendInput): LegendRun[] {
   const runs: LegendRun[] = [{ text: input.symbol, tone: 'symbol' }]
-  const lot = input.lotsize ? ` · lot ${input.lotsize}` : ''
+  // "lot 1" says nothing on a venue where every contract is a lot of one.
+  const lot = input.lotsize && input.lotsize !== 1 ? ` · lot ${input.lotsize}` : ''
   runs.push({ text: `· ${input.interval} · ${input.exchange}${lot}`, tone: 'meta' })
 
   const bar = input.bar
@@ -147,10 +148,30 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
 
 /** The second legend line: what one lot of quantity actually buys. */
 export function lotInfoText(
-  v: { lots: boolean; lotsize: number; freezeQty: number; quoteOnly: boolean } | null,
+  v: {
+    lots: boolean
+    lotsize: number
+    freezeQty: number
+    quoteOnly: boolean
+    exchange?: string
+    symbol?: string
+    contractValue?: number
+  } | null,
   qty: number
 ): string {
   if (!v) return ''
+  if (v.exchange === 'CRYPTO') {
+    // A crypto contract is not a lot of shares: what a trader needs is how much
+    // of the coin it is, which is what "1 × 1 = 1 qty" never said.
+    const contracts = Math.max(1, Math.floor(qty || 1))
+    const per = v.contractValue
+    if (!per || !Number.isFinite(per)) {
+      return `${contracts} contract${contracts === 1 ? '' : 's'}`
+    }
+    const base = cryptoBase(v.symbol)
+    const total = Number((contracts * per).toPrecision(10))
+    return `${contracts} contract${contracts === 1 ? '' : 's'} = ${total} ${base}`.trim()
+  }
   if (v.lots) {
     const lots = Math.max(1, Math.floor(qty || 1))
     let t = `${lots} × ${v.lotsize} = ${lots * v.lotsize} qty`
@@ -158,6 +179,12 @@ export function lotInfoText(
     return t
   }
   return v.quoteOnly ? 'quote-only (no trading)' : ''
+}
+
+/** BTC from BTCUSDFUT or BTCUSD; empty when the symbol does not say. */
+function cryptoBase(symbol: string | undefined): string {
+  const match = /^([A-Z0-9]+?)(USDT|USD)(FUT)?$/.exec(String(symbol || '').toUpperCase())
+  return match ? match[1] : ''
 }
 
 const esc = (s: unknown) =>

@@ -42,6 +42,7 @@ Threading:
 from __future__ import annotations
 
 import atexit
+from decimal import Decimal, InvalidOperation
 import threading
 import time
 
@@ -101,17 +102,17 @@ def evaluate_trail(state: dict, ltp: float) -> dict:
     current_sl = state.get("current_sl")
     if current_sl is None:
         current_sl = state.get("initial_sl")
-    if current_sl is None:
-        current_sl = entry
+    has_sl = current_sl is not None and current_sl > 0
 
     if side == "SELL":
         prev_low = state.get("lowest_price")
         lowest = min(prev_low if prev_low is not None else entry, ltp)
         if trailing and step > 0 and (entry - ltp) >= MIN_TRAIL_PROFIT:
             candidate = lowest + step
-            if candidate < current_sl:
+            if not has_sl or candidate < current_sl:
                 current_sl = candidate
-        sl_hit = ltp >= current_sl  # short: stop ABOVE price
+                has_sl = candidate > 0
+        sl_hit = has_sl and ltp >= current_sl  # short: stop ABOVE price
         target_hit = target > 0 and ltp <= target  # short: target BELOW price
         return {
             "highest_price": state.get("highest_price"),
@@ -126,9 +127,10 @@ def evaluate_trail(state: dict, ltp: float) -> dict:
     highest = max(prev_high if prev_high is not None else entry, ltp)
     if trailing and step > 0 and (ltp - entry) >= MIN_TRAIL_PROFIT:
         candidate = highest - step
-        if candidate > current_sl:
+        if not has_sl or candidate > current_sl:
             current_sl = candidate
-    sl_hit = ltp <= current_sl  # long: stop BELOW price
+            has_sl = candidate > 0
+    sl_hit = has_sl and ltp <= current_sl  # long: stop BELOW price
     target_hit = target > 0 and ltp >= target  # long: target ABOVE price
     return {
         "highest_price": highest,
@@ -344,9 +346,18 @@ class ScalpingRiskMonitor:
             return
         symbols = [{"exchange": k.split(":", 1)[0], "symbol": k.split(":", 1)[1]} for k in symkeys]
         try:
-            self._ws.subscribe(symbols, mode=SUBSCRIBE_MODE)  # blocking (off-lock)
+            result = self._ws.subscribe(symbols, mode=SUBSCRIBE_MODE)  # blocking (off-lock)
+            if result.get("status") == "success":
+                accepted = symkeys
+            else:
+                accepted = {
+                    _symkey(s["symbol"], s["exchange"])
+                    for s in result.get("subscriptions", [])
+                    if s.get("status") == "success" and s.get("symbol") and s.get("exchange")
+                } & symkeys
+                logger.warning("Scalping protection feed not confirmed for %s", sorted(symkeys - accepted))
             with self._lock:
-                self._subscribed |= symkeys
+                self._subscribed |= accepted
         except Exception as e:
             logger.warning("Scalping risk monitor subscribe failed: %s", e)
 
@@ -414,12 +425,13 @@ class ScalpingRiskMonitor:
                     continue
                 has_sl = state.get("current_sl") is not None or state.get("initial_sl") is not None
                 has_target = (state.get("target") or 0) > 0
-                if not has_sl and not has_target:
+                if not has_sl and not has_target and not state.get("exit_reason"):
                     continue
                 result = evaluate_trail(state, ltp)
-                if result["breached"]:
-                    exits.append((key, state, result["reason"]))
-                    continue
+                if result["breached"] or (state.get("mode") == "live" and exchange == "CRYPTO"):
+                    exits.append((key, state, ("sl" if result["reason"] == "sl" else state.get("exit_reason") or result["reason"])))
+                    if result["breached"]:
+                        continue
                 moved = (
                     result["current_sl"] != state.get("current_sl")
                     or result["highest_price"] != state.get("highest_price")
@@ -478,13 +490,20 @@ class ScalpingRiskMonitor:
         # lock: exit workers clear the marker from their own threads.
         with self._lock:
             if self._states.get(key) is not state:
-                # Cleared (or replaced by a sync) since the tick decided: an
-                # exit already completed for it, or the next tick re-decides.
                 return
+            if reason in ("sl", "target") and state.get("mode") == "live" and state.get("exchange") == "CRYPTO" and state.get("exit_reason") != reason:
+                from database.scalping_db import latch_sl_exit
+                if not latch_sl_exit(state["symbol"], state["exchange"], state["product"], "live", reason, state.get("target"), state.get("generation")):
+                    return
+                state["exit_reason"] = reason
             if key in self._exit_inflight:
                 return
-            if now - self._last_exit_attempt.get(key, 0.0) < EXIT_RETRY_COOLDOWN_SEC:
+            last_reason = getattr(self, "_last_exit_reason", {}).get(key)
+            if now - self._last_exit_attempt.get(key, 0.0) < EXIT_RETRY_COOLDOWN_SEC and not ((reason in ("sl", "close") and last_reason not in ("sl", "close")) or (reason == "target" and last_reason is None)):
                 return
+            if not hasattr(self, "_last_exit_reason"):
+                self._last_exit_reason = {}
+            self._last_exit_reason[key] = reason
             self._last_exit_attempt[key] = now
             self._exit_inflight.add(key)
             snapshot = dict(state)
@@ -524,13 +543,24 @@ class ScalpingRiskMonitor:
                 )
                 return
             exit_api_key, auth_token, broker = auth
+            if broker == "deltaexchange" and state.get("mode") == "live":
+                from services.scalping_delta_execution import manage_exit
+                manage_exit(state, reason, auth_token, exit_api_key, on_flat=lambda: self._clear_state(key, symbol, exchange, product, state.get("mode")))
+                return
             net_qty = self._live_net_qty(symbol, exchange, product, exit_api_key, auth_token, broker)
             mode = state.get("mode")
+            if net_qty is None:
+                logger.warning(
+                    "Scalping auto-exit for %s: position is unknown — keeping SL, will retry", symbol
+                )
+                return
             if net_qty == 0:
                 self._clear_state(key, symbol, exchange, product, mode)
                 logger.info("Scalping SL for %s already flat — cleared", symbol)
                 return
 
+            if reason is None:
+                return
             action = "SELL" if net_qty > 0 else "BUY"
             qty = abs(net_qty)
             from blueprints.scalping import _reducing_exit
@@ -574,6 +604,7 @@ class ScalpingRiskMonitor:
             self._states.pop(key, None)
             self._last_persist.pop(key, None)
             self._last_exit_attempt.pop(key, None)
+            getattr(self, "_last_exit_reason", {}).pop(key, None)
             self._last_emit.pop(key, None)
             # A sync reading the database right now may have read this row
             # before the delete above; tell it not to bring the stop back.
@@ -632,30 +663,39 @@ class ScalpingRiskMonitor:
             logger.debug("scalping_sl_update emit failed: %s", e)
 
     # ------------------------------------------------------------------ helpers
-    def _live_net_qty(self, symbol, exchange, product, api_key, auth_token, broker) -> int:
+    def _live_net_qty(self, symbol, exchange, product, api_key, auth_token, broker) -> int | None:
+        """None means unknown; only a valid, successful book can establish flat."""
         from services.positionbook_service import get_positionbook
 
         try:
             ok, resp, _code = get_positionbook(
-                api_key=api_key, auth_token=auth_token, broker=broker
+                api_key=api_key, auth_token=auth_token, broker=broker, strict=True
             )
         except Exception as e:
             logger.debug("Positionbook fetch error: %s", e)
-            return 0
-        if not ok or not isinstance(resp, dict):
-            return 0
+            return None
+        if (not ok or not isinstance(resp, dict) or resp.get("status") != "success"
+                or not isinstance(resp.get("data"), list)):
+            return None
         ex = (exchange or "").upper()
         pr = (product or "").upper()
-        for p in resp.get("data") or []:
+        for p in resp["data"]:
+            if not isinstance(p, dict):
+                return None
             if (
                 p.get("symbol") == symbol
                 and (p.get("exchange") or "").upper() == ex
                 and (p.get("product") or "").upper() == pr
             ):
                 try:
-                    return int(float(p.get("quantity") or 0))
-                except (TypeError, ValueError):
-                    return 0
+                    if isinstance(p.get("quantity"), bool):
+                        return None
+                    qty = Decimal(str(p.get("quantity")))
+                    if not qty.is_finite() or qty != qty.to_integral_value():
+                        return None
+                    return int(qty)
+                except (InvalidOperation, TypeError, ValueError):
+                    return None
         return 0
 
     def _mode(self) -> str | None:
@@ -709,6 +749,11 @@ class ScalpingRiskMonitor:
             api_key = get_api_key_for_tradingview(user.username)
             if not api_key:
                 return None
+            if self._mode() == "live":
+                from database.auth_db import get_auth_token_broker
+                auth, broker = get_auth_token_broker(api_key)
+                if broker == "deltaexchange":
+                    return (api_key, auth, broker) if auth else None
             return api_key, None, None
         finally:
             self._remove_session("database.user_db")

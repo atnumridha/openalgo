@@ -1,3 +1,4 @@
+import { useBrokerCurrencyFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import {
   Activity,
   ArrowDown,
@@ -22,7 +23,7 @@ import {
   Zap,
   ZapOff,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,7 +36,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
-import { cn, makeFormatCurrency } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -241,7 +242,7 @@ interface WebSocketTestProps {
 export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
   const { user } = useAuthStore()
   const { tradingExchanges } = useSupportedExchanges()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerCurrencyFormatter(user?.broker)
   // Connection state - INDEPENDENT WebSocket (not shared with MarketDataManager)
   // This page needs its own connection for testing/debugging purposes
   const [isConnected, setIsConnected] = useState(false)

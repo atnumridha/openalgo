@@ -1,3 +1,4 @@
+import { deltaMoney, type DeltaDisplayCurrency } from '@/lib/deltaCurrency'
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
@@ -28,8 +29,12 @@ export function sanitizeCSV(value: string | number | null | undefined): string {
  * - deltaexchange → USD ($)
  * - all other brokers  → INR (₹)
  */
-export function makeFormatCurrency(broker?: string | null): (value: number) => string {
+export function makeFormatCurrency(
+  broker?: string | null,
+  displayCurrency?: DeltaDisplayCurrency
+): (value: number) => string {
   const isUSD = broker === 'deltaexchange'
+  if (isUSD && displayCurrency) return (value: number) => deltaMoney(value, displayCurrency)
   return (value: number) =>
     isUSD
       ? new Intl.NumberFormat('en-US', {

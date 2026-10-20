@@ -11,7 +11,16 @@ export interface SearchInstrument {
   symbol: string
   exchange: string
   lotsize: number
+  tick_size?: number | null
   name?: string
+}
+
+export interface FuturesContract {
+  symbol: string
+  expiry: string
+  lotsize: number
+  tick_size: number | null
+  instrumenttype?: string
 }
 
 export interface ScalpingUnderlying {
@@ -73,6 +82,10 @@ export interface SelectedLeg {
 }
 
 export interface ScalpingOrderRequest {
+  ml_defaults?: import('@/lib/scalpingMlDefaults').MLTicketStamp
+  ml_plan?: import('@/lib/scalpingMlDefaults').MLTicketStamp
+  leverage?: number
+  protection?: import('@/lib/scalpingRisk').ProtectionConfig
   symbol: string
   exchange: string // NFO | BFO
   action: ScalpingAction
@@ -83,6 +96,10 @@ export interface ScalpingOrderRequest {
 }
 
 export interface ScalpingOrderResponse {
+  entry_price?: number
+  protection_saved?: boolean
+  leverage?: number
+  execution?: string
   status: string
   orderid?: string
   message?: string
@@ -121,14 +138,15 @@ export interface ScalpingPositionRow {
   exchange: string
   product: ScalpingProduct
   side: 'BUY' | 'SELL' | '-'
-  netQty: number
+  netQty: number | null
+  currency: 'USD' | 'INR'
   ltp: number
   sl: number | null
   target: number | null // take-profit price (null = none)
   trailingStep: number | null // trailing step when TSL enabled (null = off)
-  realizedPnl: number
-  unrealizedPnl: number
-  totalPnl: number
+  realizedPnl: number | null
+  unrealizedPnl: number | null
+  totalPnl: number | null
   avgPrice: number
   buyQty: number
   buyAvg: number

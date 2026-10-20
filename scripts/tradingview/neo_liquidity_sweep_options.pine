@@ -1,0 +1,223 @@
+// Research source companion. TradingView saved script uses equivalent compact variable names.
+//@version=6
+strategy("Neo Liquidity Sweep | Options Risk 1000", overlay=true, initial_capital=30000, currency=currency.INR, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.11855, slippage=2, margin_long=100, margin_short=100, calc_on_every_tick=false, calc_on_order_fills=false, process_orders_on_close=false)
+indexSymbol = input.symbol("NSE:NIFTY", "Signal index")
+optionSide = input.string("CE", "Chart option type", options=["CE", "PE"])
+lotUnits = input.int(65, "Units per lot (verify expiry)", minval=1)
+lossBudget = input.float(1000, "Maximum planned loss INR", minval=1)
+reward = input.float(2, "Net reward multiple", options=[2, 5, 10])
+stopMode = input.string("Fixed", "SL mode", options=["Fixed", "Delayed trailing"])
+startDate = input.time(timestamp("19 Sep 2026 00:00 +0530"), "From IST")
+endDate = input.time(timestamp("18 Oct 2026 23:59 +0530"), "Through IST")
+slipInput = input.float(0.10, "Slippage reserve INR/unit", minval=0)
+slip = math.max(slipInput, 2 * syminfo.mintick)
+
+f_up(float p) => math.ceil(p / syminfo.mintick - 1e-8) * syminfo.mintick
+f_down(float p) => math.floor(p / syminfo.mintick + 1e-8) * syminfo.mintick
+f_fees(float buy, float sell) =>
+    float turnover = buy + sell
+    float base = turnover * (3552.99 / 10000000 + 1.0 / 1000000 + 0.01 / 10000000)
+    float asymmetric = math.round((base * 1.18 + sell * 0.0015 + buy * 0.00003) * 100) / 100
+    float nativeReserve = math.ceil(turnover * 0.0011855 * 100) / 100
+    math.max(asymmetric, nativeReserve)
+
+[pdh, pdl, pdc] = request.security(indexSymbol, "D", [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+f_sweep(float refH, float refL, float priorClose) =>
+    var float swingLow = na
+    var float swingHigh = na
+    var float upperExtreme = na
+    var float lowerExtreme = na
+    var float peOrigin = na
+    var float ceOrigin = na
+    var float ceTrigger = na
+    var float peTrigger = na
+    var float ceStop = na
+    var float peStop = na
+    var float ceTarget = na
+    var float peTarget = na
+    var int ceAt = na
+    var int peAt = na
+    bool freshDay = timeframe.change("D")
+    if freshDay
+        swingLow := na
+        swingHigh := na
+        upperExtreme := na
+        lowerExtreme := na
+        peOrigin := na
+        ceOrigin := na
+        ceAt := na
+        peAt := na
+    bool session = not na(time("1", "0915-1515:23456", "Asia/Kolkata"))
+    bool callBreak = session and ceAt == bar_index - 1 and high > ceTrigger
+    bool putBreak = session and peAt == bar_index - 1 and low < peTrigger
+    float callEntry = math.max(open, ceTrigger + 0.05)
+    float putEntry = math.min(open, peTrigger - 0.05)
+    bool callReady = callBreak and callEntry > ceStop and ceTarget - callEntry >= 2 * (callEntry - ceStop)
+    bool putReady = putBreak and putEntry < peStop and putEntry - peTarget >= 2 * (peStop - putEntry)
+    float previous = freshDay ? priorClose : close[1]
+    if session
+        if previous <= refH and high > refH
+            upperExtreme := refH
+            peOrigin := swingLow < refH ? swingLow : na
+        if previous >= refL and low < refL
+            lowerExtreme := refL
+            ceOrigin := swingHigh > refL ? swingHigh : na
+        if not na(upperExtreme)
+            float old = upperExtreme
+            upperExtreme := math.max(old, high)
+            if low <= peOrigin
+                peOrigin := na
+            if close < open and high > refH and high > old and not na(peOrigin) and peOrigin < low
+                peTrigger := low
+                peStop := high + 0.05
+                peTarget := peOrigin
+                peAt := bar_index
+        if not na(lowerExtreme)
+            float old = lowerExtreme
+            lowerExtreme := math.min(old, low)
+            if high >= ceOrigin
+                ceOrigin := na
+            if close > open and low < refL and low < old and not na(ceOrigin) and ceOrigin > high
+                ceTrigger := high
+                ceStop := low - 0.05
+                ceTarget := ceOrigin
+                ceAt := bar_index
+        bool continuousFive = time - time[4] == 240000
+        if continuousFive and high[2] > high[4] and high[2] > high[3] and high[2] > high[1] and high[2] > high
+            swingHigh := high[2]
+        if continuousFive and low[2] < low[4] and low[2] < low[3] and low[2] < low[1] and low[2] < low
+            swingLow := low[2]
+    [callReady, putReady]
+
+[ceSignal, peSignal] = request.security(indexSymbol, "1", f_sweep(pdh, pdl, pdc), gaps=barmerge.gaps_on, lookahead=barmerge.lookahead_off)
+if barstate.isfirst and (not timeframe.isminutes or timeframe.multiplier != 1)
+    runtime.error("Use a standard 1-minute option chart.")
+if barstate.isfirst and (syminfo.type != "option" or syminfo.currency != "INR")
+    runtime.error("Use an INR option-premium chart. Index results are not option P&L.")
+
+bool newDay = timeframe.change("D")
+bool goodBar = volume > 0 and low > 0 and low <= math.min(open, close) and high >= math.max(open, close)
+var int run = 0
+var float seed = 0
+var float optionAtr = na
+bool continuous = not newDay and time - time[1] == 60000 and goodBar and goodBar[1]
+if not continuous
+    run := goodBar ? 1 : 0
+    seed := 0
+    optionAtr := na
+else
+    run += 1
+    float tr = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+    if run <= 15
+        seed += tr
+        if run == 15
+            optionAtr := seed / 14
+    else
+        optionAtr := (optionAtr * 13 + tr) / 14
+
+var int todayEntries = 0
+var int seenEntries = 0
+var int submittedAt = na
+var bool pending = false
+var float frozenStop = na
+var float frozenTarget = na
+var float frozenRisk = na
+var float netPeak = 0
+var int chosenLots = 0
+int totalEntries = strategy.closedtrades + strategy.opentrades
+if newDay
+    todayEntries := 0
+if totalEntries > seenEntries
+    todayEntries += totalEntries - seenEntries
+    seenEntries := totalEntries
+if pending and bar_index > submittedAt
+    strategy.cancel("BUY")
+    pending := false
+int minutes = hour(time_close, "Asia/Kolkata") * 60 + minute(time_close, "Asia/Kolkata")
+bool beforeCutoff = minutes < 915
+bool sessionOpen = minutes > 555 and beforeCutoff
+bool signal = optionSide == "CE" ? ceSignal : peSignal
+bool eligible = time >= startDate and time <= endDate and sessionOpen and goodBar and not na(optionAtr) and optionAtr > 0
+
+if strategy.position_size > 0 and stopMode == "Delayed trailing" and barstate.isconfirmed
+    float entry = strategy.position_avg_price
+    float units = strategy.position_size * syminfo.pointvalue
+    float liquidation = math.max(syminfo.mintick, f_down(close - slip))
+    float estimatedNet = (liquidation - entry) * units - f_fees(entry * units, liquidation * units)
+    netPeak := math.max(netPeak, estimatedNet)
+    if netPeak >= 2 * frozenRisk
+        float floorNet = math.max(frozenRisk, netPeak - 1.5 * frozenRisk)
+        float lo = entry
+        float hi = close
+        for i = 0 to 39
+            float mid = (lo + hi) / 2
+            float exitPrice = math.max(syminfo.mintick, f_down(mid - slip))
+            float net = (exitPrice - entry) * units - f_fees(entry * units, exitPrice * units)
+            if net >= floorNet
+                hi := mid
+            else
+                lo := mid
+        float candidate = f_up(hi)
+        if candidate < close
+            frozenStop := math.max(frozenStop, candidate)
+    strategy.exit("SL / Target", "BUY", stop=frozenStop, limit=frozenTarget)
+
+if eligible and signal and strategy.position_size == 0 and not pending and todayEntries < 2
+    float entry = f_up(close + slip)
+    float stop = f_up(entry - 1.5 * optionAtr)
+    float stopFill = math.max(syminfo.mintick, f_down(stop - slip))
+    float available = strategy.equity
+    int lots = int(math.max(0, math.floor(available / (entry * lotUnits))))
+    float risk = na
+    while lots > 0
+        float units = lots * lotUnits
+        risk := (entry - stopFill) * units + f_fees(entry * units, stopFill * units)
+        float debit = entry * units + f_fees(entry * units, 0)
+        if stop > 0 and stop < entry and risk <= lossBudget and debit <= available
+            break
+        lots -= 1
+    if lots > 0
+        float units = lots * lotUnits
+        float lo = entry
+        float hi = entry + reward * risk / units + math.max(1, entry * 0.1)
+        for i = 0 to 49
+            float mid = (lo + hi) / 2
+            float net = (mid - entry) * units - f_fees(entry * units, mid * units)
+            if net >= reward * risk
+                hi := mid
+            else
+                lo := mid
+        frozenStop := stop
+        frozenTarget := reward == 2 ? f_up(hi) : f_down(hi)
+        frozenRisk := risk
+        netPeak := 0
+        chosenLots := lots
+        submittedAt := bar_index
+        pending := true
+        strategy.entry("BUY", strategy.long, qty=units / syminfo.pointvalue, limit=entry, comment=optionSide + " sweep")
+        strategy.exit("SL / Target", "BUY", stop=frozenStop, limit=frozenTarget)
+if minutes >= 915
+    strategy.cancel_all()
+    strategy.close_all(comment="15:15 IST", immediately=true)
+    pending := false
+
+plot(strategy.position_size > 0 or pending ? frozenStop : na, "Stop loss", color.red, 2, plot.style_linebr)
+plot(strategy.position_size > 0 or pending ? frozenTarget : na, "Target", color.green, 2, plot.style_linebr)
+plot(strategy.position_avg_price > 0 ? strategy.position_avg_price : na, "Filled entry", color.blue, 2, plot.style_linebr)
+plotshape(eligible and signal, title="Index sweep trigger", style=shape.triangleup, location=location.belowbar, color=color.teal, size=size.tiny)
+var table status = table.new(position.top_right, 2, 7, border_width=1)
+if barstate.islast
+    table.cell(status, 0, 0, "Fixed contract only")
+    table.cell(status, 1, 0, optionSide + " | " + stopMode)
+    table.cell(status, 0, 1, "Planned risk cap")
+    table.cell(status, 1, 1, "INR " + str.tostring(lossBudget))
+    table.cell(status, 0, 2, "Last lots / risk")
+    table.cell(status, 1, 2, str.tostring(chosenLots) + " / " + str.tostring(frozenRisk, "#.00"))
+    table.cell(status, 0, 3, "Tester charges")
+    table.cell(status, 1, 3, "0.11855% / side approx")
+    table.cell(status, 0, 4, "Entry proxy")
+    table.cell(status, 1, 4, "Next-bar capped limit")
+    table.cell(status, 0, 5, "Native point value")
+    table.cell(status, 1, 5, str.tostring(syminfo.pointvalue))
+    table.cell(status, 0, 6, "Limits")
+    table.cell(status, 1, 6, "Gaps / fills not guaranteed")

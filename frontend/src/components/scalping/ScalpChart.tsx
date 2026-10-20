@@ -1,3 +1,4 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 /**
  * ScalpChart - a self-contained live candlestick + volume chart for the
  * scalping terminal.
@@ -19,6 +20,9 @@ import {
   CrosshairMode,
   createChart,
   HistogramSeries,
+  LineSeries,
+  LineStyle,
+  type AutoscaleInfo,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
@@ -27,6 +31,8 @@ import { useEffect, useRef, useState } from 'react'
 import { scalpingApi } from '@/api/scalping'
 import { useMarketData } from '@/hooks/useMarketData'
 import { priceDecimals } from '@/lib/scalpingPrice'
+import { chartIndicators, type ChartIndicatorValues } from '@/lib/scalpingIndicators'
+import { grossLabel, type ChartPosition } from '@/lib/scalpingChartPosition'
 import { useThemeStore } from '@/stores/themeStore'
 
 // Matches the IST shift the backend bakes into bar times so live bars line up
@@ -38,6 +44,14 @@ const UP = '#26a69a'
 const DOWN = '#ef5350'
 const VOL_UP = 'rgba(38,166,154,0.45)'
 const VOL_DOWN = 'rgba(239,83,80,0.45)'
+const INDICATORS = [
+  { key: 'ema9', title: 'EMA9', color: '#0284c7', pane: 0 },
+  { key: 'ema20', title: 'EMA20', color: '#d97706', pane: 0 },
+  { key: 'ema50', title: 'EMA50', color: '#db2777', pane: 0 },
+] as const
+type IndicatorKey = typeof INDICATORS[number]['key']
+const visibleIndicator = (key: IndicatorKey, interval: string) =>
+  interval === '1m' ? key === 'ema9' : key !== 'ema9'
 
 interface Candle {
   time: number
@@ -48,7 +62,7 @@ interface Candle {
   volume: number
 }
 
-function fmtPrice(n: number, decimals = 2): string {
+function nativeFmtPrice(n: number, decimals = 2): string {
   return n.toLocaleString('en-IN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
@@ -67,12 +81,21 @@ export function ScalpChart({
   exchange,
   interval,
   title,
+  position,
 }: {
   symbol: string
   exchange: string
   interval: string
   title?: string
+  position?: ChartPosition
 }) {
+  const display = useBrokerCurrencyFormatter('deltaexchange')
+  const quote = useBrokerPriceFormatter('deltaexchange')
+  const quoteRef = useRef(quote)
+  quoteRef.current = quote
+  const displayRef = useRef(display)
+  displayRef.current = display
+  const fmtPrice = (n: number, decimals = 2) => exchange === 'CRYPTO' ? quoteRef.current(n) : nativeFmtPrice(n, decimals)
   const { mode } = useThemeStore()
   const isDark = mode === 'dark'
 
@@ -81,8 +104,13 @@ export function ScalpChart({
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const indicatorSeriesRef = useRef<Partial<Record<IndicatorKey, ISeriesApi<'Line'>>>>({})
+  const indicatorValuesRef = useRef<ChartIndicatorValues[]>([])
+  const renderIndicatorsRef = useRef<(replace: boolean) => void>(() => {})
   const renderLegendRef = useRef<(time?: number) => void>(() => {})
   const colorsRef = useRef({ title: '#d6dde6', muted: '#8a97a5' })
+  const positionRef = useRef(position)
+  positionRef.current = position
 
   // Authoritative model: bucket time -> candle. Completed bars are reconciled
   // from broker history; the current bucket is built live from ticks.
@@ -133,7 +161,12 @@ export function ScalpChart({
         borderColor: isDark ? '#1b2330' : '#e2e8f0',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 3,
+        shiftVisibleRangeOnNewBar: true,
       },
+      // Keep page scrolling from panning/zooming the chart into old candles.
+      handleScroll: false,
+      handleScale: { mouseWheel: false },
       crosshair: { mode: CrosshairMode.Normal },
     })
     const candle = chart.addSeries(CandlestickSeries, {
@@ -142,13 +175,45 @@ export function ScalpChart({
       borderVisible: false,
       wickUpColor: UP,
       wickDownColor: DOWN,
-      priceFormat: { type: 'price', precision: decimals, minMove: 10 ** -decimals },
+      priceFormat: exchange === 'CRYPTO' ? {type:'custom',minMove:10 ** -decimals,formatter:(n: number) => quoteRef.current(n)} : { type: 'price', precision: decimals, minMove: 10 ** -decimals },
     })
     const vol = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: '',
     })
     vol.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
+    candle.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom: 0.23 } })
+
+    for (const indicator of INDICATORS) {
+      const line = chart.addSeries(LineSeries, {
+        title: indicator.title,
+        color: indicator.color,
+        lineWidth: 2,
+        visible: visibleIndicator(indicator.key, intervalRef.current),
+        priceLineVisible: false,
+        priceFormat: exchange === 'CRYPTO' ? {type:'custom',minMove:10 ** -decimals,formatter:(n: number) => quoteRef.current(n)} : { type: 'price', precision: decimals, minMove: 10 ** -decimals },
+      }, indicator.pane)
+      indicatorSeriesRef.current[indicator.key] = line
+    }
+
+    renderIndicatorsRef.current = (replace) => {
+      const values = chartIndicators(sortedRef.current)
+      indicatorValuesRef.current = values
+      for (const indicator of INDICATORS) {
+        const series = indicatorSeriesRef.current[indicator.key]
+        if (!series) continue
+        if (replace) {
+          series.setData(values.flatMap((row) => row[indicator.key] == null ? [] : [{
+            time: row.time as UTCTimestamp, value: row[indicator.key]!,
+          }]))
+        } else {
+          // Tick updates only replace/append the newest point on each series.
+          const row = values.at(-1)
+          const value = row?.[indicator.key]
+          if (row && value != null) series.update({ time: row.time as UTCTimestamp, value })
+        }
+      }
+    }
 
     chartRef.current = chart
     candleRef.current = candle
@@ -175,12 +240,17 @@ export function ScalpChart({
       const col = chg >= 0 ? UP : DOWN
       const sign = chg >= 0 ? '+' : ''
       const { title: titleColor, muted } = colorsRef.current
+      const indicators = indicatorValuesRef.current[idx]
+      const indicatorLegend = INDICATORS.filter(({ key }) => visibleIndicator(key, intervalRef.current)).map(({ key, title, color }) =>
+        `<span style="color:${color};display:inline-block;margin-right:12px">${title} ${indicators?.[key] == null ? '—' : fmtPrice(indicators[key], decimals)}</span>`
+      ).join('')
       el.innerHTML =
         `<div style="color:${titleColor};font-weight:600">${symbol} ` +
-        `<span style="color:${muted};font-weight:500">· ${intervalRef.current} · ${exchange}</span></div>` +
+        `<span style="color:${muted};font-weight:500">· ${intervalRef.current} · ${exchange} · candle ${new Date(bar.time * 1000).toISOString().slice(11, 16)} IST</span></div>` +
         `<div style="color:${col};margin-top:1px">O${fmtPrice(bar.open, decimals)} H${fmtPrice(bar.high, decimals)} ` +
         `L${fmtPrice(bar.low, decimals)} C${fmtPrice(bar.close, decimals)} ${sign}${fmtPrice(chg, decimals)} (${sign}${pct.toFixed(2)}%)</div>` +
-        `<div style="color:${muted};margin-top:1px">Volume <span style="color:${col}">${fmtVol(bar.volume)}</span></div>`
+        `<div style="color:${muted};margin-top:1px">Volume <span style="color:${col}">${fmtVol(bar.volume)}</span></div>` +
+        `<div style="margin-top:3px">${indicatorLegend}</div>`
     }
     renderLegendRef.current = renderLegend
     chart.subscribeCrosshairMove((param) => {
@@ -192,8 +262,45 @@ export function ScalpChart({
       chartRef.current = null
       candleRef.current = null
       volRef.current = null
+      indicatorSeriesRef.current = {}
+      indicatorValuesRef.current = []
+      renderIndicatorsRef.current = () => {}
     }
   }, [symbol, exchange, enabled])
+
+  useEffect(() => {
+    if (exchange === 'CRYPTO') {
+      candleRef.current?.applyOptions({priceFormat:{type:'custom',minMove:10 ** -priceDecimals(exchange),formatter:(n: number) => quoteRef.current(n)}})
+      renderLegendRef.current()
+    }
+  }, [display, exchange])
+
+  // These are display lines from actual fills and acknowledged server protection.
+  // They do not place, modify or cancel exchange orders.
+  useEffect(() => {
+    const candle = candleRef.current
+    if (!candle) return
+    candle.applyOptions({ autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+      const info = original()
+      const current = positionRef.current
+      if (!info?.priceRange || current?.status !== 'open') return info
+      const prices = [current.entry, current.sl, current.target].filter((p): p is number => p != null && Number.isFinite(p) && p > 0)
+      return { ...info, priceRange: {
+        minValue: Math.min(info.priceRange.minValue, ...prices),
+        maxValue: Math.max(info.priceRange.maxValue, ...prices),
+      } }
+    } })
+    if (position?.status !== 'open' || !position.entry || !position.quantity) return
+    const lines = [
+      { price: position.entry, title: `${position.quantity > 0 ? 'LONG' : 'SHORT'} ${Math.abs(position.quantity)} · Entry`, color: '#0284c7' },
+      ...(position.sl ? [{ price: position.sl, title: `SL · ${position.currency === 'USD' ? displayRef.current(position.slGross ?? NaN) : grossLabel(position.slGross, position.currency)}`, color: '#dc2626' }] : []),
+      ...(position.target ? [{ price: position.target, title: `Target · ${position.currency === 'USD' ? displayRef.current(position.targetGross ?? NaN) : grossLabel(position.targetGross, position.currency)}`, color: '#16a34a' }] : []),
+    ].map((line) => candle.createPriceLine({ ...line, lineWidth: 2, lineStyle: LineStyle.Dashed, axisLabelVisible: true }))
+    return () => {
+      if (candleRef.current === candle) for (const line of lines) candle.removePriceLine(line)
+    }
+  }, [symbol, exchange, interval, position?.status, position?.entry, position?.quantity, position?.sl, position?.target, position?.slGross, position?.targetGross, position?.currency, display])
+
 
   // Load history for the selected interval and run the reconcile loop. Re-runs
   // on timeframe change (instant flip; chart instance reused).
@@ -213,7 +320,17 @@ export function ScalpChart({
     barStartVolRef.current = null
     intervalSecRef.current = INTERVAL_SEC[interval] ?? 60
     intervalRef.current = interval
+    for (const indicator of INDICATORS) {
+      indicatorSeriesRef.current[indicator.key]?.applyOptions({
+        visible: visibleIndicator(indicator.key, interval),
+      })
+    }
     readyRef.current = false
+    tradingDateRef.current = null
+    candle.setData([])
+    vol.setData([])
+    renderIndicatorsRef.current(true)
+    renderLegendRef.current()
     setStatus('loading...')
 
     const applyModel = (preserveRange: boolean) => {
@@ -235,15 +352,14 @@ export function ScalpChart({
           color: k.close >= k.open ? VOL_UP : VOL_DOWN,
         }))
       )
-      if (range) {
-        try {
-          ts.setVisibleLogicalRange(range)
-        } catch {
-          /* range no longer valid */
-        }
-      } else {
-        ts.fitContent()
-      }
+      renderIndicatorsRef.current(true)
+      // Start with recent candles and keep the right edge at the newest bar.
+      // Reconciliation preserves zoom width, never an old horizontal position.
+      const to = arr.length - 1 + 3
+      ts.setVisibleLogicalRange({
+        from: range ? to - (range.to - range.from) : Math.max(-1, arr.length - 60),
+        to,
+      })
       renderLegendRef.current()
     }
 
@@ -410,6 +526,8 @@ export function ScalpChart({
     const color = bar.close >= bar.open ? VOL_UP : VOL_DOWN
     candle.update({ time: bar.time as UTCTimestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
     vol.update({ time: bar.time as UTCTimestamp, value: bar.volume, color })
+    renderIndicatorsRef.current(false)
+    chartRef.current?.timeScale().scrollToPosition(3, false)
     renderLegendRef.current()
     // Clear the live-only "waiting for ticks" placeholder once a bar exists.
     setStatus((s) => (s ? '' : s))
@@ -424,12 +542,25 @@ export function ScalpChart({
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-lg border bg-card">
-      <div ref={containerRef} className="absolute inset-0" />
+    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-lg border bg-card"
+      role="region" aria-label={`${symbol} ${interval} indicator chart`}>
+      <div className="shrink-0 border-b px-2.5 py-1 text-[10px] text-muted-foreground">
+        Following latest · {interval} · {interval === '1m' ? 'EMA9' : 'EMA20 / EMA50'} · live/forming candle
+      </div>
+      {position && <div className="shrink-0 border-b px-2.5 py-1 text-xs" aria-label="Actual position and protection">
+        {position.status === 'unavailable' ? 'Position unconfirmed — no verified position data returned.' :
+          position.status === 'flat' ? 'No open position for this contract/product.' : <>
+            <span className="font-medium">{position.quantity! > 0 ? 'LONG' : 'SHORT'} {Math.abs(position.quantity!)} · Entry {fmtPrice(position.entry!)} · P&L before fees: {position.currency === 'USD' ? display(position.gross ?? NaN) : grossLabel(position.gross, position.currency)}</span>
+            <div className="text-muted-foreground">{position.protectionAvailable
+              ? `SL ${position.sl == null ? 'not set' : fmtPrice(position.sl)} · Target ${position.target == null ? 'not set' : fmtPrice(position.target)} · saved server protection`
+              : 'SL/target data unavailable.'}</div>
+          </>}
+      </div>}
       <div
         ref={legendRef}
-        className="pointer-events-none absolute left-2.5 top-2 z-10 font-mono text-[11px] leading-tight"
+        className="pointer-events-none min-h-[74px] shrink-0 px-2.5 py-1 font-mono text-[11px] leading-tight"
       />
+      <div ref={containerRef} className="min-h-0 flex-1" />
       {status && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
           {status}

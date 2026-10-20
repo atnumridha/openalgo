@@ -7,6 +7,7 @@ Two upstream connections, because Delta splits its feed across two endpoints:
   public  (wss://public-socket.india.delta.exchange, no auth)
       ticker — mark price + 24h OHLC + OI + best bid/ask with sizes
       ob_l2  — top-15 order book (depth mode)
+      trades — every fill: price, size and time (all modes)
 
   private (wss://socket.india.delta.exchange, HMAC-SHA256 auth on every
            (re)connect, signature = HMAC-SHA256(api_secret, "GET" + ts + "/live"))
@@ -15,6 +16,12 @@ Two upstream connections, because Delta splits its feed across two endpoints:
 Every symbol subscription carries a ticker subscription, including depth mode:
 ob_l2 has prices and sizes but no traded price, OI or OHLC, so a depth-only
 subscriber would publish those as zero.
+
+``ltp`` is the last traded price, from trades. The ticker's mark price is
+published separately as ``mark_price`` and only stands in for ``ltp`` on a
+symbol that has printed no trade recently. A trade publish carries
+``last_trade_quantity`` and no order book: a payload with depth levels is
+read as a book update and its quantity is not counted as volume.
 """
 
 import json
@@ -56,6 +63,55 @@ def _i(value, default: int = 0) -> int:
         return default
 
 
+#: Keys that make a payload an order-book update to the chart and to the
+#: market data service. Trade publishes leave them out.
+_DEPTH_KEYS = ("depth", "totalbuyqty", "totalsellqty")
+
+#: Seconds after a trade print during which the ticker may not overwrite ltp.
+_TRADE_FRESH_SECONDS = 10.0
+
+
+def trade_ticks(trades: list[tuple[int, float, float]]) -> list[tuple[int, float, float]]:
+    """Coalesce a burst of fills into the few ticks a candle needs.
+
+    Each fill is ``(time_ms, price, size)``. Delta delivers fills in bursts,
+    not always in time order. Within each minute the burst spans, the result
+    keeps the first fill, the high, the low and the last fill, in time order,
+    each carrying the size traded since the tick before it. A candle built from
+    these has the same open, high, low, close and volume as one built from
+    every fill, whichever minute bucket the candle uses.
+    """
+    if not trades:
+        return []
+    ordered = sorted(trades, key=lambda fill: fill[0])
+    keep: set[int] = set()
+    start = 0
+    for index in range(len(ordered)):
+        last_of_minute = (
+            index == len(ordered) - 1
+            or ordered[index][0] // 60_000 != ordered[index + 1][0] // 60_000
+        )
+        if not last_of_minute:
+            continue
+        minute = range(start, index + 1)
+        keep.update(
+            (
+                start,
+                index,
+                max(minute, key=lambda i: ordered[i][1]),
+                min(minute, key=lambda i: ordered[i][1]),
+            )
+        )
+        start = index + 1
+    ticks: list[tuple[int, float, float]] = []
+    start = 0
+    for index in sorted(keep):
+        size = sum(fill[2] for fill in ordered[start : index + 1])
+        ticks.append((ordered[index][0], ordered[index][1], size))
+        start = index + 1
+    return ticks
+
+
 class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Delta Exchange–specific implementation of the BaseBrokerWebSocketAdapter."""
 
@@ -79,6 +135,13 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.unsubscription_queue: list[tuple[str, str]] = []
         self.batch_timer: threading.Timer | None = None
         self.batch_delay  = 0.5   # seconds to collect subscriptions before flushing
+
+        # Trade coalescing. Delta sends fills in bursts about every 500ms;
+        # one burst becomes at most a handful of ticks per symbol.
+        self.trade_window = 0.05  # seconds a burst is collected before publishing
+        self._trade_pending: dict[str, list[tuple[int, float, float]]] = {}
+        self._trade_timer: threading.Timer | None = None
+        self._last_trade_at: dict[str, float] = {}   # br_symbol → wall clock of last fill
 
     # ── BaseBrokerWebSocketAdapter interface ──────────────────────────────────
 
@@ -162,8 +225,13 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if self.batch_timer:
                 self.batch_timer.cancel()
                 self.batch_timer = None
+            if self._trade_timer:
+                self._trade_timer.cancel()
+                self._trade_timer = None
             self.subscription_queue.clear()
             self.unsubscription_queue.clear()
+            self._trade_pending.clear()
+            self._last_trade_at.clear()
 
         for client in (self.public_ws, self.ws_client):
             if client:
@@ -276,6 +344,9 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 for s in remaining
             ):
                 self.last_values.pop(cache_key, None)
+            if not any(s.get("br_symbol") == br_symbol for s in remaining):
+                self._trade_pending.pop(br_symbol, None)
+                self._last_trade_at.pop(br_symbol, None)
 
         if self.public_ws and stale_channels:
             try:
@@ -358,10 +429,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # %s only: SensitiveDataFilter stringifies every log arg, so a %d
             # here would raise and the line would print unformatted.
             self.logger.info("Batch %s %s %s symbols", verb, len(symbols), channel)
-            if channel == DeltaWebSocket.CHANNEL_TICKER:
-                (client.subscribe_ticker if subscribe else client.unsubscribe_ticker)(symbols)
-            else:
-                (client.subscribe_orderbook if subscribe else client.unsubscribe_orderbook)(symbols)
+            (client.subscribe_channel if subscribe else client.unsubscribe_channel)(channel, symbols)
         except Exception as exc:
             self.logger.error("Batch %s failed for %s: %s", verb, channel, exc)
 
@@ -438,6 +506,9 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._handle_private_event(msg_type, msg)
                 return
 
+            if msg_type == DeltaWebSocket.CHANNEL_TRADES:
+                self._queue_trade(msg)
+                return
             if msg_type == DeltaWebSocket.CHANNEL_TICKER:
                 updates = self._normalise_ticker(msg)
             elif msg_type == DeltaWebSocket.CHANNEL_OB_L2:
@@ -450,42 +521,102 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for br_symbol, fields in updates:
                 if not br_symbol:
                     continue
-
-                # Find ALL OpenAlgo subscriptions matching this broker symbol +
-                # channel.  Several modes can share one channel (every mode
-                # subscribes to ticker), so we fan out to every subscriber.
-                subscriptions = self._find_subscriptions_by_br_symbol(br_symbol, msg_type)
-                if not subscriptions:
-                    self.logger.debug("No subscription for br_symbol=%s type=%s", br_symbol, msg_type)
-                    continue
-
-                # All subscriptions for a br_symbol share one cache entry, which
-                # accumulates the last known value of every field across both
-                # channels.  Publishing the merged entry is what lets a depth
-                # subscriber carry ltp/oi/ohlc (ob_l2 has none of them) and a
-                # quote subscriber carry depth.
-                cache_key   = f"{subscriptions[0]['symbol']}_{subscriptions[0]['exchange']}"
-                merged      = self._merge_into_cache(cache_key, fields)
-
-                for subscription in subscriptions:
-                    oa_symbol   = subscription["symbol"]
-                    oa_exchange = subscription["exchange"]
-                    oa_mode     = subscription["mode"]
-                    mode_str    = DeltaModeMapper.get_mode_str(oa_mode)
-                    topic       = f"{oa_exchange}_{oa_symbol}_{mode_str}"
-
-                    market_data = dict(merged)  # shallow copy per subscriber
-                    market_data.update({
-                        "symbol":    oa_symbol,
-                        "exchange":  oa_exchange,
-                        "mode":      oa_mode,
-                        "timestamp": ts,
-                    })
-
-                    self.publish_market_data(topic, market_data)
+                self._publish_update(br_symbol, msg_type, fields, ts)
 
         except Exception as exc:
             self.logger.error("_on_data error: %s", exc, exc_info=True)
+
+    def _publish_update(
+        self, br_symbol: str, msg_type: str, fields: dict, ts: int, *, trade: bool = False
+    ) -> None:
+        """Merge one normalised update into the symbol's cache and fan it out.
+
+        A trade publish leaves out the order book: the chart and the market
+        data service read a payload with depth levels as a book update and do
+        not count its quantity as traded volume.
+        """
+        # Find ALL OpenAlgo subscriptions matching this broker symbol +
+        # channel.  Several modes can share one channel (every mode
+        # subscribes to ticker), so we fan out to every subscriber.
+        subscriptions = self._find_subscriptions_by_br_symbol(br_symbol, msg_type)
+        if not subscriptions:
+            self.logger.debug("No subscription for br_symbol=%s type=%s", br_symbol, msg_type)
+            return
+
+        if msg_type == DeltaWebSocket.CHANNEL_TICKER and "mark_price" in fields:
+            # Mark only stands in for ltp until the symbol prints a trade: a
+            # 5-second mark snapshot must not drag the chart back from fills.
+            last_trade = self._last_trade_at.get(br_symbol)
+            if last_trade is not None and time.time() - last_trade < _TRADE_FRESH_SECONDS:
+                fields = {k: v for k, v in fields.items() if k != "ltp"}
+
+        # All subscriptions for a br_symbol share one cache entry, which
+        # accumulates the last known value of every field across all
+        # channels.  Publishing the merged entry is what lets a depth
+        # subscriber carry ltp/oi/ohlc (ob_l2 has none of them) and a
+        # quote subscriber carry depth.
+        cache_key = f"{subscriptions[0]['symbol']}_{subscriptions[0]['exchange']}"
+        merged    = self._merge_into_cache(cache_key, fields)
+        if trade:
+            merged = {k: v for k, v in merged.items() if k not in _DEPTH_KEYS}
+        else:
+            merged.pop("last_trade_quantity", None)
+            merged.pop("last_trade_time", None)
+
+        for subscription in subscriptions:
+            oa_symbol   = subscription["symbol"]
+            oa_exchange = subscription["exchange"]
+            oa_mode     = subscription["mode"]
+            mode_str    = DeltaModeMapper.get_mode_str(oa_mode)
+            topic       = f"{oa_exchange}_{oa_symbol}_{mode_str}"
+
+            market_data = dict(merged)  # shallow copy per subscriber
+            market_data.update({
+                "symbol":    oa_symbol,
+                "exchange":  oa_exchange,
+                "mode":      oa_mode,
+                "timestamp": ts,
+            })
+
+            self.publish_market_data(topic, market_data)
+
+    # ── trades ────────────────────────────────────────────────────────────────
+
+    def _queue_trade(self, msg: dict) -> None:
+        """Hold one fill for the coalescing window, then publish the burst."""
+        br_symbol = msg.get("sy") or ""
+        price = _f(msg.get("p"))
+        size = _f(msg.get("s"))
+        if not br_symbol or price <= 0:
+            return
+        # Trade time is in microseconds; fall back to the publish time.
+        raw_time = msg.get("t") or msg.get("ts")
+        time_ms = int(_f(raw_time) / 1000) if raw_time else int(time.time() * 1000)
+        with self._lock:
+            self._trade_pending.setdefault(br_symbol, []).append((time_ms, price, size))
+            self._last_trade_at[br_symbol] = time.time()
+            if self._trade_timer is None:
+                self._trade_timer = threading.Timer(self.trade_window, self._flush_trades)
+                self._trade_timer.daemon = True
+                self._trade_timer.start()
+
+    def _flush_trades(self) -> None:
+        """Publish each symbol's collected fills as a few candle-preserving ticks."""
+        with self._lock:
+            self._trade_timer = None
+            pending, self._trade_pending = self._trade_pending, {}
+        if not self.running:
+            return
+        for br_symbol, fills in pending.items():
+            for time_ms, price, size in trade_ticks(fills):
+                fields = {
+                    "ltp": price,
+                    "last_trade_quantity": size,
+                    "last_trade_time": time_ms,
+                }
+                self._publish_update(
+                    br_symbol, DeltaWebSocket.CHANNEL_TRADES, fields, time_ms, trade=True
+                )
 
     # ── private feed helpers ──────────────────────────────────────────────────
 
@@ -534,7 +665,8 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Map a ticker frame to OpenAlgo market data, one entry per contract.
 
         Field mapping (compact keys, per the public-endpoint schema):
-            ltp        ← d[].m        mark price, matching the REST quote path
+            mark_price ← d[].m        mark price, what Delta marks P&L to
+            ltp        ← d[].m        until a trade prints (see _publish_update)
             open/high/
             low/close  ← d[].ohlc     rolling 24h window
             oi         ← d[].oi[0]    open interest in contracts
@@ -590,6 +722,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             fields: dict = {"average_price": 0, "oi_change": 0}
 
             _put(fields, "ltp", entry.get("m") if entry.get("m") is not None else spot)
+            _put(fields, "mark_price", entry.get("m"))
             _put_from(fields, ohlc, "open",  _at(ohlc, 0))
             _put_from(fields, ohlc, "high",  _at(ohlc, 1))
             _put_from(fields, ohlc, "low",   _at(ohlc, 2))
@@ -638,9 +771,10 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Every field present in the update is written, zeros included — an empty
         book or a zero bid size is real information and must reach subscribers.
         Absent fields are what the normalisers omit, so a ticker frame that
-        carries no mark price cannot blank the last good LTP.  The two channels
-        write disjoint key sets (ticker: price/OI/quotes, ob_l2: depth), so
-        neither can overwrite the other's values.
+        carries no mark price cannot blank the last good LTP.  ticker and ob_l2
+        write disjoint key sets (ticker: price/OI/quotes, ob_l2: depth); trades
+        write ltp and the last fill, which the ticker only writes while no
+        trade is fresh.
         """
         with self._lock:
             cached = self.last_values.setdefault(cache_key, {})

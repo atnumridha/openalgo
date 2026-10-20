@@ -1,5 +1,58 @@
 # Changelog
 
+## Liquidity strategy maker-entry verification — 18 October 2026
+
+- Record the mandatory post-only entry policy in durable liquidity trade records. Both long and short entries use the existing GTC post-only limit adapter with an attached native stop; exchange rejection propagates without a market/IOC fallback.
+- Added synthetic adapter regressions for both entry directions and post-only rejection. Protective exits retain their existing reduce-only execution policy. No live order was placed during verification.
+
+## Liquidity extra-confirmation execution — 18 October 2026
+
+- Added a separate BTCUSD execution strategy for the new transcript: skip the first bounce, require a strong counterattack, renewed confirmation and a later observed price break. Mechanical thresholds and the optional short mirror are labelled app assumptions.
+- Added Paper/Live and Review/Automatic entry settings below the Trading chart, native USD Entry/SL/Target overlays, selected-currency cash P&L, server status and owned-trade controls. Deployment does not start a live strategy.
+- Reused the durable Delta executor for attached stops, unknown-submission reconciliation and reduce-only exits. Added whole-contract partial targets, fee-aware breakeven and the tighten-only $2 / $1.50 / $0.50 net policy.
+- Added owner-specific SQLite state, approval revisions, daily limits, exclusive execution locks and restart recovery. Stale data, missing targets, unsuitable sizing, conflicting positions and unsafe liquidation distances block entries.
+- See [operation and limitations](userguide/liquidity-execution.md). This is a parameterized interpretation, not a profitability claim or exchange-qualified result.
+
+## Source-guided liquidity entry plans — 18 October 2026
+
+- Corrected the default liquidity overlay to fixed historical turning-point lines without ATR bands. Swept references remain available; the focused view retains one reference per 1H, 4H and daily timeframe. Manual price, side, timeframe and activation time allow trader-selected references.
+- Added separate higher-timeframe reversal and lower-timeframe continuation modes. Both require a sweep, completed colour confirmation and subsequent high/low break. Continuation rejects an already-touched opposing trend target.
+- Chart plans show fixed blue Entry, red SL and green opposing-liquidity Target lines with watching/triggered/ended status and gross reward/risk. Missing targets, invalid stops, history gaps and ambiguous same-candle outcomes are explicit. No broker orders are submitted.
+- Documented video evidence and the remaining app assumptions for turn selection, trend strength, first confirmation, stop buffer, expiry and retries. Preserved legacy indicator behaviour as an optional mode; the Pine file is unchanged.
+
+## Confirmed swing liquidity zones — 18 October 2026
+
+- Simplified the default display to one latest untaken confirmed swing per timeframe, at most three zones. Compact right-side labels replace long descriptions and redundant legend readings. Open and prior-candle layers remain available in Detailed view; ordinary live ticks do not change the selected zone.
+- The local liquidity indicator now defaults to V/W lows and inverted-V/M highs on completed 1H, 4H and daily candles. Previous-period high/low references remain an optional source.
+- Added subtle fixed price bands, source-pivot markers, thick centre lines and right-side labels with price ranges. Two completed candles on each side confirm a swing by default; nearby repeated swings share a W/M zone without shifting its boundaries.
+- Added fixed open colour-flip lines, previous completed candle wick high/low and optional body-edge references independently for 1H, 4H and daily top-down analysis. Opens remain visible through crossings and roll over only at their own timeframe boundary; broken liquidity references are hidden by default or can be shown in grey.
+- A strict crossing of the outer edge marks a zone Taken. Swing strength, band width, retained zone count and visibility of taken zones are configurable. Replay and recalculation reconstruct state from available candles without order actions.
+- These are configurable price-structure approximations, not measured resting orders or confirmed neckline-breakout signals. The separately saved TradingView Pine version still uses previous completed period ranges.
+
+## Higher-timeframe liquidity lines — 17 October 2026
+
+- Added a Pine v6 version with thick lines, right-side Liquidity labels and a pinned price summary. The local overlay now uses 3–4 px lines and viewport-pinned, collision-separated labels with offscreen price indicators.
+- Added a saved chart indicator with labelled previous 1H, 4H and daily highs/lows. Coincident levels share a label; each timeframe can be hidden independently.
+- Levels use completed, continuous native candles and respect the replay prefix. BTC uses UTC reference periods; Indian index symbols use the 09:15–15:30 IST session. These are potential liquidity references, not measured resting orders.
+- Missing or incomplete reference periods remain unmarked. No additional feed, polling, order submission or server restart is required.
+
+## Delta price denomination — 17 October 2026
+
+- Keep BTCUSD OHLC, axis/data-window values, entry/fill prices, SL, target, market depth, watchlist price changes and break-even levels in native USD. The currency preference continues to apply to cash P&L and its fee/risk calculations.
+- Separated quote and cash formatters across charting, Positions, order/trade books, scalping, ML plans and strategy research. Raw prices, quantities, execution payloads, 5x default leverage and trailing policy are unchanged.
+
+## Delta net-profit trailing — 17 October 2026
+
+- Added an optional total-position USD policy: activate above $2 net, lock at least $1.50, and trail $0.50 behind peak net profit. Preview-bound configurable inputs and peak/floor status are shown in Positions.
+- Reserves ordinary fees, funding and adverse-fill slippage, never loosens an accepted stop, and saves cash high-water state before broker I/O. Existing price-gap plans remain compatible.
+- Verified restart recovery and long/short modeled net floors with isolated broker tests. No position or protection is automatically adopted by deployment.
+
+## Delta crypto strategy research — 17 October 2026
+
+- Added selected-chart Bollinger V1, MACD + Bollinger V1 and SuperTrend V1 entry-rule ports with pinned Hummingbot source links, completed-candle/replay isolation and configurable research exits.
+- Added conservative loaded-history cost/slippage backtests; no automatic entries or executor changes. Listed exact Grid Strike, arbitrage and FreqAI sources with their unmet runtime requirements.
+- See [sources, assumptions and scope](research/crypto-strategy-sources.md).
+
 All notable changes to OpenAlgo will be documented in this file.
 
 Each release adds a stanza here summarising what changed and who contributed.
@@ -7,6 +60,16 @@ The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
+
+### Delta position profit protection
+
+- Delta uses one saved INR/USD display preference across the navbar, chart axes and position labels, books, account P&L views and trading panels, defaulting to INR at the documented fixed ₹85 per USD. Currency changes update open views immediately; price data and order-entry values remain native USD with explicit input labels.
+
+- Position rows read per-contract Delta leverage and native reduce-only SL/TP orders; the common app leverage and liquidation estimate are labelled separately.
+- Positions fee countdown now ticks every second and updates net estimates at expiry; missing entry times no longer imply a fee waiver.
+- Existing reduce-only stops can be explicitly adopted into durable, tighten-only server monitoring with an adjustable pullback gap and fixed original 1:n target.
+- Positive estimated net positions can exit during the final minute of the configured free-close window. Current costs and eligibility are rechecked before submission; actual fills determine fees.
+- Pending exits reconcile through pauses and restarts without duplicate submissions; ownership changes require explicit review.
 
 ### Charting terminal on openalgo-charts 2.6.0 and OpenScript 0.8.1
 
@@ -216,6 +279,77 @@ have read nothing on every bar.
 as Price or Percentage: Price reopens as Own scale and Indexed to 100 as
 Percentage. The unnamed grid keeps all four. The chart library's workspace
 format gains the other two in its next patch.
+
+### ML Signals and crypto fees (Delta Exchange)
+
+A new page at `/ml-signals` (profile menu, ML Signals) suggests LONG, SHORT or
+WAIT for each Delta perpetual you list (BTCUSD, ETHUSD and SOLUSD by default),
+and opens the trade for you in one click.
+
+- **The decision is profit after fees, not a probability.** Each side is taken
+  only when its expected profit after Delta's fees, GST included, clears a
+  minimum edge chosen during training. The card shows both sides' expected
+  profit and why it is waiting when it waits.
+- **Live trading has to be earned.** A trained model is used for Sandbox at
+  once. It trades Live only after it made money after fees on a period it never
+  saw, over at least 30 trades, and beat what random entries with the same
+  number of trades reach one time in twenty. Until then the trade button reads
+  **Live locked** and says why. No model is Live yet on a fresh install.
+- **One click, sized for you.** The size is chosen so the stop loses your risk
+  percent of the balance, fees included, within your maximum leverage. Sandbox
+  trades are sized from a Sandbox balance you set on the page. The trade runs as
+  a signal-mode strategy (ML Signals (Sandbox) or ML Signals (Live)) in the
+  Strategy module, so its stop, target and trail are managed by the same risk
+  engine as every other strategy, and a Live trade also carries a stop held on
+  Delta itself.
+- **Smart exit.** A trade closes early when the model turns against it for the
+  number of closed bars you set, when it is about to leave the Scalper Offer's
+  free-close window without a reason to stay, or when it reaches the maximum
+  hold. Each close says which of these it was.
+- **A background ML worker** runs beside OpenAlgo, started and stopped with it.
+  It refreshes the signal every second, manages open ML trades, and each night
+  (03:30 IST by default) saves the latest history and retrains every symbol.
+  The newest model is used at once for Sandbox; Live still waits for the gate
+  above. Its log is `log/ml_worker.log`.
+- **ML Signal chart indicator.** `strategies/indicators/ml_signal.js` draws the
+  same signal, its stop and target, and a small table on the `/trading` chart.
+
+**Net P&L after fees on Positions.** For Delta positions the Positions page now
+shows the fees paid to open, the fee to close now, the break-even price,
+funding, and P&L after fees beside the price P&L. The navbar shows your total
+P&L after fees with Delta's current maker and taker rates.
+
+- **Scalper Offer.** Closing within 30 minutes (BTCUSD and ETHUSD) or 15 minutes
+  (other perpetuals) is free while you have joined the offer. PAXGUSD,
+  SLVONUSD, XAUTUSD and options never qualify. The row shows how long the free
+  close lasts.
+- **Diwali Scalper Offer.** On BTCUSD only, a position closed within 30 minutes
+  earns its opening fee (before GST) back as a Fee Voucher, capped at $100 per
+  calendar month (IST). A partial close earns its share. **The voucher is shown
+  beside your P&L and is never added to it**, because it is a credit for future
+  fees, not cash. Turn either offer on or off in the ML Signals settings card.
+
+**Charts on Delta form candles from trades.** The Delta feed now subscribes to
+the public trades channel, so a chart candle is built from actual fills rather
+than ticker snapshots. The mark price, which Delta uses for P&L and
+liquidation, is carried separately.
+
+**Strategy module.** A Crypto (Delta) tab is available for signal-mode
+strategies. Exits on crypto are sent reduce-only, so two exits racing on one leg
+can only shrink the position. Entries placed by ML Signals carry their own size,
+stop, target and trail; the webhook cannot set these.
+
+**Run the migrations after updating:** `cd upgrade && uv run migrate_all.py`.
+It adds the ML settings table (`migrate_ml_settings.py`) and a `risk` column on
+strategy orders (`migrate_strategy_module.py`), so an ML entry's own stop and
+target survive a restart. Native Ubuntu installs also pick up two new
+libraries, scikit-learn and joblib, from `requirements-nginx.txt`.
+
+**Not modelled yet.** Live ML trades need Delta to accept orders from your
+server's IP; a key whose IP is not whitelisted is refused by Delta on every
+private call. A model is trained per symbol; a newly added symbol downloads a
+year of history first and shows no signal until that finishes. Funding is
+shown as Delta reports it and is not forecast.
 
 ### Long-running memory and resource cleanup
 

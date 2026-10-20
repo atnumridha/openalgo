@@ -29,6 +29,7 @@ interface Props {
   onPick(row: SearchRow): void
   onCancel(order: DockOrder): void
   onModify(order: DockOrder): void
+  formatAmount?: (value: number) => string
   isLoading?: boolean
 }
 
@@ -37,11 +38,11 @@ function qtyText(order: DockOrder): string {
   return `${order.filled_quantity}/${order.quantity}`
 }
 
-function priceText(order: DockOrder): string {
+function priceText(order: DockOrder, formatAmount = fmt2): string {
   if (order.pricetype === 'MARKET' || order.pricetype === 'SL-M') {
-    return order.average_price ? fmt2(order.average_price) : 'MKT'
+    return order.average_price ? formatAmount(order.average_price) : 'MKT'
   }
-  return order.price ? fmt2(order.price) : '-'
+  return order.price ? formatAmount(order.price) : '-'
 }
 
 export function OrdersTable({
@@ -51,6 +52,7 @@ export function OrdersTable({
   onCancel,
   onModify,
   isLoading,
+  formatAmount = fmt2,
 }: Props) {
   return (
     <table className="w-full border-collapse text-sm">
@@ -120,9 +122,9 @@ export function OrdersTable({
               <td className={TD}>{order.pricetype}</td>
               <td className={cn(TD, 'text-muted-foreground')}>{order.product}</td>
               <td className={TD_NUM}>{qtyText(order)}</td>
-              <td className={TD_NUM}>{priceText(order)}</td>
+              <td className={TD_NUM}>{priceText(order, formatAmount)}</td>
               <td className={cn(TD_NUM, !order.trigger_price && 'text-muted-foreground')}>
-                {order.trigger_price ? fmt2(order.trigger_price) : '-'}
+                {order.trigger_price ? formatAmount(order.trigger_price) : '-'}
               </td>
               <td className={TD}>
                 <StatusBadge status={order.order_status} />

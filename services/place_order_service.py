@@ -242,7 +242,8 @@ def place_order_with_auth(
         logger.exception(f"Error in broker_module.place_order_api: {e}")
         error_response = {
             "status": "error",
-            "message": "Failed to place order due to internal error",
+            "message": str(e) if getattr(e, "not_submitted", False) else "Failed to place order due to internal error",
+            "submission_uncertain": not getattr(e, "not_submitted", False),
         }
         bus.publish(
             OrderFailedEvent(
@@ -288,6 +289,8 @@ def place_order_with_auth(
             else "Failed to place order"
         )
         error_response = {"status": "error", "message": message}
+        if broker == "deltaexchange" and isinstance(response_data, dict) and "submission_uncertain" in response_data:
+            error_response["submission_uncertain"] = response_data["submission_uncertain"]
         bus.publish(
             OrderFailedEvent(
                 mode="live",

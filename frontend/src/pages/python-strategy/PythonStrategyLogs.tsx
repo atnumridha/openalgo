@@ -12,6 +12,10 @@ import {
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { pythonStrategyApi } from '@/api/python-strategy'
+import {
+  StrategyExecutionPanel,
+  supportsExecutionPanel,
+} from '@/components/python-strategy/StrategyExecutionPanel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -231,6 +235,10 @@ export default function PythonStrategyLogs() {
           </Button>
         </div>
       </div>
+
+      {supportsExecutionPanel(strategy.file_name) && (
+        <StrategyExecutionPanel strategyId={strategy.id} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Log Files List */}

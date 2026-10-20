@@ -142,14 +142,35 @@ def apply_analyze_mode(
         Exception: Whatever writing the mode raised, after the reconcile.
     """
     with mode_transition(timeout):
+        previous = bool(get_analyze_mode())
         if toggle:
-            new_mode = not get_analyze_mode()
+            new_mode = not previous
         try:
             set_analyze_mode(bool(new_mode))
         finally:
             persisted = bool(get_analyze_mode())
             _reconcile_sandbox(persisted, with_scheduler=with_scheduler, catchup=catchup)
+        if persisted != previous:
+            _stop_python_strategies(persisted)
         return persisted
+
+
+def _stop_python_strategies(analyze_mode: bool) -> None:
+    """Stop hosted Python strategies so none keeps trading in the old mode."""
+    mode = "analyze" if analyze_mode else "live"
+    try:
+        from blueprints.python_strategy import stop_all_for_mode_change
+
+        stopped = stop_all_for_mode_change(mode)
+    except Exception:
+        logger.exception("Could not stop Python strategies after the mode change")
+        return
+    if stopped:
+        logger.info(
+            f"Switched to {mode} mode: stopped {len(stopped)} Python strateg"
+            f"{'y' if len(stopped) == 1 else 'ies'} ({', '.join(stopped)}). "
+            "Start them again to trade in this mode."
+        )
 
 
 def get_analyzer_status_with_auth(

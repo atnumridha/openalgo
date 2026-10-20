@@ -74,6 +74,10 @@ describe('buildChartLegend', () => {
     expect(flat(input({ lotsize: null }))).not.toContain('lot')
   })
 
+  it('leaves out a lot of one, which says nothing', () => {
+    expect(flat(input({ lotsize: 1, exchange: 'CRYPTO' }))).not.toContain('lot')
+  })
+
   it('omits volume when the chart type does not carry one', () => {
     // Renko and point-and-figure elements are not one bar each.
     expect(flat(input({ bar: { open: 1, high: 2, low: 0.5, close: 1.5 } }))).not.toContain(' V ')
@@ -175,6 +179,24 @@ describe('lotInfoText', () => {
 
   it('has nothing to say without an instrument', () => {
     expect(lotInfoText(null, 1)).toBe('')
+  })
+
+  it('says how much of the coin a crypto contract is, not "1 × 1 = 1 qty"', () => {
+    const btc = {
+      lots: true,
+      lotsize: 1,
+      freezeQty: 1,
+      quoteOnly: false,
+      exchange: 'CRYPTO',
+      symbol: 'BTCUSDFUT',
+      contractValue: 0.001,
+    }
+    expect(lotInfoText(btc, 1)).toBe('1 contract = 0.001 BTC')
+    expect(lotInfoText(btc, 59)).toBe('59 contracts = 0.059 BTC')
+    expect(lotInfoText({ ...btc, symbol: 'SOLUSDFUT', contractValue: 1 }, 3)).toBe(
+      '3 contracts = 3 SOL'
+    )
+    expect(lotInfoText({ ...btc, contractValue: undefined }, 2)).toBe('2 contracts')
   })
 })
 

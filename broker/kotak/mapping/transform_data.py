@@ -171,7 +171,10 @@ def transform_data(data, token):
         "tt": "B" if action == "BUY" else ("S" if action == "SELL" else "None"),
     }
 
-    transformed["ig"] = ORDER_TAG
+    # Internal home-desk intents need a unique correlation tag for recovering an
+    # accepted order whose HTTP response was lost. Public order schemas do not
+    # expose this private field; other callers retain their established tag.
+    transformed["ig"] = data.get("_kotak_assistant_tag") or ORDER_TAG
 
     _apply_slm_conversion(transformed, data)
 

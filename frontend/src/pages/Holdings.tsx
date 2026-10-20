@@ -1,3 +1,4 @@
+import { useBrokerCurrencyFormatter, useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import {
   AlertTriangle,
   Download,
@@ -28,7 +29,7 @@ import { PlaceOrderDialog } from '@/components/trading'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
@@ -50,7 +51,8 @@ interface HoldingOrderIntent {
 
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerCurrencyFormatter(user?.broker)
+  const formatPrice = useBrokerPriceFormatter(user?.broker)
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [stats, setStats] = useState<HoldingsStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -367,11 +369,11 @@ export default function Holdings() {
                       <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
                       <TableCell className="text-right font-mono">
                         {holding.average_price !== undefined
-                          ? formatCurrency(holding.average_price)
+                          ? formatPrice(holding.average_price)
                           : '-'}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {holding.ltp !== undefined ? formatCurrency(holding.ltp) : '-'}
+                        {holding.ltp !== undefined ? formatPrice(holding.ltp) : '-'}
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{holding.product}</Badge>

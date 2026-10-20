@@ -1,6 +1,7 @@
 import json
 
 from database.token_db import get_oa_symbol, get_symbol, get_symbol_info
+from services.crypto_fees import reported_commission
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -316,6 +317,42 @@ def map_trade_data(trade_data):
             trade["transactionType"] = trade.get("side", "").upper()
             trade["updateTime"] = trade.get("created_at", "")
 
+            # The fee Delta charged on this fill, and whether it was the maker
+            # or taker side. meta_data carries the rate actually applied, which
+            # is what tells whether GST is already inside the figure.
+            meta = trade.get("meta_data") or {}
+            try:
+                commission = float(trade.get("commission") or 0)
+            except (TypeError, ValueError):
+                commission = 0.0
+            try:
+                rate = float(meta.get("effective_commission_rate") or 0) or None
+            except (TypeError, ValueError):
+                rate = None
+            contract_value = 1.0
+            if trade["tradingSymbol"]:
+                sym_info = get_symbol_info(trade["tradingSymbol"], "CRYPTO")
+                if sym_info and sym_info.contract_value is not None:
+                    contract_value = float(sym_info.contract_value)
+            try:
+                notional = float(trade.get("size") or 0) * contract_value * trade["tradedPrice"]
+            except (TypeError, ValueError):
+                notional = 0.0
+            trade["commission"] = reported_commission(
+                commission, notional=notional, effective_rate=rate
+            )
+            trade["feeRole"] = trade.get("role", "")
+            # Preserve the fill identity and position continuity for exact gross
+            # P&L. Order IDs are shared by partial fills and cannot deduplicate them.
+            product = trade.get("product") or {}
+            raw_value = product.get("contract_value")
+            if raw_value is None:
+                info = get_symbol_info(trade["tradingSymbol"], "CRYPTO")
+                raw_value = getattr(info, "contract_value", None)
+            trade["contractValue"] = float(raw_value) if raw_value is not None and product.get("notional_type", "vanilla") == "vanilla" else None
+            trade["positionAfter"] = (meta.get("new_position") or {}).get("size")
+            trade["fillId"] = str(trade.get("id", ""))
+
             logger.debug(
                 f"Mapped fill {trade.get('id', '')}: "
                 f"symbol={trade['tradingSymbol']} side={trade['transactionType']}"
@@ -370,6 +407,11 @@ def transform_tradebook_data(tradebook_data):
                 "trade_value": quantity * price,
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("updateTime", ""),
+                "commission": float(trade.get("commission", 0.0) or 0.0),
+                "fee_role": trade.get("feeRole", ""),
+                "fill_id": trade.get("fillId", ""),
+                "contract_value": trade.get("contractValue"),
+                "position_after": trade.get("positionAfter"),
             }
             transformed_data.append(transformed_trade)
         return transformed_data
@@ -461,6 +503,17 @@ def map_position_data(position_data):
             unrealised = float(position.get("unrealized_pnl") or 0)
             position["pnlAbsolute"] = realised + unrealised
 
+            # Delta's own money figures for this position, passed through so
+            # the net P&L shown is the exchange's rather than an estimate:
+            #   commission       – fees paid on the fills that opened it (GST in)
+            #   realized_funding – funding settled since it opened, signed:
+            #                      positive is received, negative is paid
+            #   mark_price       – the price Delta marks its unrealised P&L to
+            position["feesPaid"] = abs(float(position.get("commission") or 0))
+            position["fundingRealized"] = float(position.get("realized_funding") or 0)
+            position["markPrice"] = float(position.get("mark_price") or 0)
+            position["openedAt"] = position.get("created_at") or ""
+
             # Contract value: look up from master contract cache using the resolved canonical symbol.
             # Delta Exchange v2 API removed nested product payloads from positions responses,
             # so we read contract_value (e.g. 0.01 ETH for ETHUSD.P) from the in-memory symbol cache.
@@ -533,6 +586,10 @@ def transform_positions_data(positions_data):
                 "ltp": float(position.get("lastTradedPrice", 0.0)),  # Last traded price
                 "pnl": float(position.get("pnlAbsolute", 0.0)),  # Profit and loss
                 "lot_size": float(position.get("lot_size", 1.0)),  # Contract size (e.g. 0.01 ETH for ETHUSD.P)
+                "fees_paid": float(position.get("feesPaid", 0.0)),
+                "funding": float(position.get("fundingRealized", 0.0)),
+                "mark_price": float(position.get("markPrice", 0.0)),
+                "opened_at": position.get("openedAt", ""),
             }
             transformed_data.append(transformed_position)
         return transformed_data

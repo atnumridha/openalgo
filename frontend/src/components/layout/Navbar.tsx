@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import DeltaFeeBadge from './DeltaFeeBadge'
 
 interface NavbarProps {
   /**
@@ -272,9 +273,12 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
           {/* Broker Badge — hidden below lg to keep the bar within narrow
               (portrait/small-laptop) widths */}
           {user?.broker && (
-            <Badge variant="outline" className="hidden lg:flex text-xs">
-              {user.broker}
-            </Badge>
+            <>
+              <DeltaFeeBadge />
+              <Badge variant="outline" className="hidden lg:flex text-xs">
+                {user.broker}
+              </Badge>
+            </>
           )}
 
           {/* Mode Badge */}

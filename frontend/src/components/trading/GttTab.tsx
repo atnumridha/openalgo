@@ -1,5 +1,6 @@
+import { useBrokerPriceFormatter } from '@/hooks/useBrokerCurrencyFormatter'
 import { Download, Loader2, Pencil, RefreshCw, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { tradingApi } from '@/api/trading'
 import {
   AlertDialog,
@@ -33,7 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
+import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { GttOrder } from '@/types/trading'
@@ -95,7 +96,7 @@ interface GttTabProps {
 
 export default function GttTab({ refuse }: GttTabProps = {}) {
   const { apiKey, user } = useAuthStore()
-  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
+  const formatCurrency = useBrokerPriceFormatter(user?.broker)
 
   const [gtts, setGtts] = useState<GttOrder[]>([])
   const [isLoading, setIsLoading] = useState(true)

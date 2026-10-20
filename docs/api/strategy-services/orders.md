@@ -57,7 +57,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/orders \
       "filled_at": "2026-08-30T03:50:12.004881+00:00",
       "avg_fill_price": 142.35,
       "filled_qty": 75,
-      "reject_reason": null
+      "reject_reason": null,
+      "risk": null
     },
     {
       "id": 322,
@@ -79,7 +80,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/orders \
       "filled_at": "2026-08-30T06:21:40.552117+00:00",
       "avg_fill_price": 172.80,
       "filled_qty": 75,
-      "reject_reason": null
+      "reject_reason": null,
+      "risk": null
     }
   ]
 }
@@ -124,6 +126,7 @@ Each object in `data`:
 | avg_fill_price | number or null | Average fill price reported by the broker |
 | filled_qty | integer or null | Quantity actually filled |
 | reject_reason | string or null | Broker or engine rejection text |
+| risk | object or null | An entry's own stop, target and trail when it set them per trade (an ML trade does): `risk_unit` (`points` or `percent`), `sl_pts`, `target_pts`, `trail` (`x`, `y`). `null` means the leg's configured levels apply. Recovery reads it, so a restart before the first checkpoint keeps the trade's levels. |
 
 ### Order kinds
 

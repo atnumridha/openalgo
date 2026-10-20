@@ -274,22 +274,26 @@ export function useLivePrice<T extends PriceableItem>(
         // Contract multiplier: e.g. 0.01 for Delta Exchange ETHUSD.P (1 lot = 0.01 ETH)
         // Defaults to 1 for all standard brokers where qty is already in underlying units
         const lotSize = item.lot_size ?? 1
+        // A venue that marks positions to a mark price (Delta) is valued at it,
+        // so the figure matches the exchange; the last trade can sit either side.
+        const markPrice = dataSource === 'websocket' ? wsData?.data?.mark_price : undefined
+        const valuationPrice = markPrice && markPrice > 0 ? markPrice : currentLtp
 
         // Calculate unrealized P&L based on position direction
         // Long (qty > 0): profit when ltp > avgPrice
         // Short (qty < 0): profit when ltp < avgPrice
         let unrealizedPnl: number
         if (qty > 0) {
-          unrealizedPnl = (currentLtp - avgPrice) * qty * lotSize
+          unrealizedPnl = (valuationPrice - avgPrice) * qty * lotSize
         } else {
-          unrealizedPnl = (avgPrice - currentLtp) * Math.abs(qty) * lotSize
+          unrealizedPnl = (avgPrice - valuationPrice) * Math.abs(qty) * lotSize
         }
 
         // Total P&L = today's realized (from partial closes) + current unrealized
         calculatedPnl = todayRealizedPnl + unrealizedPnl
 
-        // P&L% based on total P&L and investment
-        const investment = Math.abs(avgPrice * qty)
+        // P&L% based on total P&L and investment, in the same contract units
+        const investment = Math.abs(avgPrice * qty * lotSize)
         calculatedPnlPercent = investment > 0 ? (calculatedPnl / investment) * 100 : 0
       }
 

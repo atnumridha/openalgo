@@ -176,7 +176,7 @@ UNDERLYING_EXCHANGES = (
 #: every rule hanging off the tab lived in the browser. A cash leg on an index
 #: tab therefore validated here and failed at run start with "no cash contract
 #: found for NIFTY on NSE", which is the correct refusal arriving far too late.
-UNIVERSE_TABS = ("weekly_monthly", "monthly_only", "stocks_fno", "mcx")
+UNIVERSE_TABS = ("weekly_monthly", "monthly_only", "stocks_fno", "mcx", "crypto")
 
 LEG_SEGMENTS = ("options", "futures", "cash")
 
@@ -190,6 +190,7 @@ TAB_SEGMENTS = {
     "monthly_only": ("futures", "options"),
     "stocks_fno": ("cash", "futures", "options"),
     "mcx": ("futures", "options"),
+    "crypto": ("futures", "options"),
 }
 
 LEG_POSITIONS = ("B", "S")
@@ -235,7 +236,7 @@ LEG_FIELDS = (
 #: option fields at all: multi-leg option spreads stay in batch mode.
 # Where a signal leg may trade. Cash plus the derivative venues; an index
 # pseudo-exchange is not orderable and is deliberately absent.
-SIGNAL_LEG_EXCHANGES = ("NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO")
+SIGNAL_LEG_EXCHANGES = ("NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO", "CRYPTO")
 
 SIGNAL_LEG_FIELDS = (
     "id",
@@ -934,6 +935,7 @@ def _validate_strategy_config(payload: Any) -> dict:
 
 #: Underlying exchanges whose instruments belong to the commodity tab.
 _COMMODITY_EXCHANGES = frozenset({"MCX", "NCDEX", "NCO"})
+_CRYPTO_EXCHANGES = frozenset({"CRYPTO"})
 
 #: Expiry ranks that only exist where an instrument lists weekly contracts.
 _WEEKLY_RANKS = frozenset({"weekly", "next_week"})
@@ -954,7 +956,10 @@ def _tab_for_legs(raw: Any, legs: list[dict[str, Any]]) -> str:
     if "cash" in segments:
         return "stocks_fno"
 
-    if str(raw.get("underlying_exchange") or "").upper() in _COMMODITY_EXCHANGES:
+    exchange = str(raw.get("underlying_exchange") or "").upper()
+    if exchange in _CRYPTO_EXCHANGES:
+        return "crypto"
+    if exchange in _COMMODITY_EXCHANGES:
         return "mcx"
 
     ranks = {str(leg.get("expiry") or "").lower() for leg in legs if isinstance(leg, dict)}

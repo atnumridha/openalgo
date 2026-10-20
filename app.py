@@ -79,6 +79,7 @@ from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.master_contract_status import (
     master_contract_status_bp,  # Import the master contract status blueprint
 )
+from blueprints.ml_signals import ml_signals_bp
 from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.openscript import openscript_bp  # Trader authored OpenScript sources
@@ -96,6 +97,10 @@ from blueprints.react_app import (  # Import React frontend blueprint
     serve_react_app,
 )
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
+from blueprints.delta_desk import delta_desk_bp
+from blueprints.delta_profit_guard import delta_profit_guard_bp
+from blueprints.liquidity_strategy import liquidity_strategy_bp
+from blueprints.kotak_assistant import kotak_assistant_bp
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
 from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
@@ -128,6 +133,7 @@ from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
+from database.ml_settings_db import init_db as ensure_ml_settings_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
@@ -154,6 +160,7 @@ from utils.logging import (  # Import centralized logging
 )
 from utils.plugin_loader import load_broker_auth_functions, load_broker_capabilities
 from utils.security_middleware import init_security_middleware  # Import security middleware
+from utils.shutdown import register_shutdown_hook
 from utils.socketio_error_handler import (
     init_socketio_error_handling,  # Import Socket.IO error handler
 )
@@ -313,6 +320,7 @@ def create_app():
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
+    app.register_blueprint(ml_signals_bp)
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
     app.register_blueprint(master_contract_status_bp)
@@ -332,6 +340,10 @@ def create_app():
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
+    app.register_blueprint(delta_desk_bp)
+    app.register_blueprint(delta_profit_guard_bp)
+    app.register_blueprint(liquidity_strategy_bp)
+    app.register_blueprint(kotak_assistant_bp)
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
     app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(alerts_bp)  # Register chart alert log blueprint
@@ -449,6 +461,10 @@ def create_app():
         csrf.exempt(app.view_functions["postback_bp.broker_postback"])
         csrf.exempt(app.view_functions["flow.trigger_webhook"])
         csrf.exempt(app.view_functions["flow.trigger_webhook_with_symbol"])
+        # The ML worker's exit call. Loopback only, and authenticated by the
+        # secret the worker was started with; a process cannot carry a CSRF token.
+        csrf.exempt(app.view_functions["ml_signals_bp.worker_exit"])
+        csrf.exempt(app.view_functions["ml_signals_bp.worker_reconcile"])
 
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions["brlogin.broker_callback"])
@@ -767,6 +783,7 @@ def setup_environment(app):
                 ("Watchlist DB", ensure_watchlist_tables_exists),
                 ("Alert Log DB", ensure_alert_log_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("ML Settings DB", ensure_ml_settings_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 ("Agent DB", ensure_agent_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
@@ -839,6 +856,19 @@ def setup_environment(app):
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()
 
+            # ML worker process: live snapshots and scheduled retraining stay
+            # outside the web process, so eventlet request handling is never
+            # blocked by model inference or training.
+            try:
+                from services.ml_worker_manager import start_worker
+
+                if start_worker():
+                    logger.debug("ML worker started")
+                else:
+                    logger.error("ML worker did not start")
+            except Exception:
+                logger.exception("Failed to start ML worker")
+
             # Initialize schedulers AFTER database initialization
             try:
                 init_python_strategy()
@@ -897,6 +927,12 @@ def setup_environment(app):
                 logger.error(f"Failed to initialize Strategy module: {e}")
 
             try:
+                from services.delta_profit_guard import start as start_delta_profit_protection
+                start_delta_profit_protection()
+            except Exception:
+                logger.exception("Delta profit protection monitor could not start")
+
+            try:
                 # Server-side scalping SL / target / trailing-stop engine. Runs
                 # browser-independently so stops keep working after the user
                 # leaves /scalping or closes the tab. Idles when no SL is set.
@@ -906,6 +942,12 @@ def setup_environment(app):
                 logger.debug("Scalping risk monitor initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Scalping risk monitor: {e}")
+
+            try:
+                from services.kotak_assistant.runtime import start as start_kotak_assistant
+                start_kotak_assistant()
+            except Exception as e:
+                logger.error(f"Failed to initialize Kotak home monitor: {e}")
 
             # Auto-reconnect the WhatsApp bot if a paired session is persisted.
             # Without this, every server restart would leave is_ready()=False
@@ -1023,6 +1065,18 @@ app = create_app()
 
 # Explicitly call the setup environment function
 setup_environment(app)
+
+
+def _stop_ml_worker() -> None:
+    try:
+        from services.ml_worker_manager import stop_worker
+
+        stop_worker()
+    except Exception:
+        logger.exception("Failed to stop ML worker")
+
+
+register_shutdown_hook(_stop_ml_worker, name="ml-worker", budget_s=10.0)
 
 # Under eventlet, start the green thread that runs calls real OS threads hand
 # to the hub (utils.real_threading.run_on_hub). This runs at import, on the
@@ -1249,4 +1303,14 @@ if __name__ == "__main__":
 
         install_signal_handlers()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    # Local `uv run app.py` only. Gunicorn never reaches this block.
+    # The Mac launcher detaches the process, so stdin is not a TTY and
+    # Flask-SocketIO otherwise refuses the Werkzeug dev server.
+    socketio.run(
+        app,
+        host=host_ip,
+        port=port,
+        debug=debug,
+        reloader_options=reloader_options,
+        allow_unsafe_werkzeug=True,
+    )

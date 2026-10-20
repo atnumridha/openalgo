@@ -41,10 +41,14 @@ class DeltaModeMapper:
     # ltp/oi/ohlc as zero and blank out those columns wherever a depth
     # subscription is the only one for the symbol (the option chain does
     # exactly this).
+    #
+    # Every mode also subscribes to trades. The ticker publishes a snapshot
+    # every 5 seconds, so a chart built from it lags Delta's own by that much;
+    # trades carry each fill's price and size as it happens.
     MODE_CHANNELS = {
-        1: ("ticker",),            # LTP mode
-        2: ("ticker",),            # Quote mode (ticker carries bid/ask + sizes + OI)
-        3: ("ob_l2", "ticker"),    # Depth mode
+        1: ("ticker", "trades"),            # LTP mode
+        2: ("ticker", "trades"),            # Quote mode (ticker carries bid/ask + sizes + OI)
+        3: ("ob_l2", "ticker", "trades"),   # Depth mode
     }
 
     @staticmethod

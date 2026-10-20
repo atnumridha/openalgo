@@ -1,5 +1,6 @@
 import type {
   ExpiryResponse,
+  FuturesContract,
   OptionChainResponse,
   ScalpingOrderRequest,
   ScalpingOrderResponse,
@@ -10,9 +11,36 @@ import type {
 } from '@/types/scalping'
 import { webClient } from './client'
 
+export interface MLPlan {
+  symbol?: string
+  quantity?: number
+  leverage?: number
+  action: 'LONG' | 'SHORT' | 'HOLD'
+  reason: string
+  updated_at?: number
+  signal_time?: number
+  server_time: number
+  quote_time?: number
+  inference_ms?: number
+  model_version?: string
+  research_qualified?: boolean
+  threshold?: number
+  test?: { trades: number; win_rate: number; net_usd: number; fees_usd?: number }
+  plans: Array<{
+    side: 'LONG' | 'SHORT'; probability: number; expected_net_usd: number
+    entry?: number; stop?: number; target?: number; net_risk?: number; net_target?: number
+    entry_fee?: number; target_fee?: number; target_fees?: number; stop_fees?: number
+    margin?: number; net_rr?: number; eligible: boolean; fits_risk?: boolean; reason: string
+  }>
+}
+
 // Scalping terminal API. Endpoints are served by blueprints/scalping.py under
 // the root path (not /api/v1), so we use webClient (session + CSRF aware).
 export const scalpingApi = {
+  getMLPlan: async (symbol: string, quantity: number, leverage: number): Promise<{ status: string; data: MLPlan }> => {
+    const response = await webClient.get('/scalping/api/ml-plan', { params: { symbol, quantity, leverage } })
+    return response.data
+  },
   getUnderlyings: async (): Promise<UnderlyingsResponse> => {
     const response = await webClient.get<UnderlyingsResponse>('/scalping/api/underlyings')
     return response.data
@@ -55,7 +83,7 @@ export const scalpingApi = {
     exchange: string
   ): Promise<{
     status: string
-    data: Array<{ symbol: string; expiry: string; lotsize: number; tick_size: number | null }>
+    data: FuturesContract[]
   }> => {
     const response = await webClient.get('/scalping/api/futures', {
       params: { underlying, exchange },
@@ -78,11 +106,14 @@ export const scalpingApi = {
   // Historical candles for the scalping charts. interval is an OpenAlgo interval
   // (1m/5m/15m); lookback scales 1m=1 day, 5m=3, 15m=9. Pass `date` (the trading
   // date learned on first load) so the periodic reconcile pulls a single day.
+  // The route adds 19,800 seconds for charts to display IST on a UTC axis.
+  // Indicators must undo that display offset before comparing to Date.now().
   getHistory: async (
     symbol: string,
     exchange: string,
     interval: string,
-    date?: string
+    date?: string,
+    timeBasis: 'chart' | 'utc' = 'chart'
   ): Promise<{
     status: string
     symbol: string
@@ -102,6 +133,15 @@ export const scalpingApi = {
     const params: Record<string, string> = { symbol, exchange, interval }
     if (date) params.date = date
     const response = await webClient.get('/scalping/api/history', { params })
+    if (timeBasis === 'utc' && Array.isArray(response.data.candles)) {
+      return {
+        ...response.data,
+        candles: response.data.candles.map((candle: { time: number }) => ({
+          ...candle,
+          time: candle.time - 19800,
+        })),
+      }
+    }
     return response.data
   },
 

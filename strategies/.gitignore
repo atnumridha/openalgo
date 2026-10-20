@@ -26,6 +26,10 @@ test/
 strategy_env.json
 .secure_env
 
+# Live risk state a running strategy publishes for the Positions page:
+# entry, stop and take-profit levels of the trader's own open trade.
+risk_state/
+
 # Uploaded strategy scripts
 scripts/*.py
 

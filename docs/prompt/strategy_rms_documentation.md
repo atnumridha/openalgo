@@ -268,6 +268,21 @@ Other signal-mode rules:
   because a repeated `start` would open a second position; signal mode is
   already idempotent by meaning, and a 60 second window would suppress a genuine
   long, short, long sequence and leave the position backwards.
+- **An entry may carry its own size and levels, but only from inside the
+  process.** `apply_signal(..., overrides=..., bracket=...)` lays `quantity`
+  (units), `sl_pts`, `target_pts`, `risk_unit` and `trail` (`{"x", "y"}`) over
+  the leg for that one trade, and nothing else (`_OVERRIDE_KEYS`). They are
+  written into the run's leg state, so the shared risk core evaluates this
+  trade's levels, and onto the entry's `sm_strategy_order.risk` column, so a
+  restart recovers them even when no checkpoint carried them. `bracket` adds
+  exchange-held protective fields (Delta's `bracket_*`) to the entry order, so
+  the venue still closes the position if this process stops. The public
+  webhook never reads either: an alert cannot resize a position. ML Signals is
+  the caller today (`services/ml_trade_service.py`).
+- **Crypto exits are reduce-only.** `CRYPTO` is a derivatives venue for the
+  product translation below, and every exit and square-off sent there carries
+  `reduce_only`, so two exits racing on one leg can only shrink the position,
+  never flip it the other way.
 
 ## Data model
 
@@ -492,11 +507,15 @@ Load-bearing orderings:
 
 ```python
 build_order(*, symbol, exchange, action, quantity, product, strategy_name,
-            pricetype="MARKET", price=0, trigger_price=0) -> dict
+            pricetype="MARKET", price=0, trigger_price=0, reduce_only=False) -> dict
 exit_action(position) -> str            # "B" -> SELL, "S" -> BUY; raises otherwise
 resolve_live_auth(api_key) -> (auth_token, broker, error)
 dispatch_order(*, mode, api_key, order) -> DispatchResult(ok, broker_order_id, response, error)
 ```
+
+`reduce_only` reaches the order only on a venue in `REDUCE_ONLY_EXCHANGES`
+(`CRYPTO` today); elsewhere it is dropped, because an Indian exchange order has
+no such field.
 
 Five departures from how the rest of the product places orders:
 
@@ -511,7 +530,8 @@ Five departures from how the rest of the product places orders:
 - **The product is translated to the venue.** A strategy carries one product for
   every leg. `build_order` reads it as the intent rather than the literal: MIS
   is intraday everywhere, anything else means carry, which is NRML on a
-  derivatives venue and CNC on cash. A basket mixing a cash leg and an option
+  derivatives venue and CNC on cash. `CRYPTO` counts as a derivatives venue,
+  since a Delta perpetual is a future. A basket mixing a cash leg and an option
   leg therefore works, and no leg is ever sent a product its venue refuses. One
   combination is refused rather than translated: a short cash leg under a
   carrying product, because cash cannot be held short overnight and anything
@@ -649,7 +669,10 @@ disposition and ownership come from **order rows grouped by exact
 `position_ref`**. Volatile risk state (last price, effective stop and target,
 trail flags, favourable extremes) comes from the checkpoint, because no order
 row carries it. A leg's side is derived from its entry action, so a recovered
-leg can never come back with a side it did not trade.
+leg can never come back with a side it did not trade. An entry that carried its
+own levels (see *Signal mode semantics*) wrote them to its order row's `risk`
+column; recovery prefers those over the leg's configuration, and keeps the
+leg's `risk_unit`, so a percent stop does not come back read as points.
 
 Two asymmetries matter:
 

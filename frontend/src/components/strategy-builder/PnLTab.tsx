@@ -19,6 +19,7 @@ export interface PnLTabProps {
   fnoExchange: string
   /** Snapshot prices from the option chain — used only until the first WS tick. */
   fallbackPrices: Record<string, number>
+  formatPrice?: (value: number) => string
   formatCurrency: (value: number) => string
 }
 
@@ -92,7 +93,7 @@ function PnlCell({
   )
 }
 
-export function PnLTab({ legs, fnoExchange, fallbackPrices, formatCurrency }: PnLTabProps) {
+export function PnLTab({ legs, fnoExchange, fallbackPrices, formatCurrency, formatPrice = formatCurrency }: PnLTabProps) {
   // Only active (user-included) legs are considered "open" for this tab.
   // Excluded legs don't appear in the table, don't contribute to the total,
   // and don't consume a WebSocket subscription.
@@ -306,14 +307,14 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices, formatCurrency }: Pn
                 </span>
               </TableCell>
               <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
-                {formatCurrency(leg.price)}
+                {formatPrice(leg.price)}
               </TableCell>
               <TableCell className="whitespace-nowrap text-right text-xs">
-                <PriceCell value={current} isClosed={isClosed} formatCurrency={formatCurrency} />
+                <PriceCell value={current} isClosed={isClosed} formatCurrency={formatPrice} />
               </TableCell>
               <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
                 {isClosed ? (
-                  <span className="font-semibold">{formatCurrency(leg.exitPrice ?? 0)}</span>
+                  <span className="font-semibold">{formatPrice(leg.exitPrice ?? 0)}</span>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}

@@ -20,6 +20,12 @@ def _coerce_quantity_to_int(data):
 
 
 class OrderSchema(Schema):
+    # Delta options are preserved through validation, never silently stripped.
+    post_only = fields.Bool()
+    reduce_only = fields.Bool()
+    leverage = fields.Int(strict=True, validate=validate.Range(min=1, max=200))
+    client_order_id = fields.Str(validate=validate.Length(min=1, max=32))
+
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
     strategy = fields.Str(required=True)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))

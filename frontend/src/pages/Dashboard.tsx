@@ -1,11 +1,13 @@
 import { BarChart3, BookOpen, FileText, GraduationCap, Search, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
+import { KotakAssistant } from '@/components/kotak-assistant/KotakAssistant'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn } from '@/lib/utils'
 import { onModeChange } from '@/stores/themeStore'
+import { useAuthStore } from '@/stores/authStore'
 
 interface MarginData {
   availablecash: string
@@ -60,6 +62,7 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
 }
 
 export default function Dashboard() {
+  const isKotak = useAuthStore((s) => s.user?.broker === 'kotak')
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -300,8 +303,8 @@ export default function Dashboard() {
     )
   }
 
-  return (
-    <div className="space-y-6 md:space-y-12">
+  const accountOverview = (
+    <>
       {/* Dashboard Header */}
       <div className="flex flex-col lg:flex-row lg:items-start gap-4">
         <div className="flex-1">
@@ -451,6 +454,21 @@ export default function Dashboard() {
             <p className="text-destructive text-sm">{error}</p>
           </CardContent>
         </Card>
+      )}
+    </>
+  )
+  return (
+    <div className="space-y-5">
+      <KotakAssistant />
+      {isKotak ? (
+        <details className="rounded-xl border bg-card p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Account balance & market overview
+          </summary>
+          <div className="mt-4 space-y-4">{accountOverview}</div>
+        </details>
+      ) : (
+        accountOverview
       )}
 
       {/* Quick Access Tools */}

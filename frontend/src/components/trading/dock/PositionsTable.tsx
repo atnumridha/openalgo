@@ -45,10 +45,20 @@ interface Props {
   onPick(row: SearchRow): void
   /** Confirmed by the user; the caller places the square-off. */
   onClose(position: DockPosition): void
+  formatPrice?: (value: number) => string
+  formatAmount?: (value: number) => string
   isLoading?: boolean
 }
 
-export function PositionsTable({ positions, activeSymbol, onPick, onClose, isLoading }: Props) {
+export function PositionsTable({
+  positions,
+  activeSymbol,
+  onPick,
+  onClose,
+  isLoading,
+  formatPrice = fmt2,
+  formatAmount = fmt2,
+}: Props) {
   const [pending, setPending] = useState<DockPosition | null>(null)
 
   return (
@@ -108,9 +118,13 @@ export function PositionsTable({ positions, activeSymbol, onPick, onClose, isLoa
                 <td className={cn(TD_NUM, 'font-medium', open && toneClass(p.quantity))}>
                   {signedQty(p.quantity)}
                 </td>
-                <td className={TD_NUM}>{fmt2(p.average_price)}</td>
-                <td className={TD_NUM}>{p.ltp ? fmt2(p.ltp) : '-'}</td>
-                <td className={cn(TD_NUM, 'font-medium', toneClass(p.pnl))}>{signed(p.pnl)}</td>
+                <td className={TD_NUM}>{formatPrice(p.average_price)}</td>
+                <td className={TD_NUM}>{p.ltp ? formatPrice(p.ltp) : '-'}</td>
+                <td className={cn(TD_NUM, 'font-medium', toneClass(p.pnl))}>
+                  {formatAmount === fmt2
+                    ? signed(p.pnl)
+                    : `${p.pnl > 0 ? '+' : ''}${formatAmount(p.pnl)}`}
+                </td>
                 <td className={cn(TD, 'text-right')}>
                   {open && (
                     <Button

@@ -949,3 +949,15 @@
      be invalid under half of them. The editor already sets its own colour. */
   color: inherit;
 }
+
+/* Slow, finite border emphasis; text remains steady and readable. */
+@keyframes kotak-daily-warning {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 0 5px currentColor; }
+}
+.kotak-daily-flash {
+  animation: kotak-daily-warning 1.5s ease-in-out 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .kotak-daily-flash { animation: none; }
+}

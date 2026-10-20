@@ -1,0 +1,2818 @@
+{
+  "channel": "https://www.youtube.com/@StockLearners",
+  "date": "2026-10-18",
+  "channel_header_video_count": 275,
+  "indexed_count": 275,
+  "new_transcripts_retrieved": 0,
+  "coverage": [
+    {
+      "tab": "videos",
+      "pages": 5,
+      "status": "complete"
+    },
+    {
+      "tab": "streams",
+      "pages": 1,
+      "status": "complete"
+    },
+    {
+      "tab": "shorts",
+      "pages": 3,
+      "status": "complete"
+    }
+  ],
+  "limitations": [
+    "Requested transcript service returned HTTP403 verification page.",
+    "Browser access recovered; native Chrome displays the supplied transcript page. New user-supplied files are being analyzed separately from automated transcript collection.",
+    "Direct public caption request for sample video returned empty response.",
+    "Titles only establish a review queue, not strategy evidence or measured win rates.",
+    "275 distinct items found:274 across public Videos/Live/Shorts tabs plus1 homepage collaboration. The collaboration listing is recorded separately; count agreement alone does not prove exhaustive completeness."
+  ],
+  "videos": [
+    {
+      "video_id": "-DHozAiLTBg",
+      "title": "The End Of Emotional Trading - Trading Psychology ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=-DHozAiLTBg",
+      "metadata": "722k | 1 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=-DHozAiLTBg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "wI9b968AvW8",
+      "title": "Best Trading Strategy For Beginners - Scalping Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=wI9b968AvW8",
+      "metadata": "1.8m | 4 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=wI9b968AvW8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "uEeej9q_b_A",
+      "title": "Break The Looser Loop - Trading Roadmap ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=uEeej9q_b_A",
+      "metadata": "380k | 7 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=uEeej9q_b_A",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "CcTMfNEBbyg",
+      "title": "The Ultimate Trade - Capture Top & Bottom Strategy ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=CcTMfNEBbyg",
+      "metadata": "417k | 8 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=CcTMfNEBbyg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ZuRCCl7i2ZU",
+      "title": "Hold Trade Like Big Player - Event Level Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ZuRCCl7i2ZU",
+      "metadata": "404k | 9 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ZuRCCl7i2ZU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "XHOxOGlaAKw",
+      "title": "Spot The Ultimate Move  - Trap Trading Masterclass",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=XHOxOGlaAKw",
+      "metadata": "1.3m | 11 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=XHOxOGlaAKw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "b6u590ohHfo",
+      "title": "Find Reversals Like Pro - Trading Strategy ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=b6u590ohHfo",
+      "metadata": "562k | 11 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=b6u590ohHfo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "atje92Kyiy0",
+      "title": "The Only Way To Become  Scalpers - Trading Psychology ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=atje92Kyiy0",
+      "metadata": "384k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=atje92Kyiy0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "NiD5tp-drug",
+      "title": "How Much You Can Make  - Trading Reality Exposed",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=NiD5tp-drug",
+      "metadata": "426k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=NiD5tp-drug",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "4jRWygnE998",
+      "title": "Identify The Biggest Trend - Chart Pattern ",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=4jRWygnE998",
+      "metadata": "167k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=4jRWygnE998",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "sWUssNfLeSI",
+      "title": "Your Brain Is Trained To Make Loses | Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=sWUssNfLeSI",
+      "metadata": "380k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=sWUssNfLeSI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "oaCeTzsT_SY",
+      "title": "Pin Point Entry कैसे करना होता है | Candle Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=oaCeTzsT_SY",
+      "metadata": "272k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=oaCeTzsT_SY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "mcW--Vhw4Yk",
+      "title": "The Only Way To Comeback After BIG LOSSES - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=mcW--Vhw4Yk",
+      "metadata": "1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=mcW--Vhw4Yk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OVs1Tj2y4Eg",
+      "title": "Pro Level Risk Management For Trader #riskmanagement",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=OVs1Tj2y4Eg",
+      "metadata": "403k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OVs1Tj2y4Eg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "DtCvbAPZBGA",
+      "title": "The Impossible Trades - Perfect Trading Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=DtCvbAPZBGA",
+      "metadata": "343k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=DtCvbAPZBGA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "wRFjgM-WGUQ",
+      "title": "Trading Plan Like Pro - Trading Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=wRFjgM-WGUQ",
+      "metadata": "227k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=wRFjgM-WGUQ",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "02UaBh-247k",
+      "title": "Why 95% People Fails - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=02UaBh-247k",
+      "metadata": "573k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=02UaBh-247k",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "G3NrNq44WlY",
+      "title": "Learn Trading From Your Mistakes - Trading Psychology Masterclass",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=G3NrNq44WlY",
+      "metadata": "167k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=G3NrNq44WlY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "amdbmRFK1dg",
+      "title": "The Only Way To Become Big - Scalping From Small Capital",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=amdbmRFK1dg",
+      "metadata": "86k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=amdbmRFK1dg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "stVa6SOnxAM",
+      "title": "Only For Pro Scalpers - Scalping Trading Complete Guide 2025",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=stVa6SOnxAM",
+      "metadata": "187k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=stVa6SOnxAM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "dxJ-0PP9A0E",
+      "title": "Become Extraordinary Trader - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=dxJ-0PP9A0E",
+      "metadata": "1m | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=dxJ-0PP9A0E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "rM6nFbnm5Ps",
+      "title": "4 Deadly Killers of Scalpers - Become a Pro Scalper",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=rM6nFbnm5Ps",
+      "metadata": "682k | 1 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=rM6nFbnm5Ps",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "c83IVR1ezW0",
+      "title": "How Trading Work Trading - Complete Guide For Trader",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=c83IVR1ezW0",
+      "metadata": "79k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=c83IVR1ezW0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "3dTUqPzpIUc",
+      "title": "5 Rules For Pro SCALPER - Scalping Without Fear",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=3dTUqPzpIUc",
+      "metadata": "95k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=3dTUqPzpIUc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "n76iI8-vaxk",
+      "title": "Trade Like Pro Make Good RR  - Smart Money Concepts",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=n76iI8-vaxk",
+      "metadata": "448k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=n76iI8-vaxk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "MSTqTiCOyhI",
+      "title": "Independent Trader - Trading Motivation Journey",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=MSTqTiCOyhI",
+      "metadata": "47k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=MSTqTiCOyhI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "29pQ1bIQNHw",
+      "title": "The Only Way To Survive In Trading - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=29pQ1bIQNHw",
+      "metadata": "147k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=29pQ1bIQNHw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "La82LesUEwI",
+      "title": "Pro Trader From Small Capital Full Roadmap",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=La82LesUEwI",
+      "metadata": "1m | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=La82LesUEwI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "YBuqNc1CB3E",
+      "title": "Trade Stock Like Pro - Stock Trading Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=YBuqNc1CB3E",
+      "metadata": "135k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=YBuqNc1CB3E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JsjWM_RjqC8",
+      "title": "Mental Habits For Traders - Option Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=JsjWM_RjqC8",
+      "metadata": "298k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JsjWM_RjqC8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "jqCY5RLWdNE",
+      "title": "Trade Like Operator - Perfect Enter & Exit Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=jqCY5RLWdNE",
+      "metadata": "484k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=jqCY5RLWdNE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "LQIXtKpvguI",
+      "title": "5 Deadly Killer Of Option Trader - Option Scalping",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=LQIXtKpvguI",
+      "metadata": "124k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=LQIXtKpvguI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "oJ-T-6YW5dw",
+      "title": "The Only Way To Become Pro  In Trading - Profitable Business",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=oJ-T-6YW5dw",
+      "metadata": "492k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=oJ-T-6YW5dw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "35E-h5rkwag",
+      "title": "The Only Way To Recover Option Trading Losses -  Trading Losses",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=35E-h5rkwag",
+      "metadata": "136k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=35E-h5rkwag",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "fUKhwqOIggo",
+      "title": "How Pro Trader Draw & Find Level On Chart - Trading Basics",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=fUKhwqOIggo",
+      "metadata": "975k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=fUKhwqOIggo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "rUM0rFQU9gU",
+      "title": "5 Lesson From My Trading Journey - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=rUM0rFQU9gU",
+      "metadata": "694k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=rUM0rFQU9gU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "IMwZtjVXINM",
+      "title": "The Secret Of Consistency In Trading - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=IMwZtjVXINM",
+      "metadata": "370k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=IMwZtjVXINM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ObixcDEBFtc",
+      "title": "Trade Like Opretor - The Ultimate Secret Of Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ObixcDEBFtc",
+      "metadata": "336k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ObixcDEBFtc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "08mQdMmAMT4",
+      "title": "How Pro Trader Do Breakout Trading - Trading Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=08mQdMmAMT4",
+      "metadata": "317k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=08mQdMmAMT4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "kvZUKbOWHG8",
+      "title": "Pro Trader's Mindset - Operator Chart Reading #AndekhaSach",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=kvZUKbOWHG8",
+      "metadata": "196k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=kvZUKbOWHG8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Cj6zMiVWD5E",
+      "title": "The Dirty Game Of Operator - Pro Chart Analysis",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Cj6zMiVWD5E",
+      "metadata": "441k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Cj6zMiVWD5E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "60LSNK0Ct_U",
+      "title": "The Only Way To Make Big Profit - Trading Style",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=60LSNK0Ct_U",
+      "metadata": "492k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=60LSNK0Ct_U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "XgGUZpof7qE",
+      "title": "How To Become Big Trader From Zero - Trading Profits",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=XgGUZpof7qE",
+      "metadata": "191k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=XgGUZpof7qE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ZG5nVz9nUxk",
+      "title": "Trading Journey Of 5 Different Trader - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ZG5nVz9nUxk",
+      "metadata": "89k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ZG5nVz9nUxk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "rG6W7wSHjnw",
+      "title": "Trading Strategy For Pro Traders -The Dirty Game Of Operator",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=rG6W7wSHjnw",
+      "metadata": "249k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=rG6W7wSHjnw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "cBCJG5aGCTo",
+      "title": "Ultimate Guide For Small Capital Trader - Full Roadmap",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=cBCJG5aGCTo",
+      "metadata": "246k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=cBCJG5aGCTo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "dG2Vvnd13sI",
+      "title": "Final Goal Of Every Trader Journey - Breakeven Stage",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=dG2Vvnd13sI",
+      "metadata": "103k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=dG2Vvnd13sI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "9FyenEAmDHU",
+      "title": "The Only Rules For Pro Trader - Option Scalping",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=9FyenEAmDHU",
+      "metadata": "415k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=9FyenEAmDHU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "dI44xDfbnEs",
+      "title": "Grow Trading Acount Without Taking Risk -Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=dI44xDfbnEs",
+      "metadata": "283k | 2 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=dI44xDfbnEs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "KJxovfLuuEI",
+      "title": "Road To Fearless Scalping - Trading Setup Mindset",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=KJxovfLuuEI",
+      "metadata": "107k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=KJxovfLuuEI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "vwNeu7Ptp7k",
+      "title": "Trading Expose No One Can Make Money - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=vwNeu7Ptp7k",
+      "metadata": "117k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=vwNeu7Ptp7k",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JronYt8x5uI",
+      "title": "Secret Of Market No One Will Tell You - Trading Setup Shoonya",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=JronYt8x5uI",
+      "metadata": "37k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JronYt8x5uI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "RlHANBMalWs",
+      "title": "The Only Mindset For Success - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=RlHANBMalWs",
+      "metadata": "337k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=RlHANBMalWs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "l3RKNrojjk8",
+      "title": "The Only Way For Winning Traders - Risk Reward Ratio",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=l3RKNrojjk8",
+      "metadata": "166k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=l3RKNrojjk8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qOgfHJh526U",
+      "title": "The Only Way For Success   - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=qOgfHJh526U",
+      "metadata": "1.2m | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qOgfHJh526U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "TCeW9GXvFF4",
+      "title": "Independent Trader - Trading Motivation",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=TCeW9GXvFF4",
+      "metadata": "102k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=TCeW9GXvFF4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "MQ6AKHol9zw",
+      "title": "7 Rules Of Fearless Trader - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=MQ6AKHol9zw",
+      "metadata": "281k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=MQ6AKHol9zw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "MBGURBLKj84",
+      "title": "Psychology Of Trading - Trading Motivation For Beginner",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=MBGURBLKj84",
+      "metadata": "81k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=MBGURBLKj84",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "aLJdjbWVKD4",
+      "title": "How To Plan For Avoid Loss In  Market - Complete Path",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=aLJdjbWVKD4",
+      "metadata": "176k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=aLJdjbWVKD4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "jkqLGdA8-v0",
+      "title": "Only One Habit Of Consistent Profitable Trader - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=jkqLGdA8-v0",
+      "metadata": "499k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=jkqLGdA8-v0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "WI5LnvltVAk",
+      "title": "The Art Of Chart Reading - Technical Analysis",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=WI5LnvltVAk",
+      "metadata": "507k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=WI5LnvltVAk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "XiCmKXPjrj8",
+      "title": "How Trading Work - Sandeep Maheshwari AI",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=XiCmKXPjrj8",
+      "metadata": "97k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=XiCmKXPjrj8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "BCWByKkJthI",
+      "title": "BIG FAT Move  - Intraday To Swing Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=BCWByKkJthI",
+      "metadata": "112k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=BCWByKkJthI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "EogS4USN65g",
+      "title": "7 Rules For Fearless Scalper - Scalping Strategy",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=EogS4USN65g",
+      "metadata": "609k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=EogS4USN65g",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "aj8M7yDLTKw",
+      "title": "Win The Long Term GAME of Market  - Trading Journey",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=aj8M7yDLTKw",
+      "metadata": "37k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=aj8M7yDLTKw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "X_CkrPkkx1M",
+      "title": "Trading Size increase - Quantity Management",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=X_CkrPkkx1M",
+      "metadata": "41k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=X_CkrPkkx1M",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "j8nUuK8h42E",
+      "title": "Roadmap For Profitable Trader - Losses To Profit Journey",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=j8nUuK8h42E",
+      "metadata": "197k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=j8nUuK8h42E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "cplP2y-nT_4",
+      "title": "How To Spot Real Breakout Secret Revealed",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=cplP2y-nT_4",
+      "metadata": "16k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=cplP2y-nT_4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "9SZuCvOoYc0",
+      "title": "The Art Of Price Action Trading - Secret Revealed",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=9SZuCvOoYc0",
+      "metadata": "319k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=9SZuCvOoYc0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "lR6y1RqV1jg",
+      "title": "Dark Truth Of Trading Indicators - Price Action Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=lR6y1RqV1jg",
+      "metadata": "30k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=lR6y1RqV1jg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "g0uoSATqVEk",
+      "title": "5 Golden Rules For Beginner Trader",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=g0uoSATqVEk",
+      "metadata": "30k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=g0uoSATqVEk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "D3JJjBxAaxU",
+      "title": "Trading Full-Time Setup Complete Guide",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=D3JJjBxAaxU",
+      "metadata": "12k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=D3JJjBxAaxU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "WaAnxGOQajs",
+      "title": "Master These 5 Signs to Become a Highly Successful Trader",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=WaAnxGOQajs",
+      "metadata": "299k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=WaAnxGOQajs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "KmBO-x3HQDg",
+      "title": "Complete Solutions For Random Traders",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=KmBO-x3HQDg",
+      "metadata": "32k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=KmBO-x3HQDg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "LeegmY27LZs",
+      "title": "PROTECT YOUR MONEY - Option Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=LeegmY27LZs",
+      "metadata": "43k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=LeegmY27LZs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "lrdLzHkFf30",
+      "title": "Trading Psychology For Beginner Trader - Most Unusual Thing",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=lrdLzHkFf30",
+      "metadata": "164k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=lrdLzHkFf30",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "pRiqM6ki3Cs",
+      "title": "How Much Capital Required To Become Better Trader - Real Truth",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=pRiqM6ki3Cs",
+      "metadata": "14k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=pRiqM6ki3Cs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "2GDcWvrckPk",
+      "title": "How To Become Talanted Trader By Not Doing Hardwork - Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=2GDcWvrckPk",
+      "metadata": "20k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=2GDcWvrckPk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "vEoR1KgOVOs",
+      "title": "Why 5% Success Rate in Trading - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=vEoR1KgOVOs",
+      "metadata": "53k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=vEoR1KgOVOs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tR8KU7T9htg",
+      "title": "Fearless Trading - Fear And Greed Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=tR8KU7T9htg",
+      "metadata": "131k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tR8KU7T9htg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "-ePIJost7Ns",
+      "title": "How I Became Trader My Story | Turning Point",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=-ePIJost7Ns",
+      "metadata": "94k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=-ePIJost7Ns",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "aBaJD8Bnx6w",
+      "title": "SWING TRADING STRATEGY",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=aBaJD8Bnx6w",
+      "metadata": "370k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=aBaJD8Bnx6w",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JamQt4SpX6A",
+      "title": "Stoploss Complete Guide - Secret Method  No One Will Tell You",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=JamQt4SpX6A",
+      "metadata": "37k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JamQt4SpX6A",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "4U9sZUw0msc",
+      "title": "Big Profit Strategy For Small Traders For Free",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=4U9sZUw0msc",
+      "metadata": "306k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=4U9sZUw0msc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "s4AnC6Q42M8",
+      "title": "Price Action  Trading For Beginners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=s4AnC6Q42M8",
+      "metadata": "41k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=s4AnC6Q42M8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "R-vZkOy8cUQ",
+      "title": "Trading In The Zone Hindi Book - Trading Psychology Video",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=R-vZkOy8cUQ",
+      "metadata": "71k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=R-vZkOy8cUQ",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "t8VNzgdFQuM",
+      "title": "Trading Journey Of Option Trader - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=t8VNzgdFQuM",
+      "metadata": "61k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=t8VNzgdFQuM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bewsKgjaGTg",
+      "title": "Complete Solution Of Overtrading  - Trading Psychology Video",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=bewsKgjaGTg",
+      "metadata": "242k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bewsKgjaGTg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "YZ8paggKbHo",
+      "title": "Swing Trading Strategy -No One  Tell You Secrets",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=YZ8paggKbHo",
+      "metadata": "240k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=YZ8paggKbHo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Zwg8GT0RKBA",
+      "title": "Averaging Vs Pyramiding - Trading Concept",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Zwg8GT0RKBA",
+      "metadata": "48k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Zwg8GT0RKBA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "eauNgye4GX4",
+      "title": "Succeed In Trading By Doing This Four Thing - Stock Market Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=eauNgye4GX4",
+      "metadata": "14k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=eauNgye4GX4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "FpiqJP3RdZE",
+      "title": "Build A Strong Trading Plan - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=FpiqJP3RdZE",
+      "metadata": "33k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=FpiqJP3RdZE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bKrA6mVIz-4",
+      "title": "The Ultimate Solution For Success In Trading - Trading System For Beginner",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=bKrA6mVIz-4",
+      "metadata": "60k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bKrA6mVIz-4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "YZo2W5vA4uo",
+      "title": "Be Prepare For This Year - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=YZo2W5vA4uo",
+      "metadata": "11k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=YZo2W5vA4uo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "1pkI8wdWpnA",
+      "title": "The Only Reason Of Your Failures - Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=1pkI8wdWpnA",
+      "metadata": "22k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=1pkI8wdWpnA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tXMOLKmsEq8",
+      "title": "How To Trade Option Hedging Strategies",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=tXMOLKmsEq8",
+      "metadata": "3.4k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tXMOLKmsEq8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "vFpcPClfNOw",
+      "title": "How I Develop My Trading Style - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=vFpcPClfNOw",
+      "metadata": "45k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=vFpcPClfNOw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qarQuSOiMcI",
+      "title": "TRADER Banane Mai Kitnna Time Lagta Hai  - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=qarQuSOiMcI",
+      "metadata": "265k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qarQuSOiMcI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xMsfTe3XvmE",
+      "title": "How To Enter Into Trending Stock - Intraday Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=xMsfTe3XvmE",
+      "metadata": "4.9k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xMsfTe3XvmE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "2Lc6dDZFYH8",
+      "title": "My Trading Journey - Mistakes That Made Me Trader",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=2Lc6dDZFYH8",
+      "metadata": "50k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=2Lc6dDZFYH8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OsWSDw3e20U",
+      "title": "Trading Losses - How to  Handle Losses Complete Guide",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=OsWSDw3e20U",
+      "metadata": "11k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OsWSDw3e20U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "3pjHJ2cDqsg",
+      "title": "Hold Your Winning Trades - Intraday Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=3pjHJ2cDqsg",
+      "metadata": "33k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=3pjHJ2cDqsg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "8goa3YxPXes",
+      "title": "Beginner Trader - Don't Do These Mistakes",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=8goa3YxPXes",
+      "metadata": "31k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=8goa3YxPXes",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "iF08doDbkXE",
+      "title": "Best TradingView Features Free - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=iF08doDbkXE",
+      "metadata": "4.1k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=iF08doDbkXE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "zzo2HXTu5fo",
+      "title": "How To Find Top And Bottom Of Market - Trading Strategy For Beginner",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=zzo2HXTu5fo",
+      "metadata": "43k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=zzo2HXTu5fo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Zs6bfSSkcgA",
+      "title": "Intresting Myths About Share Market - Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Zs6bfSSkcgA",
+      "metadata": "3.4k | 3 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Zs6bfSSkcgA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OVxxWHGUCE0",
+      "title": "Option Buying Vs Option Selling Real Difference - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=OVxxWHGUCE0",
+      "metadata": "25k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OVxxWHGUCE0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "J5MDa2A0aoE",
+      "title": "Trading Mistakes By Beginners Traders - Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=J5MDa2A0aoE",
+      "metadata": "16k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=J5MDa2A0aoE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "W8ecwVfIGgA",
+      "title": "How To Become A Trader - Full Roadmap | Stock learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=W8ecwVfIGgA",
+      "metadata": "37k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=W8ecwVfIGgA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ipqVZCFvFq4",
+      "title": "Unfair Advantage In Trading | Trading Tips - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ipqVZCFvFq4",
+      "metadata": "26k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ipqVZCFvFq4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "i9_5_m-tBlA",
+      "title": "STORY Of World's 3rd Biggest Trader - Turned 2000 Dollar To 500 Million Dollar",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=i9_5_m-tBlA",
+      "metadata": "6.6k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=i9_5_m-tBlA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "V5jTsLlh0l0",
+      "title": "Never Trade With Wrong Mindset - Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=V5jTsLlh0l0",
+      "metadata": "18k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=V5jTsLlh0l0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "DpizkoujSWM",
+      "title": "Why Traders Loose Big Money In TRADING | STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=DpizkoujSWM",
+      "metadata": "25k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=DpizkoujSWM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "zQXIYEv7j4U",
+      "title": "Trading Books - Best Books For Traders | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=zQXIYEv7j4U",
+      "metadata": "78k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=zQXIYEv7j4U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "5xfJKJb97Ws",
+      "title": "Best Laptop For Trading | LAPTOP FOR TRADERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=5xfJKJb97Ws",
+      "metadata": "512k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=5xfJKJb97Ws",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Cx-_yWJaYnU",
+      "title": "Use These Techniques  Make Big Money | Option Trading Intraday",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Cx-_yWJaYnU",
+      "metadata": "24k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Cx-_yWJaYnU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "WY27tfLwOZg",
+      "title": "Make Big Profits From Trading | Option Trading Tips",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=WY27tfLwOZg",
+      "metadata": "11k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=WY27tfLwOZg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "dGR9Ck4banY",
+      "title": "Trading Lessons Of Larry Hite | Important Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=dGR9Ck4banY",
+      "metadata": "23k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=dGR9Ck4banY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "uT8nUwIoY7Q",
+      "title": "How To Become Profitable Trader |  5 Habits Of Success In Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=uT8nUwIoY7Q",
+      "metadata": "57k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=uT8nUwIoY7Q",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "6uT-wHe1Ol0",
+      "title": "7 Types Of STOPLOSS | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=6uT-wHe1Ol0",
+      "metadata": "13k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=6uT-wHe1Ol0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "IyqEjozrYu4",
+      "title": "Trading Psychology For Scalpers | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=IyqEjozrYu4",
+      "metadata": "35k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=IyqEjozrYu4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "X5pHWldXmtk",
+      "title": "HOW TO EARN MONEY FROM STOCK MARKET - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=X5pHWldXmtk",
+      "metadata": "5.1k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=X5pHWldXmtk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "-EEIZ2aN12E",
+      "title": "How To Use Stoploss Smartly | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=-EEIZ2aN12E",
+      "metadata": "31k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=-EEIZ2aN12E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "cBZ26ELdM_0",
+      "title": "Trading With Phone - Why You Need A Laptop",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=cBZ26ELdM_0",
+      "metadata": "121k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=cBZ26ELdM_0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "SZdXegZhI7Y",
+      "title": "BEST INTRADAY STRATEGY FOR BANKNIFTY | BANKNIFTY TDADING - STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=SZdXegZhI7Y",
+      "metadata": "46k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=SZdXegZhI7Y",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ezITD_Hsagg",
+      "title": "Stock Vs Option Trading Which Is Better | Intraday Trading | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ezITD_Hsagg",
+      "metadata": "11k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ezITD_Hsagg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ko40iFg9Nfw",
+      "title": "Why Traders Loose Money | Intraday Trading | Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=ko40iFg9Nfw",
+      "metadata": "6.5k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ko40iFg9Nfw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "W6IVN0DKEGg",
+      "title": "Trading Journal | My Trading Journey | BEST WAY TO Make TRADING Journals",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=W6IVN0DKEGg",
+      "metadata": "88k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=W6IVN0DKEGg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "mCKViwmb6pc",
+      "title": "Summary Breakout Trading - Nikolas Darvas",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=mCKViwmb6pc",
+      "metadata": "39k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=mCKViwmb6pc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "PP2yUNJOdaQ",
+      "title": "How To Control Overtrading | Over Trading Solutions | Loss Management In Trading",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=PP2yUNJOdaQ",
+      "metadata": "140k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=PP2yUNJOdaQ",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "3qAn01208ns",
+      "title": "Market Wizards Hindi Book Summary - World's Best Traders Interviews | STOCK LEARNERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=3qAn01208ns",
+      "metadata": "77k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=3qAn01208ns",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "3grwlLZuqGg",
+      "title": "How To Develop Trading Mindset -Stock Learners",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=3grwlLZuqGg",
+      "metadata": "176k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=3grwlLZuqGg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "THaTNFehKwg",
+      "title": "Trading In The Zone Hindi Part 2 | Best Book For Trading - Trading Psychology, Mark Douglas",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=THaTNFehKwg",
+      "metadata": "66k | 4 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=THaTNFehKwg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qCK_AmQ7Z0Y",
+      "title": "Trading In The Zone Hindi Book Summary | Hindi Audiobook | Trading Psychology",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=qCK_AmQ7Z0Y",
+      "metadata": "328k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qCK_AmQ7Z0Y",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "jY07puPb-IU",
+      "title": "Stock Market Guide For Beginners | Mistake In Share Market",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=jY07puPb-IU",
+      "metadata": "14k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=jY07puPb-IU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Tx65zjMdYLc",
+      "title": "How To Use GTT In Zerodha | GOOD TILL TRIGGER ORDERS",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Tx65zjMdYLc",
+      "metadata": "5.4k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Tx65zjMdYLc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "h7NTYOPQkpY",
+      "title": "INTRADAY STOCKS FORTOMORROW",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=h7NTYOPQkpY",
+      "metadata": "5.6k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=h7NTYOPQkpY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "IHHx_eFCjY4",
+      "title": "Best Stocks Tips For Tomorrow -Best Intraday Stocks For 20 JANUARY 2021",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=IHHx_eFCjY4",
+      "metadata": "7.2k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=IHHx_eFCjY4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "vRdbNg7X_9g",
+      "title": "Live Intraday Trading - STOCKS FOR TOMORROW -19 JANUARY 2021",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=vRdbNg7X_9g",
+      "metadata": "23k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=vRdbNg7X_9g",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Ixt-PaUDNrk",
+      "title": "INTRADAY STOCKS FOR TOMORROW - 18 JANUARY WITH LOGIC",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Ixt-PaUDNrk",
+      "metadata": "7.2k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Ixt-PaUDNrk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "j3XOfnn0EZ4",
+      "title": "Intraday Stocks For Tomorrow - 14 January",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=j3XOfnn0EZ4",
+      "metadata": "9.5k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=j3XOfnn0EZ4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Rb8OGxKjuHc",
+      "title": "TURNING POINT OF  TATA MOTOR  11 January",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=Rb8OGxKjuHc",
+      "metadata": "18k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Rb8OGxKjuHc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xoWVHyA6bP0",
+      "title": "Basics Of Technical Analysis - How To Draw Trend Line From Phone",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=xoWVHyA6bP0",
+      "metadata": "42k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xoWVHyA6bP0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "i-r7WLM5cfA",
+      "title": "TATA POWER - Technical Analysis",
+      "type": "videos",
+      "url": "https://www.youtube.com/watch?v=i-r7WLM5cfA",
+      "metadata": "56k | 5 yr ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=i-r7WLM5cfA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "7CfqSgaQCMo",
+      "title": "Crypto Gold Live Trading 13 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=7CfqSgaQCMo",
+      "metadata": "245k | Streamed 4 days ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=7CfqSgaQCMo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "mHZ_KOdCZL0",
+      "title": "Crypto Gold Live Trading 12 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=mHZ_KOdCZL0",
+      "metadata": "197k | Streamed 5 days ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=mHZ_KOdCZL0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "F647fQ8yeB0",
+      "title": "Crypto Gold Live Trading 8 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=F647fQ8yeB0",
+      "metadata": "245k | Streamed 9 days ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=F647fQ8yeB0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "2dNYaco-F4k",
+      "title": "Crypto Gold Live Trading 6 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=2dNYaco-F4k",
+      "metadata": "253k | Streamed 11 days ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=2dNYaco-F4k",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "GOm-SrMT9yo",
+      "title": "Crypto Gold Live Trading 5 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=GOm-SrMT9yo",
+      "metadata": "279k | Streamed 12 days ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=GOm-SrMT9yo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xft2goHChz4",
+      "title": "Crypto Gold Live Trading 2 Oct  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=xft2goHChz4",
+      "metadata": "307k | Streamed 2 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xft2goHChz4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "byWNMsOBMMU",
+      "title": "Crypto Gold Live Trading 30 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=byWNMsOBMMU",
+      "metadata": "301k | Streamed 2 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=byWNMsOBMMU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "QJtObi6P7UY",
+      "title": "Crypto Gold Live Trading 28 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=QJtObi6P7UY",
+      "metadata": "307k | Streamed 2 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=QJtObi6P7UY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "4tw2vcnCt1k",
+      "title": "Crypto Gold Live Trading 25 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=4tw2vcnCt1k",
+      "metadata": "229k | Streamed 3 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=4tw2vcnCt1k",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bd6Wg9jy5u8",
+      "title": "Crypto Gold Live Trading 24 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=bd6Wg9jy5u8",
+      "metadata": "228k | Streamed 3 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bd6Wg9jy5u8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "oAeWb3opByY",
+      "title": "Crypto Gold Live Trading 23 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=oAeWb3opByY",
+      "metadata": "223k | Streamed 3 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=oAeWb3opByY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "pgT6fZPm96s",
+      "title": "Crypto Gold Live Trading 21 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=pgT6fZPm96s",
+      "metadata": "325k | Streamed 3 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=pgT6fZPm96s",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "SuEBf5C2CUs",
+      "title": "Crypto Gold Live Trading 18 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=SuEBf5C2CUs",
+      "metadata": "298k | Streamed 4 wk ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=SuEBf5C2CUs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "e4lZ5QeeZ6E",
+      "title": "Crypto Gold Live Trading 17 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=e4lZ5QeeZ6E",
+      "metadata": "240k | Streamed 1 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=e4lZ5QeeZ6E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tHnztgJisBA",
+      "title": "Crypto Gold Live Trading 16 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=tHnztgJisBA",
+      "metadata": "337k | Streamed 1 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tHnztgJisBA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "1zm0USzFfY0",
+      "title": "Crypto Gold Live Trading 15 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=1zm0USzFfY0",
+      "metadata": "209k | Streamed 1 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=1zm0USzFfY0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "0stizzV7D1Y",
+      "title": "Crypto Gold Live Trading 14 Sep  - stock_learners",
+      "type": "streams",
+      "url": "https://www.youtube.com/watch?v=0stizzV7D1Y",
+      "metadata": "256k | Streamed 1 mo ago | Add to queue | Save to playlist | Share",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=0stizzV7D1Y",
+      "strategy_review_status": "previously reviewed from user-supplied local video and transcript; this collection remains blocked"
+    },
+    {
+      "video_id": "aMuF_eq8Oec",
+      "title": "VVIP number Plate For My Car #trading #success #journey",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/aMuF_eq8Oec",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=aMuF_eq8Oec",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "4muivT3JcGI",
+      "title": "Journey Of A Boy #trading #cryptocurrencytrading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/4muivT3JcGI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=4muivT3JcGI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xEXStHBy9_I",
+      "title": "How To Find Great Levels #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/xEXStHBy9_I",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xEXStHBy9_I",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "q_tAOj4toUE",
+      "title": "3 year Hustle In Life #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/q_tAOj4toUE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=q_tAOj4toUE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "hVoXjPvMT5o",
+      "title": "Journey Of Struggle Auto To Automatic #trading  #car",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/hVoXjPvMT5o",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=hVoXjPvMT5o",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "EWGVB3fSEM4",
+      "title": "Chart Reading Like Pro #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/EWGVB3fSEM4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=EWGVB3fSEM4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OG0S7xKvCYc",
+      "title": "Trading Is The Best Profession #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/OG0S7xKvCYc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OG0S7xKvCYc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "0PzadLnbUK0",
+      "title": "Trading Capital For Beginner #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/0PzadLnbUK0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=0PzadLnbUK0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "EMMhUi36yoM",
+      "title": "How To Find Best Exit In Trade #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/EMMhUi36yoM",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=EMMhUi36yoM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "p7-Mvw4runU",
+      "title": "Trading Is Not A Single Day Game #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/p7-Mvw4runU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=p7-Mvw4runU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "AxbvbHinQ4E",
+      "title": "Time Frame In Trading #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/AxbvbHinQ4E",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=AxbvbHinQ4E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qrXUIAxPJIE",
+      "title": "One Of The GOAT Learning #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/qrXUIAxPJIE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qrXUIAxPJIE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "FGHo-TNtq9U",
+      "title": "Trading From Phone Is Hard #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/FGHo-TNtq9U",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=FGHo-TNtq9U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "RHj9-Vlr5zg",
+      "title": "The Real Secret Of Indian Market #trading #scalpung",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/RHj9-Vlr5zg",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=RHj9-Vlr5zg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "DUQaYEjsFtw",
+      "title": "Trading Technical Secret #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/DUQaYEjsFtw",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=DUQaYEjsFtw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "m0s5wmOU8NA",
+      "title": "Trading Is Solo Path #scalping #trading #tradingjourney",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/m0s5wmOU8NA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=m0s5wmOU8NA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "RWWJWqliSGY",
+      "title": "Find Simple Liquidity #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/RWWJWqliSGY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=RWWJWqliSGY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qgQizNWmTfA",
+      "title": "How Liquidity Work #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/qgQizNWmTfA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qgQizNWmTfA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "u6rGiOuHnYo",
+      "title": "Big Players Use Our Emotions #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/u6rGiOuHnYo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=u6rGiOuHnYo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "-gexwjZ5eLA",
+      "title": "The Secret Of Previous Levels #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/-gexwjZ5eLA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=-gexwjZ5eLA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "0fPzBrezCTY",
+      "title": "Jyada Uchhlo Mat  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/0fPzBrezCTY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=0fPzBrezCTY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "TknTIVS523I",
+      "title": "Female Trader Vs Male Trader #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/TknTIVS523I",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=TknTIVS523I",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ybZR4fH-qMw",
+      "title": "The Power Of Liquidity #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/ybZR4fH-qMw",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ybZR4fH-qMw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "IeX-w_SJ0wY",
+      "title": "Secret Of M & W Chart #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/IeX-w_SJ0wY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=IeX-w_SJ0wY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "5-pyTT_rLhg",
+      "title": "Nifty Secret Know Before Move #trading #stockmarket",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/5-pyTT_rLhg",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=5-pyTT_rLhg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JbpqyUmRkHs",
+      "title": "Only Way To Become Real Trader #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/JbpqyUmRkHs",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JbpqyUmRkHs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Y_XyE3uFnnk",
+      "title": "Rules For Entry #scalping #trading  #strategy",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/Y_XyE3uFnnk",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Y_XyE3uFnnk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "srYR1yBL5a0",
+      "title": "How Pro Player Close Trade #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/srYR1yBL5a0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=srYR1yBL5a0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "-ZXoGN08bcI",
+      "title": "Never Follow Anyone If You Have Small Capital #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/-ZXoGN08bcI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=-ZXoGN08bcI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "eSRoB7aDnb0",
+      "title": "How Market Works In Moments #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/eSRoB7aDnb0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=eSRoB7aDnb0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "HNng9fAgCNo",
+      "title": "Why Market Crash After All Time High #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/HNng9fAgCNo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=HNng9fAgCNo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "kazMiLq5FYc",
+      "title": "Harsh Reality Of Trading #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/kazMiLq5FYc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=kazMiLq5FYc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xTqNbjtbBnc",
+      "title": "Trade Like A Pro  #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/xTqNbjtbBnc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xTqNbjtbBnc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "clPG1iLsMMg",
+      "title": "Perfect Reversel Trading #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/clPG1iLsMMg",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=clPG1iLsMMg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "KFOfJRw5bkc",
+      "title": "Journey Of Every Trader #scalping #trader",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/KFOfJRw5bkc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=KFOfJRw5bkc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "y1JSXrh5LYY",
+      "title": "Best Strategy For Trend #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/y1JSXrh5LYY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=y1JSXrh5LYY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "lhA-RZP1z88",
+      "title": "Candle Psychology Work #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/lhA-RZP1z88",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=lhA-RZP1z88",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "_bKWPNt7RZg",
+      "title": "Founded Trading Strategy #scalping #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/_bKWPNt7RZg",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=_bKWPNt7RZg",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ERoNtSTfvP4",
+      "title": "Trading Journey Of a Trader  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/ERoNtSTfvP4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ERoNtSTfvP4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OK_tc9gDqxM",
+      "title": "Trading strategy Backtesting #strategy #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/OK_tc9gDqxM",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OK_tc9gDqxM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "579GMzrxvyY",
+      "title": "Which Chart Is More Powerful #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/579GMzrxvyY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=579GMzrxvyY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "nDrvv-qKNKk",
+      "title": "Only Hard Trade Will Work #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/nDrvv-qKNKk",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=nDrvv-qKNKk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "BMGYju07FFo",
+      "title": "Find Best Accurate Trades #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/BMGYju07FFo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=BMGYju07FFo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "RfLE5j-pcLU",
+      "title": "Always Complex Breakout Never Fail #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/RfLE5j-pcLU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=RfLE5j-pcLU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "NL484a9DKh4",
+      "title": "Secret Strategy Nifty Expirey #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/NL484a9DKh4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=NL484a9DKh4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "nIJgnhm7MMI",
+      "title": "Trading Is Lonely Profession #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/nIJgnhm7MMI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=nIJgnhm7MMI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JhZb2CsyOqE",
+      "title": "How Secretly Market Give Big Momentum #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/JhZb2CsyOqE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JhZb2CsyOqE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "0EIu47lYX04",
+      "title": "How Big Player Take Liquidity #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/0EIu47lYX04",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=0EIu47lYX04",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "InXMi8UVvS0",
+      "title": "Why Market Create Refreshments #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/InXMi8UVvS0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=InXMi8UVvS0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "HdUvAkh6iPo",
+      "title": "How Big Candle Trap You #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/HdUvAkh6iPo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=HdUvAkh6iPo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "mnKvWfx3A2U",
+      "title": "Learn Trading Like Pro #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/mnKvWfx3A2U",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=mnKvWfx3A2U",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "xZGwj5jsCSo",
+      "title": "Biggest Gold Momentum Of Indian Trader #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/xZGwj5jsCSo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=xZGwj5jsCSo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "cUfl38itNvI",
+      "title": "Big Player Chart Reading #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/cUfl38itNvI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=cUfl38itNvI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "fNtr8Tf3wEY",
+      "title": "Pin Point Trade Strategy #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/fNtr8Tf3wEY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=fNtr8Tf3wEY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "DTj6HNs7ASE",
+      "title": "Btc Always Trap You 3 Times  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/DTj6HNs7ASE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=DTj6HNs7ASE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "XNh7EwdoOgY",
+      "title": "How Liquidity Work In Chart #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/XNh7EwdoOgY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=XNh7EwdoOgY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "aGhnKjHz14I",
+      "title": "Why Trade Fail If Candle Is Not Good #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/aGhnKjHz14I",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=aGhnKjHz14I",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "Y413Xx6jN5I",
+      "title": "How Chart Trap You #trading #scalping #cryptotrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/Y413Xx6jN5I",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=Y413Xx6jN5I",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bzxhFmIPmnw",
+      "title": "Trader Nhe Tukkebaz  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/bzxhFmIPmnw",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bzxhFmIPmnw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tWPUvx1MyAc",
+      "title": "Live Trading Day 27  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/tWPUvx1MyAc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tWPUvx1MyAc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bmNfElmSq5M",
+      "title": "Journey From ZERO To Success #motivation",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/bmNfElmSq5M",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bmNfElmSq5M",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "CFOHn3UnOps",
+      "title": "Live Trading Day 26  #scalping  #cryptotrading #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/CFOHn3UnOps",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=CFOHn3UnOps",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "VPz_67TfI5E",
+      "title": "Monthly Expiry Strategy  25  #trading #scalping #cryptotrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/VPz_67TfI5E",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=VPz_67TfI5E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "6cK2yO6ttms",
+      "title": "live day 24  #scalping  #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/6cK2yO6ttms",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=6cK2yO6ttms",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "rlrYFTmQoHM",
+      "title": "live day 23 #scalping #trading #scalpingtradingstrategybanknifty",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/rlrYFTmQoHM",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=rlrYFTmQoHM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "4reMgx96OBU",
+      "title": "Live Trading Is Scam?  #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/4reMgx96OBU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=4reMgx96OBU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "W2U5Gl8bZUo",
+      "title": "Tukka Trading But Insane Risk Reward #scalping #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/W2U5Gl8bZUo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=W2U5Gl8bZUo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "K-HfM657ZoM",
+      "title": "Demo Trading Vs Real Trading #scalping #tradingpsychology",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/K-HfM657ZoM",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=K-HfM657ZoM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "hoUuEciKv5Y",
+      "title": "Best Pre Breakout Strategy #trading #scalping",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/hoUuEciKv5Y",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=hoUuEciKv5Y",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "_cuC19qV3qk",
+      "title": "Trading Journey #trading #tradejourney",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/_cuC19qV3qk",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=_cuC19qV3qk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "EpmbcbWVXp4",
+      "title": "Trading Success #trading #trade",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/EpmbcbWVXp4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=EpmbcbWVXp4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "iCXgQ5H7BiE",
+      "title": "Trader Journey #trading #cryptotrading #coindcx #coindcxapexclub",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/iCXgQ5H7BiE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=iCXgQ5H7BiE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "sIa_Gg3oPTc",
+      "title": "Taking Delivery Of Tata Safari #trading #scapling",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/sIa_Gg3oPTc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=sIa_Gg3oPTc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "CftWiF03Lvc",
+      "title": "Trading Psychology Manifestation  #trading #tradingpsychology",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/CftWiF03Lvc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=CftWiF03Lvc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "AqcmVbaV6Ts",
+      "title": "Money Can Give You Happiness #money #lifestyle #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/AqcmVbaV6Ts",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=AqcmVbaV6Ts",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "hVWropV23r0",
+      "title": "Trading Motivation Don't Stop If You Are In Right Path #tradingmentors #learntrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/hVWropV23r0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=hVWropV23r0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "NM7AgkrD9u4",
+      "title": "Agar Pushpa Trader Hota To #trading #scalping #pushpa2",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/NM7AgkrD9u4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=NM7AgkrD9u4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "kU2NQCRKpBQ",
+      "title": "Life Of Trader Motivation #trading #scalping #forex",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/kU2NQCRKpBQ",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=kU2NQCRKpBQ",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "uybX8qGBpI0",
+      "title": "Trailing Stoploss Basics to advance part 98 #trading #daytrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/uybX8qGBpI0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=uybX8qGBpI0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "LlEG1_7YZC0",
+      "title": "Predict Market Before Anyone's #tradingstrategy",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/LlEG1_7YZC0",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=LlEG1_7YZC0",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "o-52GGG3zrQ",
+      "title": "Stock Investment Gone Wrong With My Father #trading #vlog",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/o-52GGG3zrQ",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=o-52GGG3zrQ",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "6W1EO0RpAro",
+      "title": "Trading Without Stoploss Vlog #trading #stockmarket",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/6W1EO0RpAro",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=6W1EO0RpAro",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "huuFZp3-cEo",
+      "title": "3 Best App For Trader #trading #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/huuFZp3-cEo",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=huuFZp3-cEo",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "icRkbyYbitE",
+      "title": "Reality Of Stock market Trading #trading #stockmarket",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/icRkbyYbitE",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=icRkbyYbitE",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tqFbOOBlJgY",
+      "title": "Only Focus On Your Benefits #trading #tradingscams",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/tqFbOOBlJgY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tqFbOOBlJgY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "FvISthYtcWA",
+      "title": "Pehli Udaan Failed # trading #trader  #minivlog",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/FvISthYtcWA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=FvISthYtcWA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "2SewBSR1x7E",
+      "title": "Trading Profits Direct On Your Table #daytrading #optionstrading #scalpingtrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/2SewBSR1x7E",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=2SewBSR1x7E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "ifzH-jSHUMI",
+      "title": "Trading Profit Pe Panouti #trading #tradingsetup #daytrading #mbachaiwala",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/ifzH-jSHUMI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=ifzH-jSHUMI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "98ZrSQ4vvLs",
+      "title": "Trading Monitor Screen #trading #tradingsetup  #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/98ZrSQ4vvLs",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=98ZrSQ4vvLs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "1_RnPVNT1y8",
+      "title": "Market mai रणनीति कैसे बनाना है #stockmarket #optionstrading #tradereducation",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/1_RnPVNT1y8",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=1_RnPVNT1y8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "_05-s4nlOr8",
+      "title": "Trading rule #optionstrading #trading #tradinglife",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/_05-s4nlOr8",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=_05-s4nlOr8",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "YEjLD-Q8N3E",
+      "title": "Breakout trading buy #stockmarket #trading #tradinglife",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/YEjLD-Q8N3E",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=YEjLD-Q8N3E",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "bvQpkC_O944",
+      "title": "Breakout trading never work #stockmarket #optionstrading #trading #swingtrade",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/bvQpkC_O944",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=bvQpkC_O944",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "3i3J8zyQLOY",
+      "title": "Master Only one system #trading #stockmarket #tradereducation #optionstrading #tradingpsychology",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/3i3J8zyQLOY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=3i3J8zyQLOY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "GSOta3PxXIU",
+      "title": "Trading mindset #trading #tradingpsychology #optionstrading #tradereducation",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/GSOta3PxXIU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=GSOta3PxXIU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "JcIXH9pT4qc",
+      "title": "Trading discipline #trading #stockmarket #tradingpsychology #optionstrading #swingtrade",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/JcIXH9pT4qc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=JcIXH9pT4qc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "BIKQ4yNlKOc",
+      "title": "Trading psychology #stockmarket #tradingpsychology #trader #swingtrade #optionstrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/BIKQ4yNlKOc",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=BIKQ4yNlKOc",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "_uIOOhV_DJs",
+      "title": "Mindset for trader #stockmarket #tradingpsychology #cryptocurrency",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/_uIOOhV_DJs",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=_uIOOhV_DJs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "BKzjIbqVAH4",
+      "title": "WINNING EDGE #stockmarket #tradingpsychology #tradingaccount #optionstrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/BKzjIbqVAH4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=BKzjIbqVAH4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "tmWklGQ9qaU",
+      "title": "Big capital is Just a Number become Trader With Small #trading #optionstrading #trader #banknifty",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/tmWklGQ9qaU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=tmWklGQ9qaU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "wZSt2kkLoFA",
+      "title": "Kon bana sakta hai trader aapko #trading #optionstrading #trader #banknifty",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/wZSt2kkLoFA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=wZSt2kkLoFA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "MHVpFEiFyRw",
+      "title": "Trading Mindset For Beginners #trading #optionstrading #banknifty",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/MHVpFEiFyRw",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=MHVpFEiFyRw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "p-WBNlA4jZI",
+      "title": "hammer entry #optionstrading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/p-WBNlA4jZI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=p-WBNlA4jZI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "sjwTNADpUOk",
+      "title": "Screen Obsession Of A Trader  #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/sjwTNADpUOk",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=sjwTNADpUOk",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "OaIQ54bjdmI",
+      "title": "world's biggest coffee trader story #shorts #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/OaIQ54bjdmI",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=OaIQ54bjdmI",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "R1gRZMQZPCA",
+      "title": "Galileo Galili Science History Tech#sciencefacts #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/R1gRZMQZPCA",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=R1gRZMQZPCA",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "EU-pa8u-srU",
+      "title": "Neutan Fail In Share Market #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/EU-pa8u-srU",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=EU-pa8u-srU",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "t2PvK6qOQdw",
+      "title": "3 proven Ways To Prevent Overtrading #shorts #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/t2PvK6qOQdw",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=t2PvK6qOQdw",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "qmYg_4wfRcY",
+      "title": "3 Stage Of Traders #shorts #trading",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/qmYg_4wfRcY",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=qmYg_4wfRcY",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "PYLTWVHEzI4",
+      "title": "#trading #intraday kadwa sach #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/PYLTWVHEzI4",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=PYLTWVHEzI4",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "7VJSAqlrPWs",
+      "title": "Mistakes of rakesh jhunjhunwala #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/7VJSAqlrPWs",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=7VJSAqlrPWs",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "P5SWvloA5_g",
+      "title": "Amazing Fact Of Rakesh Jhunjhunwala share Market #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/P5SWvloA5_g",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=P5SWvloA5_g",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "rtopXuLZxqM",
+      "title": "Share market | Royel Enfield #shorts",
+      "type": "shorts",
+      "url": "https://www.youtube.com/shorts/rtopXuLZxqM",
+      "metadata": "",
+      "transcript_status": "blocked: transcript service verification page; not retrieved",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=rtopXuLZxqM",
+      "strategy_review_status": "not reviewed"
+    },
+    {
+      "video_id": "76N-b4D2NhQ",
+      "title": "Best Strategy To Make Money In Trading",
+      "type": "collaboration",
+      "url": "https://www.youtube.com/watch?v=76N-b4D2NhQ",
+      "metadata": "Listed in Stock Learners homepage Collaborations; co-credit Gautam Jha and Stock Learners. Observed in browser.",
+      "transcript_status": "not retrieved",
+      "strategy_review_status": "not reviewed",
+      "transcript_url": "https://youtubetotranscript.com/transcript?v=76N-b4D2NhQ"
+    }
+  ],
+  "new_user_supplied_transcripts": [
+    {
+      "label": "New live transcript A",
+      "attachment_id": "08332c02-0d4b-48f2-9b41-78073fce958e",
+      "lines": 3101,
+      "review_status": "full transcript reviewed; chart visuals not reviewed",
+      "video_id": null,
+      "first_timestamp": "00:00:23",
+      "last_timestamp": "02:07:26",
+      "audit_path": "/private/tmp/stocklearners-audit-sep21.md",
+      "video_identity": "not verified from supplied transcript alone"
+    },
+    {
+      "label": "New live transcript B",
+      "attachment_id": "9024f931-b4ac-48e9-b45c-2e08fe66884a",
+      "lines": 2903,
+      "review_status": "full transcript reviewed; chart visuals not reviewed",
+      "video_id": null,
+      "first_timestamp": "00:01:20",
+      "last_timestamp": "02:04:26",
+      "audit_path": "/private/tmp/stocklearners-audit-live-b.md",
+      "video_identity": "not verified from supplied transcript alone"
+    },
+    {
+      "label": "New live transcript C",
+      "attachment_id": "e88ab41f-afcb-4138-8015-3d94f2786811",
+      "lines": 2163,
+      "review_status": "full transcript reviewed; chart visuals not reviewed",
+      "video_id": null,
+      "first_timestamp": "00:00:15",
+      "last_timestamp": "01:38:25",
+      "audit_path": "/private/tmp/stocklearners-audit-live-c.md",
+      "video_identity": "not verified from supplied transcript alone"
+    }
+  ]
+}

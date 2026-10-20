@@ -68,6 +68,7 @@ const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
 const Scalping = lazy(() => import('@/pages/Scalping'))
+const MlSignals = lazy(() => import('@/pages/MlSignals'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const OIRange = lazy(() => import('@/pages/OIRange'))
 const GammaDensity = lazy(() => import('@/pages/GammaDensity'))
@@ -91,6 +92,7 @@ const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/Schedu
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
 
 // Strategy module: multi-leg options strategies with risk management
+const DeltaScalper = lazy(() => import('@/pages/strategy/DeltaScalper'))
 const StrategyList = lazy(() => import('@/pages/strategy/List'))
 const StrategyWizard = lazy(() => import('@/pages/strategy/Wizard'))
 const StrategyDetail = lazy(() => import('@/pages/strategy/Detail'))
@@ -220,6 +222,7 @@ function App() {
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
                 <Route path="/scalping" element={<Scalping />} />
+                <Route path="/ml-signals" element={<MlSignals />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
@@ -260,6 +263,7 @@ function App() {
                 {/* Strategy module. /strategy/new before /strategy/:id so the
                     literal wins over the parameter. */}
                 <Route path="/strategy" element={<StrategyList />} />
+                <Route path="/strategy/delta-scalper" element={<DeltaScalper />} />
                 <Route path="/strategy/new" element={<StrategyWizard />} />
                 <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
                 <Route path="/strategy/:strategyId/edit" element={<StrategyEdit />} />

@@ -1288,6 +1288,7 @@ def _exit_legs(
             product=strategy.get("product", "NRML"),
             strategy_name=strategy.get("name", ""),
             pricetype=order_dispatch.EXIT_PRICETYPE,
+            reduce_only=True,
         )
         # Recorded before dispatch, as entries are, so an exit that reaches the
         # broker is never invisible afterwards.
