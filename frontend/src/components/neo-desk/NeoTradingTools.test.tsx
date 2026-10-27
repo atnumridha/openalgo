@@ -244,3 +244,83 @@ it('keeps a hidden context overlay off when changing option charts', async () =>
   await waitFor(() => expect(screen.getByRole('button', { name: 'Chart PE' })).toBeEnabled())
   expect(ids).toEqual(['neo-donchian', 'rsi'])
 })
+
+it('does not request option expiries or the chain while the options panel is inactive', async () => {
+  const expiry = vi.spyOn(scalpingApi, 'getExpiry')
+  const strikes = vi.spyOn(scalpingApi, 'getStrikes')
+  const target = () => null
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const content = (active: boolean) => (
+    <QueryClientProvider client={client}>
+      <NeoTradingTools target={target} revision={0} initialize={false} active={active} />
+    </QueryClientProvider>
+  )
+  const view = render(content(false))
+  expect(expiry).not.toHaveBeenCalled()
+  expect(strikes).not.toHaveBeenCalled()
+  view.rerender(content(true))
+  await waitFor(() => expect(expiry).toHaveBeenCalled())
+  await waitFor(() => expect(strikes).toHaveBeenCalled())
+})
+
+it('offers BB + Chikou separately and persists enabling and disabling it', async () => {
+  let ids: string[] = ['neo-toolkit']
+  const target = () => ({
+    loadSymbol: async () => {},
+    listIndicators: () => ids.map((id) => ({ id, indicatorId: id })),
+    addIndicatorById: async (id: string) => {
+      ids.push(id)
+    },
+    removeIndicatorById: (id: string) => {
+      ids = ids.filter((value) => value !== id)
+    },
+    dataUnavailable: () => false,
+    replayActive: () => false,
+    replayPickingBar: () => false,
+  })
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <NeoTradingTools
+        target={target}
+        revision={1}
+        toolkit
+        initialize={false}
+        shownSymbol="NIFTY"
+      />
+    </QueryClientProvider>
+  )
+  const checkbox = await screen.findByRole('checkbox', { name: 'BB + Chikou · BULL / BEAR' })
+  expect(screen.getByRole('checkbox', { name: 'Option buying · RSI + MACD' })).toBeChecked()
+  expect(checkbox).not.toBeChecked()
+  fireEvent.click(checkbox)
+  await waitFor(() => expect(checkbox).toBeChecked())
+  expect(ids).toEqual(['neo-toolkit', 'bb-chikou'])
+  expect(JSON.parse(localStorage.getItem('neo.native.chart.indicators')!)).toContain('bb-chikou')
+  fireEvent.click(checkbox)
+  await waitFor(() => expect(checkbox).not.toBeChecked())
+  expect(ids).toEqual(['neo-toolkit'])
+})
+
+
+it('offers all nine CALL/PUT controls independently without merging BB + Chikou', async () => {
+  let ids: string[] = ['neo-toolkit']
+  const target = () => ({ loadSymbol: async () => {}, listIndicators: () => ids.map(id => ({ id, indicatorId: id })),
+    addIndicatorById: async (id: string) => { ids.push(id) }, removeIndicatorById: (id: string) => { ids = ids.filter(x => x !== id) },
+    dataUnavailable: () => false, replayActive: () => false, replayPickingBar: () => false })
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <NeoTradingTools target={target} revision={1} toolkit initialize={false} shownSymbol="NIFTY" />
+  </QueryClientProvider>)
+  for (const short of ['RSI', 'BB', 'IV', 'IMI', 'MFI', 'PCR', 'OI', 'MACD', 'MA']) {
+    const checkbox = screen.getByRole('checkbox', { name: `${short} · CALL / PUT` })
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    await waitFor(() => expect(checkbox).toBeChecked())
+  }
+  expect(ids.filter(id => id.startsWith('nine-'))).toHaveLength(9)
+  expect(screen.getByRole('checkbox', { name: 'BB + Chikou · BULL / BEAR' })).not.toBeChecked()
+  fireEvent.click(screen.getByRole('checkbox', { name: 'RSI · CALL / PUT' }))
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'RSI · CALL / PUT' })).not.toBeChecked())
+  expect(screen.getByRole('checkbox', { name: 'MACD · CALL / PUT' })).toBeChecked()
+})

@@ -217,6 +217,14 @@ def apply_csp_middleware(app):
         # Add CSP header
         csp_config = get_csp_config()
         if csp_config:
+            # The chart's optional crypto view reads public candle history from
+            # this exact host without cookies or API credentials. Keep the
+            # exception on the chart page, and preserve an explicit deny policy.
+            if request.path == "/trading":
+                sources = csp_config.get("connect-src", "").split()
+                public_history = "https://api.india.delta.exchange"
+                if sources and "'none'" not in sources and public_history not in sources:
+                    csp_config["connect-src"] = " ".join([*sources, public_history])
             csp_header = build_csp_header(csp_config)
             if csp_header:
                 # Use Content-Security-Policy-Report-Only for testing if configured

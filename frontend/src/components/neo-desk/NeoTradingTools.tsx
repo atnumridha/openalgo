@@ -7,6 +7,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { activeExpiries, nearestExpiry } from '@/lib/neoOptionSelection'
 import type { OptionChainRow, OptionType } from '@/types/scalping'
+import { INDICATORS } from '../chart-toolkit/nineIndicators'
+import type { OptionReference } from '../chart-toolkit/ToolkitPanel'
 export interface NeoChartTarget {
   loadSymbol: (instrument: { symbol: string; exchange: string }) => Promise<unknown>
   replayActive: () => boolean
@@ -19,6 +21,9 @@ export interface NeoChartTarget {
 
 const studies = ['neo-donchian', 'neo-structure', 'rsi']
 const studyLabels: Record<string, string> = {
+  'neo-toolkit': 'Option buying · RSI + MACD',
+  'bb-chikou': 'BB + Chikou · BULL / BEAR',
+  ...Object.fromEntries(INDICATORS.map(item => [item.id, `${item.short} · CALL / PUT`])),
   'neo-donchian': 'Donchian / EMA',
   'neo-structure': 'Fair Value Gaps / levels',
   rsi: 'RSI 14',
@@ -27,13 +32,24 @@ export function NeoTradingTools({
   target,
   revision,
   initialize = true,
+  active = true,
   shownSymbol,
+  underlying = 'NIFTY',
+  toolkit = false,
+  onOptionReference,
 }: {
   target: () => NeoChartTarget | null
   revision: number
   initialize?: boolean
+  active?: boolean
   shownSymbol?: string
+  underlying?: string
+  toolkit?: boolean
+  onOptionReference?: (reference: OptionReference) => void
 }) {
+  const optionExchange = underlying === 'SENSEX' ? 'BFO' : 'NFO'
+  const indexExchange = underlying === 'SENSEX' ? 'BSE_INDEX' : 'NSE_INDEX'
+  const availableStudies = toolkit ? ['neo-toolkit', 'bb-chikou', ...studies, ...INDICATORS.map(item => item.id)] : studies
   const [expiry, setExpiry] = useState(''),
     [ce, setCe] = useState(''),
     [pe, setPe] = useState('')
@@ -43,7 +59,13 @@ export function NeoTradingTools({
   const [enabledStudies, setEnabledStudies] = useState<string[]>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('neo.native.chart.indicators') || 'null')
-      return Array.isArray(saved) ? saved.filter((id) => studies.includes(id)) : studies
+      if (toolkit && localStorage.getItem('neo.chart.toolkit.version') !== '2')
+        return ['neo-toolkit']
+      return Array.isArray(saved)
+        ? saved.filter((id) => availableStudies.includes(id))
+        : toolkit
+          ? ['neo-toolkit']
+          : studies
     } catch {
       return studies
     }
@@ -54,8 +76,9 @@ export function NeoTradingTools({
   const initial = useRef(false),
     loading = useRef(false)
   const expiriesQuery = useQuery({
-    queryKey: ['scalping', 'expiry', 'NFO', 'NIFTY'],
-    queryFn: () => scalpingApi.getExpiry('NIFTY', 'NFO', 'options'),
+    queryKey: ['scalping', 'expiry', optionExchange, underlying],
+    enabled: active,
+    queryFn: () => scalpingApi.getExpiry(underlying, optionExchange, 'options'),
     staleTime: 60000,
   })
   const dates = useMemo(() => activeExpiries(expiriesQuery.data?.data || []), [expiriesQuery.data])
@@ -63,9 +86,9 @@ export function NeoTradingTools({
     if (dates.length && !dates.includes(expiry)) setExpiry(nearestExpiry(dates))
   }, [dates, expiry])
   const chainQuery = useQuery({
-    queryKey: ['scalping', 'strikes', 'NFO', 'NIFTY', expiry],
-    queryFn: () => scalpingApi.getStrikes('NIFTY', 'NFO', expiry, 20),
-    enabled: Boolean(expiry),
+    queryKey: ['scalping', 'strikes', optionExchange, underlying, expiry],
+    queryFn: () => scalpingApi.getStrikes(underlying, optionExchange, expiry, 20),
+    enabled: active && Boolean(expiry),
     staleTime: 30000,
   })
   const rows = useMemo(
@@ -78,6 +101,18 @@ export function NeoTradingTools({
     setCe((old) => (rows.some((r) => String(r.strike) === old && r.ce?.symbol) ? old : atm))
     setPe((old) => (rows.some((r) => String(r.strike) === old && r.pe?.symbol) ? old : atm))
   }, [rows, chainQuery.data])
+  useEffect(() => {
+    const call = rows.find((r) => String(r.strike) === ce),
+      put = rows.find((r) => String(r.strike) === pe)
+    onOptionReference?.({
+      underlying,
+      exchange: indexExchange,
+      optionExchange,
+      expiry,
+      ce: call?.ce?.symbol ? { symbol: call.ce.symbol, strike: call.strike } : undefined,
+      pe: put?.pe?.symbol ? { symbol: put.pe.symbol, strike: put.strike } : undefined,
+    })
+  }, [rows, ce, pe, expiry, underlying, indexExchange, optionExchange, onOptionReference])
   // Match the broker chain's nearest-ATM convention, not the option premium.
   function strikeLabel(row: OptionChainRow, side: OptionType): string {
     const atm = chainQuery.data?.atm_strike
@@ -88,7 +123,7 @@ export function NeoTradingTools({
     return (side === 'CE' ? row.strike < atm : row.strike > atm) ? 'ITM' : 'OTM'
   }
   async function applyStudies(pane: NeoChartTarget) {
-    for (const id of studies) {
+    for (const id of availableStudies) {
       const existing = pane.listIndicators().filter((s) => s.indicatorId === id)
       if (enabledStudies.includes(id)) {
         if (!existing.length) await pane.addIndicatorById(id)
@@ -138,11 +173,11 @@ export function NeoTradingTools({
     }
     const leg =
       which === 'INDEX'
-        ? { symbol: 'NIFTY', exchange: 'NSE_INDEX' }
+        ? { symbol: underlying, exchange: indexExchange }
         : (() => {
             const row = rows.find((r) => String(r.strike) === (which === 'CE' ? ce : pe))
             const symbol = which === 'CE' ? row?.ce?.symbol : row?.pe?.symbol
-            return symbol ? { symbol, exchange: 'NFO' } : null
+            return symbol ? { symbol, exchange: optionExchange } : null
           })()
     if (!leg) {
       setError('Choose a listed strike for this expiry.')
@@ -198,14 +233,17 @@ export function NeoTradingTools({
   const problem =
     error ||
     (expiriesQuery.error || chainQuery.error
-      ? 'Could not load NIFTY expiries or strikes. Refresh broker data.'
+      ? `Could not load ${underlying} expiries or strikes. Refresh broker data.`
       : '')
   return (
-    <section aria-label="NIFTY chart selection" className="shrink-0 border-b bg-card px-3 py-2">
+    <section
+      aria-label={`${underlying} chart selection`}
+      className="shrink-0 border-b bg-card px-3 py-2"
+    >
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
           <Label htmlFor="neo-chart-expiry" className="text-xs text-muted-foreground">
-            NIFTY expiry
+            {underlying} expiry
           </Label>
           <select
             id="neo-chart-expiry"
@@ -264,7 +302,7 @@ export function NeoTradingTools({
                 }
                 onClick={() => void chart(which)}
               >
-                {which === 'INDEX' ? 'NIFTY' : which}
+                {which === 'INDEX' ? underlying : which}
               </Button>
             )
           })}
@@ -292,7 +330,8 @@ export function NeoTradingTools({
               put directions differ.
             </p>
             <p>
-              Faint green / red zones show the three nearest unfilled FVGs. Compact arrows keep candles clear; open the FVG legend for prices and partial fills. Dashed support and
+              Faint green / red zones show the three nearest unfilled FVGs. Compact arrows keep
+              candles clear; open the FVG legend for prices and partial fills. Dashed support and
               resistance lines mark confirmed pivots, which may attract liquidity.
             </p>
             <p>
@@ -324,7 +363,7 @@ export function NeoTradingTools({
           </fieldset>
         ) : null}
         <fieldset aria-label="Chart overlays" className="flex flex-wrap items-center gap-3">
-          {studies.map((id) => (
+          {availableStudies.map((id) => (
             <Label
               key={id}
               htmlFor={`neo-study-${id}`}

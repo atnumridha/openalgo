@@ -15,6 +15,42 @@ it('never invents a current candle for missing/stale time or an after-hours snap
   expect(nextLiveBar(undefined, 55, open, '5m', open + 16000)).toBeNull()
 })
 
+it('updates a daily broker candle on each fresh quote while preserving its timestamp and open', () => {
+  const now = Date.parse('2026-10-26T10:00:00+05:30')
+  const previous = {
+    time: Date.parse('2026-10-26T00:00:00+05:30') / 1000,
+    open: 100,
+    high: 103,
+    low: 98,
+    close: 102,
+    volume: 100,
+  }
+  expect(nextLiveBar(previous, 105, now, '1d', now)).toEqual({ ...previous, high: 105, close: 105 })
+})
+
+it('requires genuine session OHLC to create a missing daily candle', () => {
+  const now = Date.parse('2026-10-26T10:00:00+05:30')
+  const prior = {
+    time: Date.parse('2026-10-23T00:00:00+05:30') / 1000,
+    open: 90,
+    high: 95,
+    low: 89,
+    close: 94,
+    volume: 100,
+  }
+  expect(nextLiveBar(prior, 105, now, '1d', now)).toBeNull()
+  expect(
+    nextLiveBar(prior, 105, now, '1d', now, { open: 100, high: 106, low: 98, volume: 500 })
+  ).toEqual({
+    time: Date.parse('2026-10-26T00:00:00+05:30') / 1000,
+    open: 100,
+    high: 106,
+    low: 98,
+    close: 105,
+    volume: 500,
+  })
+})
+
 it.each([
   ['30m', '2026-10-14T09:29:00+05:30', '2026-10-14T09:15:00+05:30'],
   ['30m', '2026-10-14T09:44:00+05:30', '2026-10-14T09:15:00+05:30'],

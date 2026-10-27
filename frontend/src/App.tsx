@@ -59,7 +59,13 @@ const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const WebSocketOrder = lazy(() => import('@/pages/WebSocketOrder'))
 const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
-const Trading = lazy(() => import('@/pages/Trading'))
+// Choose the workspace before loading its code. The Neo chart does not use
+// the other terminal's chart engine, drawing tools or order dock.
+const Trading = lazy(() =>
+  import.meta.env.VITE_NEO_DESK_ENABLED === 'true'
+    ? import('@/pages/NeoTrading')
+    : import('@/pages/Trading')
+)
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 

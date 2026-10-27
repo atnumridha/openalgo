@@ -4,6 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { neoReportsApi } from '@/api/neoReports'
 import { scalpingApi } from '@/api/scalping'
 import { NeoMarketChart } from './NeoMarketChart'
+import { computeStudies } from './tradingViewStudies'
+import { saveHistorySnapshot } from '../chart-toolkit/historySnapshot'
+vi.mock('./tradingViewStudies', async (original) => {
+  const actual = await original<typeof import('./tradingViewStudies')>()
+  return { ...actual, computeStudies: vi.fn(actual.computeStudies) }
+})
 
 const mocks = vi.hoisted(() => ({
   series: [] as Array<{ setData: ReturnType<typeof vi.fn> }>,
@@ -307,8 +313,20 @@ it('loads both dates beyond the default lookback and replays only the applied ra
   fireEvent.input(screen.getByLabelText('To date IST'), { target: { value: '2026-10-13' } })
   fireEvent.click(screen.getByRole('button', { name: 'Apply dates' }))
   await waitFor(() => expect(screen.getByText(/48 candles/)).toBeVisible())
-  expect(scalpingApi.getHistory).toHaveBeenCalledWith('NIFTY', 'NSE_INDEX', '15m', '2026-10-12')
-  expect(scalpingApi.getHistory).toHaveBeenCalledWith('NIFTY', 'NSE_INDEX', '15m', '2026-10-13')
+  expect(scalpingApi.getHistory).toHaveBeenCalledWith(
+    'NIFTY',
+    'NSE_INDEX',
+    '15m',
+    '2026-10-12',
+    expect.objectContaining({ timeoutMs: 12000 })
+  )
+  expect(scalpingApi.getHistory).toHaveBeenCalledWith(
+    'NIFTY',
+    'NSE_INDEX',
+    '15m',
+    '2026-10-13',
+    expect.objectContaining({ timeoutMs: 12000 })
+  )
   fireEvent.click(screen.getByRole('button', { name: 'Replay charts' }))
   expect(screen.getByLabelText('Replay time')).toHaveTextContent('12 Oct, 09:30 IST · 1/48')
   expect(screen.getByLabelText('Replay start time IST')).toHaveAttribute('max', '2026-10-13T15:15')
@@ -360,4 +378,81 @@ it('reuses already loaded session candles without repeating a failing broker day
   expect(vi.mocked(scalpingApi.getHistory).mock.calls.every((call) => !call[3])).toBe(true)
   expect(screen.getByRole('button', { name: 'Replay charts' })).toBeEnabled()
   view.unmount()
+})
+
+it('keeps disabled legacy studies out of the live toolkit redraw and loads references only on demand', async () => {
+  vi.mocked(Date.now).mockReturnValue(Date.UTC(2026, 9, 15, 9, 40))
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const content = () => (
+    <QueryClientProvider client={client}>
+      <NeoMarketChart
+        symbol="NIFTY"
+        exchange="NSE_INDEX"
+        interval="15m"
+        studies={['neo-toolkit']}
+        focusMode
+      />
+    </QueryClientProvider>
+  )
+  const view = render(content())
+  await waitFor(() => expect(mocks.series[0]?.setData.mock.calls.at(-1)?.[0]).toHaveLength(24))
+  expect(computeStudies).not.toHaveBeenCalled()
+  expect(scalpingApi.getHistory).not.toHaveBeenCalledWith(
+    'NIFTY',
+    'NSE_INDEX',
+    '1h',
+    undefined,
+    expect.objectContaining({ timeoutMs: 12000 })
+  )
+  expect(mocks.series.slice(6, 8).every((s) => !s.setData.mock.calls.length)).toBe(true)
+  const legacyWrites = mocks.series.map((s) => s.setData.mock.calls.length)
+  mocks.market.mockReturnValue({
+    data: new Map([['NSE_INDEX:NIFTY', { data: { ltp: 100.5, timestamp: Date.now() } }]]),
+    isConnected: true,
+  })
+  for (let i = 0; i < 25; i++) {
+    mocks.market.mockReturnValue({
+      data: new Map([
+        ['NSE_INDEX:NIFTY', { data: { ltp: 100.5 + i / 100, timestamp: Date.now() } }],
+      ]),
+      isConnected: true,
+    })
+    view.rerender(content())
+  }
+  expect(computeStudies).not.toHaveBeenCalled()
+  expect(mocks.series.map((s) => s.setData.mock.calls.length)).toEqual(legacyWrites)
+  fireEvent.click(screen.getByText('Details'))
+  fireEvent.click(screen.getByRole('checkbox', { name: '1D / 4H / 1H high & low' }))
+  await waitFor(() =>
+    expect(scalpingApi.getHistory).toHaveBeenCalledWith(
+      'NIFTY',
+      'NSE_INDEX',
+      '1h',
+      undefined,
+      expect.objectContaining({ timeoutMs: 12000 })
+    )
+  )
+})
+
+it('shows saved candles immediately during a slow load and keeps the trade side on WAIT', async () => {
+  saveHistorySnapshot(undefined, 'live', history)
+  vi.mocked(scalpingApi.getHistory).mockImplementation(() => new Promise(() => {}))
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <NeoMarketChart
+        symbol="NIFTY"
+        exchange="NSE_INDEX"
+        interval="15m"
+        studies={['neo-toolkit']}
+        focusMode
+      />
+    </QueryClientProvider>
+  )
+  await waitFor(() => expect(mocks.series[0]?.setData.mock.calls.at(-1)?.[0]).toHaveLength(24))
+  expect(screen.getByText('Saved candles · updating')).toBeVisible()
+  expect(screen.getByLabelText('Confirmed price signal')).toHaveTextContent('WAIT')
+  expect(screen.getByLabelText('Confirmed price signal')).toHaveTextContent(
+    'Waiting for candle history'
+  )
 })
