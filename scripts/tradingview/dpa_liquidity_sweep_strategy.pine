@@ -1,0 +1,226 @@
+//@version=6
+// Source: dailypriceaction.com/blog/liquidity-sweep-reversals/
+// Automatic confirmed-pivot interpretation; discretionary anchor/FVG selection is not reproduced.
+strategy("DPA Liquidity Sweep | OTE", overlay=true, initial_capital=100000, currency=currency.INR, pyramiding=0, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.02, slippage=1, process_orders_on_close=true, calc_on_every_tick=false, calc_on_order_fills=false, margin_long=100, margin_short=100)
+
+string contextTf = input.timeframe("60", "Structure timeframe", group="Structure")
+int contextLen = input.int(2, "HTF pivot left/right bars", minval=1, maxval=10, group="Structure", tooltip="Mechanical interpretation of the author's visually selected external swings. Pivots become available only after the right-hand bars close.")
+int swingLen = input.int(2, "Entry pivot left/right bars", minval=1, maxval=10, group="Structure")
+float minReward = input.float(2.0, "Minimum net reward / risk", minval=2, step=0.25, group="Risk")
+int bufferTicks = input.int(2, "Sweep stop buffer (ticks)", minval=1, group="Risk")
+float feePercent = input.float(0.02, "R filter: commission % per fill", minval=0, step=0.01, group="Cost model", tooltip="Keep synchronized with commission in Strategy Properties. Default: 0.02% per fill. This input controls the entry-admission calculation only.")
+int fillTicks = input.int(1, "R filter: adverse slippage ticks", minval=0, group="Cost model", tooltip="Keep synchronized with slippage in Strategy Properties. Default: 1 tick. Target limit fills do not receive favorable slippage.")
+bool filterDates = input.bool(false, "Limit new entries by date", group="Backtest")
+int fromDate = input.time(timestamp("01 Jan 2026 00:00 +0530"), "From (IST)", group="Backtest")
+int throughDate = input.time(timestamp("31 Dec 2026 23:59 +0530"), "Through (IST)", group="Backtest")
+bool showTable = input.bool(true, "Show status table", group="Display")
+
+// CONTEXT CORE START
+f_context() =>
+    float ph = ta.pivothigh(high, contextLen, contextLen)
+    float pl = ta.pivotlow(low, contextLen, contextLen)
+    var float lastHigh = na
+    var float priorHigh = na
+    var float lastLow = na
+    var float priorLow = na
+    var int highAt = na
+    var int lowAt = na
+    var int direction = 0
+    var float rangeHigh = na
+    var float rangeLow = na
+    var int contextKey = 0
+    if not na(ph)
+        priorHigh := lastHigh
+        lastHigh := ph
+        highAt := time[contextLen]
+    if not na(pl)
+        priorLow := lastLow
+        lastLow := pl
+        lowAt := time[contextLen]
+    bool lowerStructure = lastHigh < priorHigh and lastLow < priorLow
+    bool higherStructure = lastHigh > priorHigh and lastLow > priorLow
+    // Capture a completed directional impulse, then retain its anchors during the retracement.
+    if not na(pl) and na(ph) and lowerStructure and highAt < lowAt
+        direction := -1
+        rangeHigh := lastHigh
+        rangeLow := lastLow
+        contextKey := lowAt
+    else if not na(ph) and na(pl) and higherStructure and lowAt < highAt
+        direction := 1
+        rangeHigh := lastHigh
+        rangeLow := lastLow
+        contextKey := highAt
+    if (direction == -1 and close >= rangeHigh) or (direction == 1 and close <= rangeLow)
+        direction := 0
+    [direction, rangeHigh, rangeLow, contextKey]
+
+f_closed_context() =>
+    [d, h, l, k] = f_context()
+    // Every requested component is offset. No unfinished HTF values leak into entry bars.
+    [d[1], h[1], l[1], k[1]]
+// CONTEXT CORE END
+
+// RULE CORE START
+f_rules(int contextDirection, float rangeHigh, float rangeLow, int contextKey, float pivotHigh, float pivotLow, int pivotKey, float initialPullLow, float initialPullHigh, bool confirmed, bool eligible) =>
+    var int activeKey = na
+    var int activeDirection = 0
+    var bool retired = false
+    var int phase = 0
+    var int sweepAt = na
+    var float level = na
+    var float trigger = na
+    var float extreme = na
+    var float stop = na
+    var float target = na
+    var float netR = na
+    int signal = 0
+    bool formed = false
+    bool swept = false
+    bool rejected = false
+    float width = rangeHigh - rangeLow
+    float zoneLow = contextDirection == -1 ? rangeLow + width * 0.62 : rangeHigh - width * 0.79
+    float zoneHigh = contextDirection == -1 ? rangeLow + width * 0.79 : rangeHigh - width * 0.62
+    if confirmed
+        bool contextChanged = na(activeKey) or activeKey != contextKey or activeDirection != contextDirection
+        if contextChanged
+            retired := false
+        if contextChanged or not eligible or contextDirection == 0 or na(width) or width <= 0
+            rejected := phase != 0
+            phase := 0
+        activeKey := contextKey
+        activeDirection := contextDirection
+        // A spent range stays retired, even if another local pivot later forms under the same key.
+        if contextDirection != 0 and not na(width) and width > 0 and (high >= rangeHigh or low <= rangeLow)
+            retired := true
+            rejected := rejected or phase != 0
+            phase := 0
+        bool allowed = eligible and not retired and contextDirection != 0 and not na(width) and width > 0
+        if allowed and not rejected
+            if phase == 1
+                bool breaks = contextDirection == -1 ? high > level : low < level
+                if breaks
+                    bool wickBack = contextDirection == -1 ? close < level : close > level
+                    if wickBack
+                        phase := 2
+                        sweepAt := bar_index
+                        extreme := contextDirection == -1 ? high : low
+                        swept := true
+                    else
+                        phase := 0
+                        rejected := true
+                else
+                    trigger := contextDirection == -1 ? math.min(trigger, low) : math.max(trigger, high)
+            else if phase == 2
+                extreme := contextDirection == -1 ? math.max(extreme, high) : math.min(extreme, low)
+                bool accepts = contextDirection == -1 ? close < trigger : close > trigger
+                if bar_index > sweepAt and accepts
+                    float slip = fillTicks * syminfo.mintick
+                    float entry = close + contextDirection * slip
+                    stop := contextDirection == -1 ? extreme + bufferTicks * syminfo.mintick : extreme - bufferTicks * syminfo.mintick
+                    target := contextDirection == -1 ? rangeLow : rangeHigh
+                    float risk = contextDirection * (entry - stop)
+                    float reward = contextDirection * (target - entry)
+                    float costsAtStop = (entry + stop) * feePercent / 100 + slip
+                    float costsAtTarget = (entry + target) * feePercent / 100
+                    netR := risk > 0 ? (reward - costsAtTarget) / (risk + costsAtStop) : na
+                    if risk > 0 and reward > 0 and netR >= minReward
+                        signal := contextDirection
+                    else
+                        rejected := true
+                    phase := 0
+            // A pivot is known only now; never backdate its label or use a pivot from older HTF context.
+            if phase == 0 and signal == 0 and not rejected and pivotKey == contextKey and high < rangeHigh and low > rangeLow
+                bool bearPivot = contextDirection == -1 and not na(pivotHigh) and pivotHigh >= zoneLow and pivotHigh <= zoneHigh
+                bool bullPivot = contextDirection == 1 and not na(pivotLow) and pivotLow >= zoneLow and pivotLow <= zoneHigh
+                if bearPivot or bullPivot
+                    level := bearPivot ? pivotHigh : pivotLow
+                    trigger := bearPivot ? initialPullLow : initialPullHigh
+                    if not na(trigger) and (bearPivot ? trigger < level : trigger > level)
+                        phase := 1
+                        formed := true
+    [signal, retired ? -1 : phase, level, trigger, stop, target, netR, formed, swept, rejected]
+// RULE CORE END
+
+if barstate.isfirst
+    if not chart.is_standard
+        runtime.error("Use standard candles for this backtest.")
+    if not timeframe.isintraday or timeframe.in_seconds() >= timeframe.in_seconds(contextTf)
+        runtime.error("Use an intraday entry timeframe below the structure timeframe. Recommended: 15m entries, 1h structure.")
+    if syminfo.type == "option"
+        runtime.error("Apply to the underlying NIFTY/SENSEX chart. Bull/Bear are index-direction signals, not option-premium backtests.")
+
+[contextDirection, rangeHigh, rangeLow, contextKey] = request.security(syminfo.tickerid, contextTf, f_closed_context(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float pivotHigh = ta.pivothigh(high, swingLen, swingLen)
+float pivotLow = ta.pivotlow(low, swingLen, swingLen)
+float initialPullLow = ta.lowest(low, swingLen)
+float initialPullHigh = ta.highest(high, swingLen)
+bool inRange = not filterDates or (time >= fromDate and time_close <= throughDate)
+bool eligible = inRange and strategy.position_size == 0
+[signal, phase, sweptLevel, triggerLevel, setupStop, setupTarget, netR, formed, swept, rejected] = f_rules(contextDirection, rangeHigh, rangeLow, contextKey, pivotHigh, pivotLow, contextKey[swingLen], initialPullLow, initialPullHigh, barstate.isconfirmed, eligible)
+var float tradeStop = na
+var float tradeTarget = na
+var float tradeR = na
+if signal != 0
+    tradeStop := setupStop
+    tradeTarget := setupTarget
+    tradeR := netR
+    if signal == 1
+        strategy.entry("Bull", strategy.long, alert_message="Bull: underlying sweep reversal confirmed")
+        strategy.exit("Bull exit", "Bull", stop=tradeStop, limit=tradeTarget)
+    else
+        strategy.entry("Bear", strategy.short, alert_message="Bear: underlying sweep reversal confirmed")
+        strategy.exit("Bear exit", "Bear", stop=tradeStop, limit=tradeTarget)
+else if strategy.position_size > 0
+    strategy.exit("Bull exit", "Bull", stop=tradeStop, limit=tradeTarget)
+else if strategy.position_size < 0
+    strategy.exit("Bear exit", "Bear", stop=tradeStop, limit=tradeTarget)
+
+float width = rangeHigh - rangeLow
+float zoneLow = contextDirection == -1 ? rangeLow + width * 0.62 : rangeHigh - width * 0.79
+float zoneHigh = contextDirection == -1 ? rangeLow + width * 0.79 : rangeHigh - width * 0.62
+color biasColor = contextDirection == 1 ? color.lime : contextDirection == -1 ? color.red : color.yellow
+p1 = plot(contextDirection != 0 and phase >= 0 ? zoneLow : na, "OTE lower", color=color.new(biasColor, 55), style=plot.style_linebr)
+p2 = plot(contextDirection != 0 and phase >= 0 ? zoneHigh : na, "OTE upper", color=color.new(biasColor, 55), style=plot.style_linebr)
+fill(p1, p2, color=color.new(biasColor, 92), title="OTE zone")
+plot(phase > 0 ? sweptLevel : na, "Liquidity level", color=color.orange, style=plot.style_linebr)
+plot(phase > 0 ? triggerLevel : na, "Acceptance level", color=color.aqua, style=plot.style_linebr)
+bool activeTrade = strategy.position_size != 0 or signal != 0
+plot(activeTrade ? tradeStop : na, "Frozen stop", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(activeTrade ? tradeTarget : na, "Frozen target", color=color.lime, style=plot.style_linebr, linewidth=2)
+plotshape(signal == 1, title="Bull confirmed", text="Bull", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(signal == -1, title="Bear confirmed", text="Bear", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.small)
+plotshape(swept, title="Sweep; wait for close", text="Sweep", style=shape.circle, location=location.abovebar, color=color.orange, textcolor=color.orange, size=size.tiny)
+if signal != 0 and barstate.isconfirmed
+    alert(signal == 1 ? "Bull | DPA OTE sweep confirmed on underlying" : "Bear | DPA OTE sweep confirmed on underlying", alert.freq_once_per_bar_close)
+var int formedCount = 0
+var int sweepCount = 0
+var int rejectCount = 0
+if formed
+    formedCount += 1
+if swept
+    sweepCount += 1
+if rejected
+    rejectCount += 1
+f_price(float x) => na(x) ? "—" : str.tostring(x, format.mintick)
+var table dash = table.new(position.bottom_right, 2, 9, bgcolor=color.new(color.black, 12), border_width=1, border_color=color.new(color.gray, 60))
+if (barstate.islast or barstate.islastconfirmedhistory) and showTable
+    string status = activeTrade ? (signal == 1 or strategy.position_size > 0 ? "BULL" : "BEAR") : phase < 0 ? "WAIT: fresh HTF impulse" : phase == 2 ? "WAIT: acceptance close" : phase == 1 ? "WAIT: liquidity sweep" : contextDirection == 0 ? "WAIT: HTF structure" : "WAIT: swing in OTE"
+    color statusColor = activeTrade ? (signal == 1 or strategy.position_size > 0 ? color.lime : color.red) : color.yellow
+    table.cell(dash, 0, 0, "DPA · OTE Sweep", text_color=color.white, text_size=size.normal)
+    table.cell(dash, 1, 0, "Confirmed pivots", text_color=color.silver)
+    table.cell(dash, 0, 1, "Status", text_color=color.white)
+    table.cell(dash, 1, 1, status, text_color=statusColor)
+    table.cell(dash, 0, 2, contextTf + "m structure", text_color=color.white)
+    table.cell(dash, 1, 2, contextDirection == 1 ? "Bull" : contextDirection == -1 ? "Bear" : "Wait", text_color=biasColor)
+    table.cell(dash, 0, 3, "OTE 62–79%", text_color=color.white)
+    table.cell(dash, 1, 3, contextDirection == 0 ? "—" : f_price(zoneLow) + " – " + f_price(zoneHigh), text_color=biasColor)
+    table.cell(dash, 0, 4, "Acceptance", text_color=color.white)
+    table.cell(dash, 1, 4, phase <= 0 ? "—" : f_price(triggerLevel), text_color=color.aqua)
+    table.cell(dash, 0, 5, "Stop / Target", text_color=color.white)
+    table.cell(dash, 1, 5, activeTrade ? f_price(tradeStop) + " / " + f_price(tradeTarget) : "—", text_color=color.white)
+    table.cell(dash, 0, 6, "Last planned net R", text_color=color.white)
+    table.cell(dash, 1, 6, na(tradeR) ? "—" : str.tostring(tradeR, "#.##") + "R", text_color=color.white)
+    table.cell(dash, 0, 7, "Swings / Sweeps / Rejects", text_color=color.white)
+    table.cell(dash, 1, 7, str.tostring(formedCount) + " / " + str.tostring(sweepCount) + " / " + str.tostring(rejectCount), text_color=color.orange)
+    table.cell(dash, 0, 8, "Underlying simulation", text_color=color.silver)
+    table.cell(dash, 1, 8, "1 unit · exits may hold overnight", text_color=color.silver)

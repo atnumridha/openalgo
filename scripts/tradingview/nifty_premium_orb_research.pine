@@ -1,0 +1,94 @@
+//@version=6
+strategy("NIFTY Premium ORB | Research", overlay=true, initial_capital=150000, currency=currency.INR, default_qty_type=strategy.fixed, default_qty_value=65, pyramiding=0, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1, process_orders_on_close=true, calc_on_order_fills=true, calc_on_every_tick=false, margin_long=100)
+// Source: https://inthemoneybyzerodha.substack.com/p/how-to-trade-opening-range-breakout
+// Adaptation: current option contract, 1m close execution, 15:15 exit, one trade/day.
+// Does NOT reproduce daily 09:16 closest-to-200 CE/PE selection.
+// 0.1% per side is a research cost proxy, NOT a Kotak contract-note calculation.
+// All orders below belong to TradingView's simulator, not the broker account.
+
+startDate = input.time(timestamp("28 Sep 2026 00:00 +0530"), "Test from")
+endDate = input.time(timestamp("29 Oct 2026 00:00 +0530"), "Test until (exclusive)")
+qty = input.int(65, "Units per simulated entry", minval=1)
+stopPct = input.float(20, "Premium stop %", minval=0.1, maxval=99, step=0.5)
+manualPrice = input.float(52.50, "Your entry reference (0 = hide)", minval=0)
+manualTime = input.time(timestamp("28 Oct 2026 14:55:26 +0530"), "Your entry reference time")
+manualTicker = input.string("NIFTY261103C23050", "Reference entry ticker")
+
+string tz = "Asia/Kolkata"
+int minuteOfDay = hour(time, tz) * 60 + minute(time, tz)
+int closeMinute = hour(time_close, tz) * 60 + minute(time_close, tz)
+bool correctChart = timeframe.isminutes and timeframe.multiplier == 1 and chart.is_standard
+bool newDay = ta.change(time("D")) != 0
+bool inRange = minuteOfDay >= 555 and minuteOfDay < 675
+bool inSession = minuteOfDay >= 555 and minuteOfDay < 930
+bool inDates = time >= startDate and time < endDate
+var float rangeHigh = na
+var float rangeLow = na
+var int rangeBars = 0
+var bool beganAtOpen = false
+var bool dayGap = false
+varip bool usedToday = false
+var float simStop = na
+varip int lastRangeBar = na
+
+if newDay
+    rangeHigh := na
+    rangeLow := na
+    rangeBars := 0
+    beganAtOpen := false
+    dayGap := false
+    usedToday := false
+    simStop := na
+
+if correctChart and inSession and not newDay and not na(time[1]) and time - time[1] != 60000
+    dayGap := true
+
+if correctChart and inRange and barstate.isconfirmed and (na(lastRangeBar) or lastRangeBar != bar_index)
+    if minuteOfDay == 555
+        beganAtOpen := true
+    rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+    rangeLow := na(rangeLow) ? low : math.min(rangeLow, low)
+    rangeBars += 1
+    lastRangeBar := bar_index
+
+bool rangeReady = beganAtOpen and rangeBars == 120 and not dayGap
+bool entryWindow = minuteOfDay >= 675 and closeMinute < 915
+bool signal = correctChart and inDates and rangeReady and entryWindow and barstate.isconfirmed and not usedToday and strategy.position_size == 0 and close > rangeHigh
+
+if signal
+    usedToday := true
+    strategy.entry("Premium long", strategy.long, qty=qty, comment="BUY OPTION - ORB")
+
+if strategy.position_size > 0
+    simStop := math.floor(strategy.position_avg_price * (1 - stopPct / 100) / syminfo.mintick) * syminfo.mintick
+    strategy.exit("Premium stop", "Premium long", stop=simStop, comment="20% premium stop")
+    if barstate.isconfirmed and (closeMinute >= 915 or newDay or time >= endDate)
+        strategy.close("Premium long", comment="15:15 / boundary exit", immediately=true)
+
+plot(inSession ? rangeHigh : na, "Opening range high", color=color.aqua, linewidth=2, style=plot.style_linebr)
+plot(inSession ? rangeLow : na, "Opening range low", color=color.new(color.aqua, 55), style=plot.style_linebr)
+plot(strategy.position_size > 0 ? simStop : na, "Simulated stop", color=color.red, linewidth=2, style=plot.style_linebr)
+bool showReference = manualPrice > 0 and str.contains(syminfo.ticker, manualTicker) and time_close >= manualTime
+plot(showReference ? manualPrice : na, "Your entry reference (manual)", color=color.yellow, linewidth=2, style=plot.style_linebr)
+bgcolor(inRange ? color.new(color.blue, 93) : na)
+
+var table desk = table.new(position.top_right, 2, 8, border_width=1)
+if barstate.islast
+    string status = not correctChart ? "USE STANDARD 1m" : not inDates ? "OUTSIDE TEST DATES" : closeMinute >= 915 ? "SESSION FINISHED" : inRange ? "BUILDING RANGE" : not rangeReady ? "WAIT - DATA INCOMPLETE" : strategy.position_size > 0 ? "SIMULATED LONG" : usedToday ? "DONE - ONE TRADE USED" : "WAIT - CLOSE ABOVE RANGE"
+    color statusColor = strategy.position_size > 0 ? color.new(color.green, 15) : color.new(color.orange, 20)
+    table.cell(desk, 0, 0, "PREMIUM ORB", text_color=color.white, bgcolor=color.navy, text_size=size.normal)
+    table.cell(desk, 1, 0, "RESEARCH ONLY", text_color=color.white, bgcolor=color.navy)
+    table.cell(desk, 0, 1, "Status", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 1, status, text_color=color.white, bgcolor=statusColor)
+    table.cell(desk, 0, 2, "09:15-11:15 high", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 2, str.tostring(rangeHigh, format.mintick), text_color=color.aqua, bgcolor=color.black)
+    table.cell(desk, 0, 3, "Stop / timed exit", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 3, str.tostring(stopPct) + "% / 15:15 IST", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 0, 4, "Simulation size", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 4, str.tostring(qty) + " units", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 0, 5, "Your entry reference", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 5, showReference ? str.tostring(manualPrice, format.mintick) + " (manual)" : "Not set for this chart", text_color=color.yellow, bgcolor=color.black)
+    table.cell(desk, 0, 6, "Scope", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 6, "This contract only; no strike rotation", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 0, 7, "Costs / data", text_color=color.white, bgcolor=color.black)
+    table.cell(desk, 1, 7, dayGap ? "GAPS - RESULT INCOMPLETE" : "0.1%/side proxy + 1 tick/side", text_color=dayGap ? color.red : color.silver, bgcolor=color.black)

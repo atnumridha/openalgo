@@ -1,0 +1,1797 @@
+//@version=6
+indicator("OpenAlgo Book Patterns & Risk", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=600)
+// Separate educational indicator. Price references are not fills or account instructions.
+// BOOK ENGINE START
+type BKSettings
+    int pivotLeft = 3
+    int pivotRight = 3
+    int pivotSpacing = 3
+    int atrPeriod = 14
+    float levelToleranceATR = 0.25
+    float equalCandleATR = 0.05
+    int minToleranceTicks = 2
+    int shapeMinBars = 12
+    int shapeMaxBars = 180
+    float convergenceRatio = 0.75
+    float parallelMaxRatio = 1.25
+    float poleMinATR = 3
+    int poleMinBars = 3
+    int poleMaxBars = 15
+    int flagMinBars = 4
+    int flagMaxBars = 20
+    float flagMaxRetracement = 0.5
+    int cupMinBars = 40
+    int cupMaxBars = 150
+    int handleMinBars = 3
+    int handleMaxBars = 20
+    float rimToleranceATR = 0.5
+    float cupMinDepthATR = 2
+    float cupMaxDepthFraction = 0.3
+    float handleMaxDepthFraction = 0.3333333333333333
+    float dojiBody = 0.1
+    float smallBody = 0.3
+    float longBody = 0.6
+    float negligibleWick = 0.1
+    float dominantWickRatio = 2
+    float marubozuBody = 0.9
+    float marubozuWick = 0.05
+    float spinningWick = 0.3
+    int averageBodyPeriod = 14
+    bool strictRangeEngulfing = false
+    string gapPolicy = "explicit"
+    int candleTriggerBars = 3
+    int retestBars = 10
+    int failedBreakoutBars = 3
+    int levelLookback = 200
+    int multiSwingMinBars = 3
+    int multiSwingMaxBars = 80
+    float reboundATR = 1
+    float headDepthATR = 0.5
+    float shoulderToleranceATR = 0.5
+    string maType = "ema"
+    int maFast = 20
+    int maSlow = 50
+    int maSlopeBars = 5
+    int trendWarmup = 55
+    int rsiPeriod = 14
+    int macdFast = 12
+    int macdSlow = 26
+    int macdSignal = 9
+    int volumePeriod = 20
+    float volumeExpansion = 1.2
+    bool rsiFilter = false
+    bool macdFilter = false
+    bool volumeFilter = false
+    int divergenceMinBars = 5
+    int divergenceMaxBars = 80
+    float stopBufferATR = 0.05
+    float targetR = 3
+    float minRR = 3
+    int planExpiryBars = 50
+    int staleQuoteSeconds = 15
+    float equity = 0
+    float riskPercent = 0.25
+    float fixedCost = 0
+    float perUnitCost = 0
+    float slippagePrice = 0
+    bool showPending = false
+    bool showNeutral = false
+    bool showTrendLines = true
+    bool fullHistory = false
+    int labelLookback = 10
+    int maxDrawings = 40
+    int maxPolylines = 80
+    int maxLabels = 160
+    int maxLines = 120
+    string disabledPatterns = ""
+// side: 1 long/highValue/bull, -1 short/lowValue/bear, 0 neutral, 2 unavailable.
+// event status: 0 pending, 1 confirmed, 2 expired, 3 invalidated.
+// kind: 0 candle, 1 shape, 2 level, 3 trendline. mode: 0 neutral, 1 continuation, -1 reversal.
+// rule: 0 later-close, 1 inverted-body, 2 next-boundary, 3 next-extreme, 4 retest, 5 shape-close.
+type BKBar
+    float o
+    float h
+    float l
+    float c
+    float v
+    int t
+    int ct
+    int ix
+    bool valid
+    float atr = na
+    float fast = na
+    float slow = na
+    float mf = na
+    float ms = na
+    float macd = na
+    float signal = na
+    float gain = na
+    float loss = na
+    float rsi = na
+    float vm = na
+    int trend = 2
+    int run = 0
+    int macdRun = 0
+type BKPoint
+    int ix
+    int t
+    float price
+    string role
+    int recognition = na
+type BKPivot
+    int side
+    int ix
+    int t
+    float price
+    int ri
+    int rt
+    int priorTrend = 2
+type BKSegment
+    BKPoint a
+    BKPoint b
+    string role
+type BKEvent
+    string patternId
+    string name
+    int side
+    int startIndex
+    int endIndex
+    int recognitionIndex
+    float trigger
+    float stopAnchor
+    float scale
+    int kind = 0
+    int mode = -1
+    int rule = 0
+    int rank = 3
+    int contacts = 1
+    string stopMethod = "Source formation extreme"
+    string targetMethod = "r-multiple"
+    string photos = ""
+    string id = ""
+    int status = 0
+    int priorTrend = 2
+    int confirmationIndex = na
+    int formationStart = na
+    int formationEnd = na
+    int recognitionTime = na
+    int confirmationTime = na
+    int armedAt = na
+    int qualificationTime = na
+    int armedIndex = na
+    int armIndex = na
+    float boundary = na
+    float measuredHeight = na
+    float measuredBoundary = na
+    int stopCheckFrom = na
+    int windowStart = na
+    int windowMin = 0
+    int windowMax = 180
+    BKPivot lineA = na
+    BKPivot lineB = na
+    BKPivot upperA = na
+    BKPivot upperB = na
+    BKPivot lowerA = na
+    BKPivot lowerB = na
+    array<BKPoint> points = na
+    array<BKSegment> segments = na
+    string armingId = ""
+    string confirmationId = ""
+    string qualificationId = ""
+    string reason = "WAIT: later closed price confirmation"
+    bool qualified = false
+    int breakIndex = na
+    float breakBoundary = na
+    bool failed = false
+    bool retested = false
+type BKObservation
+    string id
+    string kind
+    int t
+    int side
+    string parentEventId
+    array<BKPoint> points
+    string messageText
+    string photos
+type BKLevel
+    int side
+    float price
+    array<BKPivot> contacts
+    int ri
+    float lowPrice = na
+    float highPrice = na
+type BKPlan
+    string id = ""
+    string eventId = ""
+    string name = ""
+    int side = 0
+    int createdIndex = na
+    int createdTime = na
+    int priorTrend = 2
+    int mode = 0
+    float entry = na
+    float stop = na
+    float target = na
+    float rr = na
+    string targetMethod = ""
+    string stopMethod = ""
+    int status = 0
+    int terminalIndex = na
+    int terminalTime = na
+    float quantity = na
+    float lots = na
+    float budget = na
+    float lossPerUnit = na
+    float riskCash = na
+    float rewardCash = na
+    string sizeReason = "Account equity is unset"
+type BKUnits
+    bool validated = false
+    string kind = "linear"
+    string unitDefinition = "underlying"
+    string accountCurrency = ""
+    string quoteCurrency = ""
+    float conversion = na
+    float valuePerPriceUnit = na
+    float quantityStep = na
+    float lotSize = na
+    bool premiumChart = false
+type BKState
+    array<BKBar> bars
+    array<BKPivot> pivots
+    array<BKEvent> events
+    array<BKEvent> pending
+    array<BKEvent> fresh
+    array<BKEvent> alternatives
+    array<BKEvent> breakouts
+    array<BKLevel> levels
+    array<string> seen
+    array<string> alerts
+    array<BKObservation> evidence
+    BKPlan plan
+    BKPlan terminal
+    BKUnits units
+    bool active = false
+    int trend = 2
+    string reason = "WAIT: closed valid candles and trend warm-up are required"
+    string nextCondition = "Wait for closed price confirmation"
+    string observations = ""
+    bool opposite = false
+    int lastIndex = -1
+    int lastTime = na
+    bool previousReady = false
+    bool initialized = false
+    int blockedThrough = na
+    int lastObserved = na
+    bool delivery = false
+    int decisionIndex = -1
+    int confirmedCount = 0
+bk_state() =>
+    BKState.new(array.new<BKBar>(), array.new<BKPivot>(), array.new<BKEvent>(), array.new<BKEvent>(), array.new<BKEvent>(), array.new<BKEvent>(), array.new<BKEvent>(), array.new<BKLevel>(), array.new<string>(), array.new<string>(), array.new<BKObservation>(), BKPlan.new(), BKPlan.new(), BKUnits.new())
+bk_bar(array<BKBar> bars, int ix) =>
+    BKBar out = na
+    if array.size(bars)>0
+        int offset=ix-array.get(bars,0).ix
+        if offset>=0 and offset<array.size(bars)
+            out:=array.get(bars,offset)
+    out
+bk_valid(BKBar b) =>
+    not na(b) and b.valid
+bk_body(BKBar b) =>
+    math.abs(b.c-b.o)
+bk_top(BKBar b) =>
+    math.max(b.o,b.c)
+bk_bottom(BKBar b) =>
+    math.min(b.o,b.c)
+bk_up(BKBar b) =>
+    b.h-bk_top(b)
+bk_low(BKBar b) =>
+    bk_bottom(b)-b.l
+bk_side(BKBar b) =>
+    b.c>b.o?1:b.c<b.o?-1:0
+bk_round(float p,float tick,bool up) =>
+    (up?math.ceil(p/tick-1e-9):math.floor(p/tick+1e-9))*tick
+bk_project(BKPivot a,BKPivot b,int ix) =>
+    a.price+(b.price-a.price)*(ix-a.ix)/(b.ix-a.ix)
+bk_point(BKPivot p) =>
+    BKPoint.new(p.ix,p.t,p.price,p.side==1?"high":"low",p.rt)
+// Consumers below use only a fixed chronological suffix, not the entire retained pivot history.
+bk_recentPivots(array<BKPivot> pivots,int side,int before,int limit) =>
+    array<BKPivot> out=array.new<BKPivot>()
+    int pos=array.size(pivots)-1
+    while pos>=0 and array.size(out)<limit
+        BKPivot p=array.get(pivots,pos)
+        if (side==0 or p.side==side) and p.ri<before and p.ix<before
+            array.unshift(out,p)
+        pos-=1
+    out
+bk_enabled(BKSettings s,string id) =>
+    not str.contains(","+s.disabledPatterns+",",","+id+",")
+bk_rangeValid(array<BKBar> bars,int lo,int hi) =>
+    bool ok=lo>=0 and hi>=lo
+    if ok
+        for j=lo to hi
+            if not bk_valid(bk_bar(bars,j))
+                ok:=false
+                break
+    ok
+bk_mean(array<BKBar> bars,int lo,int hi,string field) =>
+    float sum=0
+    bool ok=lo>=0 and hi>=lo
+    if ok
+        for j=lo to hi
+            BKBar b=bk_bar(bars,j)
+            if not bk_valid(b)
+                ok:=false
+                break
+            float x=field=="body"?bk_body(b):field=="volume"?b.v:field=="macd"?b.macd:field=="tr"?math.max(b.h-b.l,j>0 and bk_valid(bk_bar(bars,j-1))?math.max(math.abs(b.h-bk_bar(bars,j-1).c),math.abs(b.l-bk_bar(bars,j-1).c)):0):b.c
+            if na(x) or (field=="volume" and x<=0)
+                ok:=false
+            sum+=x
+    ok?sum/(hi-lo+1):na
+bk_extreme(array<BKBar> bars,int lo,int hi,bool highValue) =>
+    float out=na
+    if lo>=0 and hi>=lo
+        for j=lo to hi
+            BKBar b=bk_bar(bars,j)
+            if not na(b)
+                float x=highValue?b.h:b.l
+                out:=na(out)?x:highValue?math.max(out,x):math.min(out,x)
+    out
+bk_ma(array<BKBar> bars,BKBar b,float prev,int n,string field,bool sma) =>
+    int run=field=="macd"?b.macdRun:b.run
+    float v=field=="macd"?b.macd:b.c
+    run<n?na:sma or na(prev)?bk_mean(bars,b.ix-n+1,b.ix,field):prev+(v-prev)*2/(n+1)
+bk_indicators(BKState st,BKSettings s,BKBar b) =>
+    BKBar p=bk_bar(st.bars,b.ix-1)
+    if b.valid
+        b.run:=bk_valid(p)?p.run+1:1
+        b.fast:=bk_ma(st.bars,b,bk_valid(p)?p.fast:na,s.maFast,"close",s.maType=="sma")
+        b.slow:=bk_ma(st.bars,b,bk_valid(p)?p.slow:na,s.maSlow,"close",s.maType=="sma")
+        b.mf:=bk_ma(st.bars,b,bk_valid(p)?p.mf:na,s.macdFast,"close",false)
+        b.ms:=bk_ma(st.bars,b,bk_valid(p)?p.ms:na,s.macdSlow,"close",false)
+        b.macd:=b.mf-b.ms
+        b.macdRun:=na(b.macd)?0:bk_valid(p)?p.macdRun+1:1
+        b.signal:=bk_ma(st.bars,b,bk_valid(p)?p.signal:na,s.macdSignal,"macd",false)
+        float tr=bk_valid(p)?math.max(b.h-b.l,math.max(math.abs(b.h-p.c),math.abs(b.l-p.c))):b.h-b.l
+        b.atr:=b.run<s.atrPeriod?na:na(p) or na(p.atr)?bk_mean(st.bars,b.ix-s.atrPeriod+1,b.ix,"tr"):(p.atr*(s.atrPeriod-1)+tr)/s.atrPeriod
+        if b.run>s.rsiPeriod
+            float gain=0
+            float loss=0
+            if na(p.gain)
+                for j=b.ix-s.rsiPeriod+1 to b.ix
+                    float change=bk_bar(st.bars,j).c-bk_bar(st.bars,j-1).c
+                    gain+=math.max(change,0)/s.rsiPeriod
+                    loss+=math.max(-change,0)/s.rsiPeriod
+            else
+                gain:=(p.gain*(s.rsiPeriod-1)+math.max(b.c-p.c,0))/s.rsiPeriod
+                loss:=(p.loss*(s.rsiPeriod-1)+math.max(p.c-b.c,0))/s.rsiPeriod
+            b.gain:=gain
+            b.loss:=loss
+            b.rsi:=gain==0 and loss==0?50:loss==0?100:100-100/(1+gain/loss)
+        b.vm:=bk_mean(st.bars,b.ix-s.volumePeriod,b.ix-1,"volume")
+        BKBar past=bk_bar(st.bars,b.ix-s.maSlopeBars)
+        if b.run>=math.max(s.trendWarmup,s.maSlow+s.maSlopeBars) and not na(past) and not na(past.fast)
+            b.trend:=b.fast>b.slow and b.fast>past.fast?1:b.fast<b.slow and b.fast<past.fast?-1:0
+    st.trend:=b.trend
+    b
+bk_pivots(BKState st,BKSettings s,int i) =>
+    int j=i-s.pivotRight
+    if j>=s.pivotLeft and bk_rangeValid(st.bars,j-s.pivotLeft,i)
+        BKBar b=bk_bar(st.bars,j)
+        bool hi=true
+        bool lo=true
+        for k=j-s.pivotLeft to i
+            if k!=j
+                BKBar x=bk_bar(st.bars,k)
+                hi:=hi and x.h<b.h
+                lo:=lo and x.l>b.l
+        if hi!=lo
+            BKPivot p=BKPivot.new(hi?1:-1,j,b.t,hi?b.h:b.l,i,bk_bar(st.bars,i).t)
+            BKBar prior=bk_bar(st.bars,j-1)
+            p.priorTrend:=na(prior)?2:prior.trend
+            int n=array.size(st.pivots)
+            if n==0
+                array.push(st.pivots,p)
+            else
+                BKPivot last=array.get(st.pivots,n-1)
+                if last.side==p.side
+                    if p.side==1?p.price>last.price:p.price<last.price
+                        array.set(st.pivots,n-1,p)
+                else if p.ix-last.ix>=s.pivotSpacing
+                    array.push(st.pivots,p)
+    // Keep all pivots that can affect the largest family/level lookback plus predecessors.
+    while array.size(st.pivots)>8 and array.get(st.pivots,1).ix<i-600
+        array.shift(st.pivots)
+    0
+bk_longBody(array<BKBar> bars,BKBar b,int i,BKSettings s) =>
+    float avg=bk_mean(bars,i-s.averageBodyPeriod,i-1,"body")
+    not na(avg) and bk_body(b)>=(b.h-b.l)*s.longBody and bk_body(b)>=avg
+bk_candle(array<BKEvent> out,BKState st,BKSettings s,int i,float atr,string id,string name,int side,int n,int photo,float stop,int mode= -1,int rule=0) =>
+    BKEvent e=BKEvent.new(id,name,side,i-n+1,i,i,side== -1?bk_bar(st.bars,i).l:bk_bar(st.bars,i).h,stop,atr)
+    e.mode:=mode
+    e.rule:=rule
+    e.rank:=side==0?4:3
+    e.contacts:=n
+    e.photos:=str.tostring(photo)
+    e.points:=array.new<BKPoint>()
+    e.segments:=array.new<BKSegment>()
+    for j=i-n+1 to i
+        BKBar b=bk_bar(st.bars,j)
+        array.push(e.points,BKPoint.new(j,b.t,b.h,"high"))
+        array.push(e.points,BKPoint.new(j,b.t,b.l,"low"))
+    if bk_enabled(s,id)
+        array.push(out,e)
+    e
+bk_candles(BKState st,BKSettings s,int i,float tick,float atr) =>
+    array<BKEvent> out=array.new<BKEvent>()
+    BKBar b=bk_bar(st.bars,i)
+    if bk_valid(b) and not na(atr) and atr>0
+        float spanRange=b.h-b.l
+        float body=bk_body(b)
+        float up=bk_up(b)
+        float lowValue=bk_low(b)
+        bool small=body<=s.smallBody*spanRange
+        bool bull=b.c>b.o
+        bool bear=b.c<b.o
+        if small and lowValue>=s.dominantWickRatio*body and up<=s.negligibleWick*spanRange
+            float stop=b.l
+            for p in st.pivots
+                if p.side== -1 and p.ri<i
+                    stop:=math.min(b.l,p.price)
+            BKEvent e=bk_candle(out,st,s,i,atr,"hammer","Hammer",1,1,44,stop)
+            e.stopMethod:="Source swing low (or lower pattern low)"
+            bk_candle(out,st,s,i,atr,"hanging-man","Hanging man",-1,1,42,b.h)
+        if small and up>=s.dominantWickRatio*body and lowValue<=s.negligibleWick*spanRange
+            BKEvent e=bk_candle(out,st,s,i,atr,"inverted-hammer","Inverted hammer",1,1,43,b.l,-1,1)
+            e.trigger:=bk_top(b)
+            bk_candle(out,st,s,i,atr,"shooting-star","Shooting star",-1,1,41,b.h)
+        if body>=s.marubozuBody*spanRange and up<=s.marubozuWick*spanRange and lowValue<=s.marubozuWick*spanRange and bk_side(b)!=0
+            BKEvent e=bk_candle(out,st,s,i,atr,bull?"bull-marubozu":"bear-marubozu",bull?"Bullish marubozu":"Bearish marubozu",bull?1:-1,1,46,bull?b.l:b.h,0)
+            e.rank:=4
+        if body<=s.dojiBody*spanRange
+            bk_candle(out,st,s,i,atr,"doji","Doji",0,1,45,b.l,0)
+            if up>=s.spinningWick*spanRange and lowValue>=s.spinningWick*spanRange
+                bk_candle(out,st,s,i,atr,"long-legged-doji","Long-legged doji",0,1,45,b.l,0)
+            if up<=s.negligibleWick*spanRange
+                bk_candle(out,st,s,i,atr,"dragonfly-doji","Dragonfly doji",0,1,45,b.l,0)
+            if lowValue<=s.negligibleWick*spanRange
+                bk_candle(out,st,s,i,atr,"gravestone-doji","Gravestone doji",0,1,45,b.l,0)
+            if bk_rangeValid(st.bars,i-1,i)
+                BKBar a=bk_bar(st.bars,i-1)
+                if bk_body(a)<=s.dojiBody*(a.h-a.l)
+                    BKEvent e=bk_candle(out,st,s,i,atr,"double-doji","Double doji",0,2,45,math.min(b.l,a.l),0)
+                    e.trigger:=math.max(b.h,a.h)
+        if small and up>=s.spinningWick*spanRange and lowValue>=s.spinningWick*spanRange
+            bk_candle(out,st,s,i,atr,"spinning-top","Spinning top",0,1,46,b.l,0)
+        if bk_rangeValid(st.bars,i-1,i)
+            BKBar a=bk_bar(st.bars,i-1)
+            bool abull=a.c>a.o
+            bool abear=a.c<a.o
+            float tol=math.max(s.minToleranceTicks*tick,s.equalCandleATR*atr)
+            if abear and bull and math.abs(a.l-b.l)<=tol
+                bk_candle(out,st,s,i,atr,"tweezer-bottom","Tweezer bottom",1,2,29,math.min(a.l,b.l))
+            if abull and bear and math.abs(a.h-b.h)<=tol
+                bk_candle(out,st,s,i,atr,"tweezer-top","Tweezer top",-1,2,30,math.max(a.h,b.h))
+            bool contained=bk_top(b)<=bk_top(a) and bk_bottom(b)>=bk_bottom(a) and body<bk_body(a)
+            if bk_longBody(st.bars,a,i-1,s) and contained
+                if abear and bull
+                    BKEvent e=bk_candle(out,st,s,i,atr,"bull-harami","Bullish harami",1,2,34,b.l)
+                    e.stopMethod:="Source second candle low"
+                if abull and bear
+                    BKEvent e=bk_candle(out,st,s,i,atr,"bear-harami","Bearish harami",-1,2,33,a.h)
+                    e.stopMethod:="Source first candle high"
+            float midpoint=(a.o+a.c)/2
+            if abear and bull and b.c>midpoint and b.c<a.o and (s.gapPolicy=="continuous" or b.o<a.c)
+                bk_candle(out,st,s,i,atr,"piercing-line","Piercing line",1,2,36,math.min(a.l,b.l))
+            if abull and bear and b.c<midpoint and b.c>a.o and (s.gapPolicy=="continuous" or b.o>a.c)
+                bk_candle(out,st,s,i,atr,"dark-cloud-cover","Dark cloud cover",-1,2,35,math.max(a.h,b.h))
+            bool engulf=bk_top(b)>=bk_top(a) and bk_bottom(b)<=bk_bottom(a) and (bk_top(b)>bk_top(a) or bk_bottom(b)<bk_bottom(a)) and (not s.strictRangeEngulfing or (b.h>=a.h and b.l<=a.l))
+            if engulf
+                if abear and bull
+                    BKEvent e=bk_candle(out,st,s,i,atr,"bull-engulfing","Bullish engulfing",1,2,39,b.l)
+                    e.stopMethod:="Source second candle low; not the first candle low"
+                if abull and bear
+                    BKEvent e=bk_candle(out,st,s,i,atr,"bear-engulfing","Bearish engulfing",-1,2,40,b.h)
+                    e.stopMethod:="Source second candle high; not the first candle high"
+        if bk_rangeValid(st.bars,i-2,i)
+            BKBar a=bk_bar(st.bars,i-2)
+            BKBar m=bk_bar(st.bars,i-1)
+            float mid=(a.o+a.c)/2
+            if bk_longBody(st.bars,a,i-2,s) and bk_body(m)<=(m.h-m.l)*s.smallBody and bk_body(m)<bk_body(a)
+                if a.c<a.o and bull and b.c>mid and (s.gapPolicy=="continuous" or (bk_top(m)<a.c and b.o>bk_top(m)))
+                    bk_candle(out,st,s,i,atr,"morning-star","Morning star",1,3,38,math.min(a.l,m.l,b.l))
+                if a.c>a.o and bear and b.c<mid and (s.gapPolicy=="continuous" or (bk_bottom(m)>a.c and b.o<bk_bottom(m)))
+                    bk_candle(out,st,s,i,atr,"evening-star","Evening star",-1,3,37,math.max(a.h,m.h,b.h))
+            bool opens=m.o>bk_bottom(a) and m.o<bk_top(a) and b.o>bk_bottom(m) and b.o<bk_top(m)
+            if opens and bk_longBody(st.bars,a,i-2,s) and bk_longBody(st.bars,m,i-1,s) and bk_longBody(st.bars,b,i,s)
+                bool soldiers=true
+                bool crows=true
+                for j=i-2 to i
+                    BKBar x=bk_bar(st.bars,j)
+                    soldiers:=soldiers and x.c>x.o and bk_up(x)<=s.negligibleWick*(x.h-x.l)
+                    crows:=crows and x.c<x.o and bk_low(x)<=s.negligibleWick*(x.h-x.l)
+                if soldiers and a.c<m.c and m.c<b.c
+                    bk_candle(out,st,s,i,atr,"three-white-soldiers","Three white soldiers",1,3,32,a.l)
+                if crows and a.c>m.c and m.c>b.c
+                    bk_candle(out,st,s,i,atr,"three-black-crows","Three black crows",-1,3,31,a.h)
+        if bk_rangeValid(st.bars,i-4,i)
+            BKBar a=bk_bar(st.bars,i-4)
+            bool contained=true
+            bool reds=true
+            bool greens=true
+            for j=i-3 to i-1
+                BKBar x=bk_bar(st.bars,j)
+                contained:=contained and x.h<=a.h and x.l>=a.l and bk_body(x)<bk_body(a)
+                reds:=reds and x.c<x.o
+                greens:=greens and x.c>x.o
+            if bk_longBody(st.bars,a,i-4,s) and contained
+                if a.c>a.o and bull and reds and b.c>math.max(a.c,bk_extreme(st.bars,i-3,i-1,true))
+                    BKEvent e=bk_candle(out,st,s,i,atr,"rising-three-methods","Rising three methods",1,5,28,bk_extreme(st.bars,i-3,i-1,false),1)
+                    e.stopCheckFrom:=i
+                    e.stopMethod:="Source corrective-candle lows; conservative conflict resolution"
+                if a.c<a.o and bear and greens and b.c<math.min(a.c,bk_extreme(st.bars,i-3,i-1,false))
+                    BKEvent e=bk_candle(out,st,s,i,atr,"falling-three-methods","Falling three methods",-1,5,28,bk_extreme(st.bars,i-3,i-1,true),1)
+                    e.stopCheckFrom:=i
+                    e.stopMethod:="Source corrective-candle highs; conservative conflict resolution"
+    out
+bk_shape(array<BKEvent> out,BKSettings s,float atr,string id,string name,int side,array<BKPivot> ps,int photo,float stop,int mode) =>
+    BKPivot first=array.get(ps,0)
+    BKPivot last=array.get(ps,array.size(ps)-1)
+    int ri=0
+    int rt=0
+    for p in ps
+        ri:=math.max(ri,p.ri)
+        rt:=math.max(rt,p.rt)
+    BKEvent e=BKEvent.new(id,name,side,first.ix,last.ix,ri,array.get(ps,math.max(0,array.size(ps)-2)).price,stop,atr)
+    e.formationStart:=first.t
+    e.formationEnd:=last.t
+    e.recognitionTime:=rt
+    e.priorTrend:=first.priorTrend
+    e.kind:=1
+    e.mode:=mode
+    e.rule:=5
+    e.rank:=2
+    e.contacts:=array.size(ps)
+    e.photos:=str.tostring(photo)
+    e.stopMethod:="Source latest opposite structural extreme"
+    e.windowStart:=first.ix
+    e.windowMax:=s.shapeMaxBars
+    e.points:=array.new<BKPoint>()
+    e.segments:=array.new<BKSegment>()
+    for p in ps
+        array.push(e.points,bk_point(p))
+    if array.size(ps)>1
+        for j=1 to array.size(ps)-1
+            array.push(e.segments,BKSegment.new(array.get(e.points,j-1),array.get(e.points,j),"swing-connector"))
+    if bk_enabled(s,id)
+        array.push(out,e)
+    e
+bk_boundaries(BKEvent e,BKPivot h1,BKPivot h2,BKPivot l1,BKPivot l2,int i) =>
+    e.upperA:=h1
+    e.upperB:=h2
+    e.lowerA:=l1
+    e.lowerB:=l2
+    e.trigger:=e.side==1?bk_project(h1,h2,i):bk_project(l1,l2,i)
+    e.measuredHeight:=math.max(bk_project(h1,h2,e.startIndex)-bk_project(l1,l2,e.startIndex),bk_project(h1,h2,e.endIndex)-bk_project(l1,l2,e.endIndex))
+    e.segments:=array.new<BKSegment>()
+    array.push(e.segments,BKSegment.new(bk_point(h1),bk_point(h2),"resistance"))
+    array.push(e.segments,BKSegment.new(bk_point(l1),bk_point(l2),"support"))
+    e
+bk_cupGeometry(BKState st,BKSettings s,int i,float atr,BKPoint left,BKPoint bottom,BKPoint right) =>
+    int duration=right.ix-left.ix
+    int hd=i-right.ix
+    float rim=math.max(left.price,right.price)
+    float depth=rim-bottom.price
+    bool ok=duration>=s.cupMinBars and duration<=s.cupMaxBars and hd>=s.handleMinBars and hd<=s.handleMaxBars and math.abs(left.price-right.price)<=s.rimToleranceATR*atr and depth>=s.cupMinDepthATR*atr and depth<=s.cupMaxDepthFraction*rim and bk_rangeValid(st.bars,left.ix,i-1)
+    float stop=na
+    float trigger=na
+    if ok
+        stop:=bk_extreme(st.bars,right.ix,i-1,false)
+        trigger:=math.max(rim,bk_extreme(st.bars,right.ix,i-1,true))
+        ok:=stop>=rim-depth*s.handleMaxDepthFraction
+    if ok
+        array<float> buckets=array.new<float>()
+        int length=duration+1
+        int nearBottom=0
+        for j=left.ix to right.ix
+            if bk_bar(st.bars,j).l<=bottom.price+0.15*depth
+                nearBottom+=1
+        for k=0 to 6
+            int a=int(math.floor(k*length/7))
+            int z=int(math.floor((k+1)*length/7))-1
+            float sum=0
+            if z>=a
+                for j=a to z
+                    sum+=bk_mean(st.bars,left.ix+math.max(0,j-2),left.ix+math.min(length-1,j+2),"close")
+            array.push(buckets,z>=a?sum/(z-a+1):na)
+        bool rounded=true
+        for k=0 to 5
+            rounded:=rounded and (k<3?array.get(buckets,k)>array.get(buckets,k+1):array.get(buckets,k)<array.get(buckets,k+1))
+        ok:=rounded and nearBottom>=3
+    [ok,trigger,stop]
+bk_requested(string family,int direction,string id,int side) =>
+    (family=="" or family==id) and (direction==0 or direction==side)
+// Fresh detection requests every family. Revalidation requests only its frozen family/side;
+// all received-prefix geometry and scale-dependent checks still run for that candidate.
+bk_shapes(BKState st,BKSettings s,int i,float tick,float atr,string family="",int direction=0) =>
+    array<BKEvent> out=array.new<BKEvent>()
+    array<BKPivot> pivots=bk_recentPivots(st.pivots,0,i,5)
+    int count=array.size(pivots)
+    float tol=math.max(s.minToleranceTicks*tick,s.levelToleranceATR*atr)
+    if count>=4
+        array<BKPivot> ps=array.slice(pivots,count-4,count)
+        array<BKPivot> highs=array.new<BKPivot>()
+        array<BKPivot> lows=array.new<BKPivot>()
+        bool alternating=true
+        for j=0 to 3
+            BKPivot p=array.get(ps,j)
+            if j>0 and p.side==array.get(ps,j-1).side
+                alternating:=false
+            if p.side==1
+                array.push(highs,p)
+            else
+                array.push(lows,p)
+        if alternating and array.size(highs)==2 and array.size(lows)==2
+            BKPivot h1=array.get(highs,0)
+            BKPivot h2=array.get(highs,1)
+            BKPivot l1=array.get(lows,0)
+            BKPivot l2=array.get(lows,1)
+            int first=math.max(h1.ix,l1.ix)
+            int last=math.max(h2.ix,l2.ix)
+            int start=array.get(ps,0).ix
+            int span=last-start
+            float w0=bk_project(h1,h2,first)-bk_project(l1,l2,first)
+            float w1=bk_project(h1,h2,last)-bk_project(l1,l2,last)
+            float wi=bk_project(h1,h2,i)-bk_project(l1,l2,i)
+            float ratio=w1/w0
+            bool converge=ratio<s.convergenceRatio
+            bool parallel=ratio>=s.convergenceRatio and ratio<=s.parallelMaxRatio
+            bool uf=math.abs(h2.price-h1.price)<=tol
+            bool lf=math.abs(l2.price-l1.price)<=tol
+            bool ur=h2.price-h1.price>tol
+            bool ud=h1.price-h2.price>tol
+            bool lr=l2.price-l1.price>tol
+            bool ld=l1.price-l2.price>tol
+            bool inside=bk_rangeValid(st.bars,start,last)
+            if inside
+                for j=start to last
+                    float c=bk_bar(st.bars,j).c
+                    if c>bk_project(h1,h2,j)+tol or c<bk_project(l1,l2,j)-tol
+                        inside:=false
+                        break
+            if w0>0 and w1>0 and wi>0 and inside
+                if span>=s.shapeMinBars and span<=s.shapeMaxBars
+                    if converge and ud and lr
+                        if bk_requested(family,direction,"symmetrical-triangle",1)
+                            BKEvent a=bk_shape(out,s,atr,"symmetrical-triangle","Symmetrical triangle",1,ps,10,l2.price,0)
+                            bk_boundaries(a,h1,h2,l1,l2,i)
+                        if bk_requested(family,direction,"symmetrical-triangle",-1)
+                            BKEvent z=bk_shape(out,s,atr,"symmetrical-triangle","Symmetrical triangle",-1,ps,10,h2.price,0)
+                            bk_boundaries(z,h1,h2,l1,l2,i)
+                    if converge and uf and lr and bk_requested(family,direction,"ascending-triangle",1)
+                        BKEvent e=bk_shape(out,s,atr,"ascending-triangle","Ascending triangle",1,ps,12,l2.price,1)
+                        bk_boundaries(e,h1,h2,l1,l2,i)
+                        e.targetMethod:="measured"
+                        e.measuredBoundary:=e.trigger
+                        e.stopMethod:="Local structural fallback: latest lower pivot"
+                    if converge and lf and ud and bk_requested(family,direction,"descending-triangle",-1)
+                        BKEvent e=bk_shape(out,s,atr,"descending-triangle","Descending triangle",-1,ps,11,h2.price,1)
+                        bk_boundaries(e,h1,h2,l1,l2,i)
+                        e.stopMethod:="Local structural fallback: latest upper pivot"
+                    if parallel and uf and lf
+                        if bk_requested(family,direction,"bull-rectangle",1)
+                            BKEvent e=bk_shape(out,s,atr,"bull-rectangle","Bull rectangle",1,ps,16,l2.price,1)
+                            bk_boundaries(e,h1,h2,l1,l2,i)
+                            e.rule:=2
+                            e.targetMethod:="measured"
+                            e.measuredBoundary:=e.trigger
+                            e.stopMethod:="Source original breakout candle low"
+                        if bk_requested(family,direction,"bear-rectangle",-1)
+                            BKEvent z=bk_shape(out,s,atr,"bear-rectangle","Bear rectangle",-1,ps,15,math.max(h1.price,h2.price),1)
+                            bk_boundaries(z,h1,h2,l1,l2,i)
+                            z.rule:=2
+                            z.targetMethod:="measured"
+                            z.measuredBoundary:=z.trigger
+                            z.stopMethod:="Source rectangle resistance (asymmetric)"
+                    if converge and ud and ld and bk_requested(family,direction,"falling-wedge",1)
+                        BKEvent e=bk_shape(out,s,atr,"falling-wedge","Falling wedge",1,ps,18,l2.price,-1)
+                        bk_boundaries(e,h1,h2,l1,l2,i)
+                    if converge and ur and lr and bk_requested(family,direction,"rising-wedge",-1)
+                        BKEvent e=bk_shape(out,s,atr,"rising-wedge","Rising wedge",-1,ps,19,h2.price,-1)
+                        bk_boundaries(e,h1,h2,l1,l2,i)
+                if span>=s.flagMinBars and span<=s.flagMaxBars and i-start<=s.flagMaxBars and parallel
+                    for d=0 to 1
+                        bool bull=d==0
+                        if (bull?ud and ld:ur and lr) and bk_requested(family,direction,bull?"bull-flag":"bear-flag",bull?1:-1)
+                            float poleEnd=bull?math.max(h1.price,l1.price):math.min(h1.price,l1.price)
+                            int poleStart=na
+                            for n=s.poleMinBars to s.poleMaxBars
+                                BKBar b=bk_bar(st.bars,start-n)
+                                if bk_valid(b) and bk_rangeValid(st.bars,start-n,start)
+                                    float impulse=bull?poleEnd-b.c:b.c-poleEnd
+                                    float retrace=bull?poleEnd-math.min(l1.price,l2.price):math.max(h1.price,h2.price)-poleEnd
+                                    if impulse>=s.poleMinATR*atr and retrace<=s.flagMaxRetracement*impulse
+                                        poleStart:=start-n
+                                        break
+                            if not na(poleStart)
+                                BKEvent e=bk_shape(out,s,atr,bull?"bull-flag":"bear-flag",bull?"Bull flag":"Bear flag",bull?1:-1,ps,bull?13:17,bull?math.min(l1.price,l2.price):math.max(h1.price,h2.price),1)
+                                bk_boundaries(e,h1,h2,l1,l2,i)
+                                e.startIndex:=poleStart
+                                e.windowStart:=start
+                                e.windowMin:=s.flagMinBars
+                                e.windowMax:=s.flagMaxBars
+                                e.rule:=bull?5:2
+                                e.stopMethod:="Source complete corrective flag extreme"
+    for d=0 to 1
+        bool bottom=d==0
+        int side=bottom?-1:1
+        if count>=3 and bk_requested(family,direction,bottom?"double-bottom":"double-top",bottom?1:-1)
+            array<BKPivot> three=array.slice(pivots,count-3,count)
+            BKPivot a=array.get(three,0)
+            BKPivot m=array.get(three,1)
+            BKPivot b=array.get(three,2)
+            bool spacing=b.ix-a.ix>=s.multiSwingMinBars and b.ix-a.ix<=s.multiSwingMaxBars
+            float rebound=bottom?m.price-math.max(a.price,b.price):math.min(a.price,b.price)-m.price
+            if a.side==side and m.side!=side and b.side==side and spacing and math.abs(a.price-b.price)<=tol and rebound>=s.reboundATR*atr
+                BKEvent e=bk_shape(out,s,atr,bottom?"double-bottom":"double-top",bottom?"Double bottom":"Double top",bottom?1:-1,three,bottom?24:25,b.price,-1)
+                e.trigger:=m.price
+                e.targetMethod:="support-resistance"
+                array.push(e.segments,BKSegment.new(bk_point(m),BKPoint.new(i,bk_bar(st.bars,i).t,m.price,m.side==1?"high":"low"),"neckline"))
+        if count>=5
+            array<BKPivot> five=array.slice(pivots,count-5,count)
+            BKPivot a=array.get(five,0)
+            BKPivot n1=array.get(five,1)
+            BKPivot h=array.get(five,2)
+            BKPivot n2=array.get(five,3)
+            BKPivot c=array.get(five,4)
+            bool eligible=true
+            for j=0 to 4
+                if array.get(five,j).side!=(j%2==0?side:-side)
+                    eligible:=false
+            eligible:=eligible and h.ix-a.ix>=s.multiSwingMinBars and h.ix-a.ix<=s.multiSwingMaxBars and c.ix-h.ix>=s.multiSwingMinBars and c.ix-h.ix<=s.multiSwingMaxBars
+            if eligible
+                bool equal=math.max(a.price,h.price,c.price)-math.min(a.price,h.price,c.price)<=tol
+                float rebound=bottom?math.min(n1.price-math.max(a.price,h.price),n2.price-math.max(h.price,c.price)):math.min(math.min(a.price,h.price)-n1.price,math.min(h.price,c.price)-n2.price)
+                if equal and rebound>=s.reboundATR*atr and bk_requested(family,direction,bottom?"triple-bottom":"triple-top",bottom?1:-1)
+                    BKEvent e=bk_shape(out,s,atr,bottom?"triple-bottom":"triple-top",bottom?"Triple bottom":"Triple top",bottom?1:-1,five,bottom?22:23,c.price,-1)
+                    e.trigger:=bottom?math.max(n1.price,n2.price):math.min(n1.price,n2.price)
+                    e.stopMethod:="Conservative local final-extreme anchor"
+                float depth=bottom?math.min(a.price,c.price)-h.price:h.price-math.max(a.price,c.price)
+                if depth>=s.headDepthATR*atr and math.abs(a.price-c.price)<=s.shoulderToleranceATR*atr and bk_requested(family,direction,bottom?"inverse-head-shoulders":"head-shoulders",bottom?1:-1)
+                    BKEvent e=bk_shape(out,s,atr,bottom?"inverse-head-shoulders":"head-shoulders",bottom?"Inverse head and shoulders":"Head and shoulders",bottom?1:-1,five,bottom?20:21,c.price,-1)
+                    e.trigger:=bk_project(n1,n2,i)
+                    e.lineA:=n1
+                    e.lineB:=n2
+                    e.stopMethod:="Source right shoulder"
+                    array.push(e.segments,BKSegment.new(bk_point(n1),bk_point(n2),"neckline"))
+    if count>=4 and bk_requested(family,direction,"cup-handle",1)
+        array<BKPivot> cup=array.slice(pivots,count-4,count)
+        if array.get(cup,0).side==1 and array.get(cup,1).side== -1 and array.get(cup,2).side==1 and array.get(cup,3).side== -1
+            [ok,trigger,stop]=bk_cupGeometry(st,s,i,atr,bk_point(array.get(cup,0)),bk_point(array.get(cup,1)),bk_point(array.get(cup,2)))
+            if ok
+                BKEvent e=bk_shape(out,s,atr,"cup-handle","Cup and handle",1,cup,14,stop,1)
+                e.trigger:=trigger
+                e.windowStart:=array.get(cup,2).ix
+                e.windowMin:=s.handleMinBars
+                e.windowMax:=s.handleMaxBars
+                e.stopMethod:="Source complete received handle low"
+    out
+bk_revalidate(BKState st,BKSettings s,BKEvent e,int i,float tick) =>
+    bool ok=i-e.windowStart>=e.windowMin and i-e.windowStart<=e.windowMax
+    if ok and e.patternId=="cup-handle"
+        [valid,trigger,stop]=bk_cupGeometry(st,s,i,e.scale,array.get(e.points,0),array.get(e.points,1),array.get(e.points,2))
+        ok:=valid
+        if valid
+            e.trigger:=trigger
+            e.stopAnchor:=stop
+    else if ok
+        array<BKEvent> current=bk_shapes(st,s,i,tick,e.scale,e.patternId,e.side)
+        BKEvent found=na
+        for f in current
+            if f.patternId==e.patternId and f.side==e.side and f.startIndex==e.startIndex and f.endIndex==e.endIndex and f.recognitionIndex==e.recognitionIndex
+                found:=f
+                break
+        ok:=not na(found)
+        if ok
+            e.trigger:=found.trigger
+            e.stopAnchor:=found.stopAnchor
+            e.measuredBoundary:=found.measuredBoundary
+            e.measuredHeight:=found.measuredHeight
+            e.points:=found.points
+            e.segments:=found.segments
+            if not na(e.upperA) and not na(e.lowerA) and i>e.endIndex+1
+                float tol=math.max(s.minToleranceTicks*tick,s.levelToleranceATR*e.scale)
+                for j=e.endIndex+1 to i-1
+                    BKBar b=bk_bar(st.bars,j)
+                    if not bk_valid(b) or b.c>bk_project(e.upperA,e.upperB,j)+tol or b.c<bk_project(e.lowerA,e.lowerB,j)-tol
+                        ok:=false
+                        break
+            if ok and (e.patternId=="bull-flag" or e.patternId=="bear-flag")
+                bool bull=e.side==1
+                float stop=bk_extreme(st.bars,e.windowStart,i-1,not bull)
+                float poleEnd=bull?math.max(e.upperA.price,e.lowerA.price):math.min(e.upperA.price,e.lowerA.price)
+                float impulse=bull?poleEnd-bk_bar(st.bars,e.startIndex).c:bk_bar(st.bars,e.startIndex).c-poleEnd
+                float retrace=bull?poleEnd-stop:stop-poleEnd
+                ok:=bk_rangeValid(st.bars,e.windowStart,i-1) and retrace<=s.flagMaxRetracement*impulse
+                e.stopAnchor:=stop
+    ok
+bk_levels(BKState st,BKSettings s,int i,float tick,float atr) =>
+    array<BKLevel> out=array.new<BKLevel>()
+    float tol=math.max(s.minToleranceTicks*tick,s.levelToleranceATR*atr)
+    for d=0 to 1
+        int side=d==0?1:-1
+        array<BKLevel> clusters=array.new<BKLevel>()
+        for p in st.pivots
+            if p.side==side and p.ix>=i-s.levelLookback and p.ri<i
+                BKLevel matched=na
+                for cl in clusters
+                    // Every contact lies within these extrema; both endpoint distances are
+                    // equivalent to testing every member, without rescanning the cluster.
+                    bool fits=math.abs(cl.price-p.price)<=tol and math.abs(cl.lowPrice-p.price)<=tol and math.abs(cl.highPrice-p.price)<=tol
+                    if fits
+                        matched:=cl
+                        break
+                if na(matched)
+                    array<BKPivot> members=array.new<BKPivot>()
+                    array.push(members,p)
+                    array.push(clusters,BKLevel.new(side,p.price,members,p.ri,p.price,p.price))
+                else if p.ix-array.get(matched.contacts,array.size(matched.contacts)-1).ix>=s.pivotSpacing
+                    array.push(matched.contacts,p)
+                    matched.lowPrice:=math.min(matched.lowPrice,p.price)
+                    matched.highPrice:=math.max(matched.highPrice,p.price)
+                    array<float> prices=array.new<float>()
+                    for x in matched.contacts
+                        array.push(prices,x.price)
+                    matched.price:=array.median(prices)
+                    matched.ri:=p.ri
+        for cl in clusters
+            if array.size(cl.contacts)>=2
+                array.push(out,cl)
+    out
+bk_levelBreaks(BKState st,BKSettings s,int i,float tick,float atr) =>
+    array<BKEvent> out=array.new<BKEvent>()
+    BKBar b=bk_bar(st.bars,i)
+    BKBar prev=bk_bar(st.bars,i-1)
+    if not na(prev)
+        for level in st.levels
+            bool bull=level.side==1
+            bool crossed=bull?b.c>b.o and b.c>=level.price+tick and prev.c<level.price+tick:b.c<b.o and b.c<=level.price-tick and prev.c>level.price-tick
+            if crossed
+                BKEvent e=bk_shape(out,s,atr,bull?"sr-long":"sr-short",bull?"Resistance breakout":"Support breakdown",bull?1:-1,level.contacts,49,bull?b.l:b.h,0)
+                e.kind:=2
+                e.endIndex:=i
+                e.recognitionIndex:=i
+                e.trigger:=bull?b.h:b.l
+                e.stopMethod:="Source original breakout candle extreme"
+                e.targetMethod:="support-resistance"
+                e.rank:=0
+                e.rule:=3
+                e.measuredBoundary:=level.price
+                e.photos:="48,49"
+                e.segments:=array.new<BKSegment>()
+                array.push(e.segments,BKSegment.new(array.get(e.points,0),BKPoint.new(i,b.t,level.price,"level"),"horizontal-level"))
+        for d=0 to 1
+            int side=d==0?1:-1
+            array<BKPivot> ps=bk_recentPivots(st.pivots,side,i,2)
+            int n=array.size(ps)
+            if n>=2
+                BKPivot a=array.get(ps,n-2)
+                BKPivot c=array.get(ps,n-1)
+                bool eligible=c.ix-a.ix>=s.pivotSpacing and (side==1?c.price<a.price:c.price>a.price)
+                float boundary=bk_project(a,c,i)
+                float prior=bk_project(a,c,i-1)
+                bool crossed=side==1?b.c>=boundary+tick and prev.c<prior+tick:b.c<=boundary-tick and prev.c>prior-tick
+                if eligible and crossed
+                    array<BKPivot> pair=array.slice(ps,n-2,n)
+                    BKEvent e=bk_shape(out,s,atr,side==1?"trendline-long":"trendline-short",side==1?"Descending trendline break/retest":"Rising trendline break/retest",side,pair,51,side==1?b.l:b.h,-1)
+                    e.kind:=3
+                    e.endIndex:=i
+                    e.recognitionIndex:=i
+                    e.trigger:=boundary
+                    e.stopMethod:="Local retest candle opposite extreme"
+                    e.rank:=1
+                    e.rule:=4
+                    e.photos:="50,51,52"
+                    e.lineA:=a
+                    e.lineB:=c
+                    e.segments:=array.new<BKSegment>()
+                    array.push(e.segments,BKSegment.new(bk_point(a),bk_point(c),"trendline"))
+    out
+bk_stop(BKEvent e,BKSettings s,float tick) =>
+    bk_round(e.stopAnchor+(e.side==1?-1:1)*math.max(tick,s.stopBufferATR*e.scale),tick,e.side!=1)
+bk_broken(BKEvent e,BKBar b,BKSettings s,float tick) =>
+    e.side==0?false:e.side==1?b.l<=bk_stop(e,s,tick):b.h>=bk_stop(e,s,tick)
+bk_beyond(BKBar b,int side,float anchor,float tick) =>
+    side==1?b.c>=anchor+tick-1e-10:b.c<=anchor-tick+1e-10
+bk_evaluate(BKState st,BKSettings s,BKEvent e,int i,float tick) =>
+    BKBar b=bk_bar(st.bars,i)
+    int later=i-e.endIndex
+    bool shape=e.kind==1
+    int state=0
+    if i<=e.recognitionIndex
+        state:=0
+    else if not bk_valid(b)
+        state:=3
+    else if shape and na(e.armIndex) and i-e.windowStart>e.windowMax
+        state:=2
+    else if not shape and e.rule!=4 and later>(e.rule==1 or e.rule==3?1:s.candleTriggerBars)
+        state:=2
+    else if e.rule==4 and later>s.retestBars
+        state:=2
+    else if e.rule==2 and not na(e.armIndex) and i>e.armIndex+1
+        state:=2
+    else if not na(e.upperA) and not na(e.lowerA) and bk_project(e.upperA,e.upperB,i)<=bk_project(e.lowerA,e.lowerB,i)
+        state:=2
+    else if e.side==0
+        float highValue=na
+        float lowValue=na
+        for p in e.points
+            if p.role=="high"
+                highValue:=na(highValue)?p.price:math.max(highValue,p.price)
+            if p.role=="low"
+                lowValue:=na(lowValue)?p.price:math.min(lowValue,p.price)
+        int side=bk_side(b)
+        if side!=0 and bk_beyond(b,side,side==1?highValue:lowValue,tick)
+            e.side:=side
+            e.trigger:=side==1?highValue:lowValue
+            e.stopAnchor:=side==1?lowValue:highValue
+            state:=bk_broken(e,b,s,tick)?3:1
+    else if e.rule==1
+        state:=later==1 and bk_side(b)==e.side and b.o>e.trigger and b.c>e.trigger?(bk_broken(e,b,s,tick)?3:1):2
+    else if e.rule==4
+        float boundary=bk_project(e.lineA,e.lineB,i)
+        float tol=math.max(s.minToleranceTicks*tick,s.levelToleranceATR*e.scale)
+        if b.h>=boundary-tol and b.l<=boundary+tol and bk_side(b)==e.side and bk_beyond(b,e.side,boundary,tick)
+            e.trigger:=boundary
+            e.stopAnchor:=e.side==1?b.l:b.h
+            array.push(e.points,BKPoint.new(i,b.t,boundary,"retest"))
+            state:=1
+    else if e.rule==2
+        if not na(e.armIndex)
+            float boundary=e.boundary
+            bool pass=bk_side(b)==e.side and (e.side==1?b.o>boundary and b.c>boundary:b.o<boundary and b.c<boundary)
+            state:=pass?(bk_broken(e,b,s,tick)?3:1):2
+        else
+            float boundary=not na(e.upperA) and e.side==1?bk_project(e.upperA,e.upperB,i):not na(e.lowerA) and e.side== -1?bk_project(e.lowerA,e.lowerB,i):e.trigger
+            if bk_side(b)==e.side and bk_beyond(b,e.side,boundary,tick)
+                e.armIndex:=i
+                e.armedIndex:=i
+                e.armedAt:=b.t
+                e.boundary:=boundary
+                e.trigger:=boundary
+                e.measuredBoundary:=boundary
+                e.armingId:="arm:"+e.id+":"+str.tostring(b.t)
+                if e.patternId=="bull-rectangle"
+                    e.stopAnchor:=b.l
+                array.push(e.points,BKPoint.new(i,b.t,boundary,"breakout"))
+                e.reason:="Only next candle open and directional close beyond frozen boundary"
+                state:=bk_broken(e,b,s,tick)?3:0
+    else if bk_broken(e,b,s,tick)
+        state:=3
+    else
+        if not na(e.lineA)
+            e.trigger:=bk_project(e.lineA,e.lineB,i)
+        else if not na(e.upperA) and e.side==1
+            e.trigger:=bk_project(e.upperA,e.upperB,i)
+        else if not na(e.lowerA) and e.side== -1
+            e.trigger:=bk_project(e.lowerA,e.lowerB,i)
+        if e.targetMethod=="measured"
+            e.measuredBoundary:=e.trigger
+        bool valid=bk_beyond(b,e.side,e.trigger,tick) and (shape or bk_side(b)==e.side)
+        if not valid
+            state:=e.rule==3?2:0
+        else if s.gapPolicy=="explicit" and (e.patternId=="bull-engulfing" or e.patternId=="bear-engulfing")
+            BKBar second=bk_bar(st.bars,e.endIndex)
+            state:=(e.side==1?b.o>second.c:b.o<second.c)?1:0
+        else
+            state:=1
+    state
+bk_size(BKPlan p,BKSettings s,BKUnits u) =>
+    float distance=math.abs(p.entry-p.stop)
+    float reward=p.side*(p.target-p.entry)
+    float fx=u.accountCurrency!="" and u.accountCurrency==u.quoteCurrency?1:u.conversion
+    string reason=""
+    if na(p.entry) or na(p.stop) or na(p.target) or p.entry<=0 or p.stop<=0 or p.target<=0 or distance<=0 or reward<=0 or (p.side==1?p.stop>=p.entry:p.stop<=p.entry)
+        reason:="Invalid price geometry"
+    else if s.equity<=0
+        reason:="Account equity is unset"
+    else if s.riskPercent<=0
+        reason:="Risk percent must be positive"
+    else if not u.validated or (u.unitDefinition!="underlying" and u.unitDefinition!="contract" and u.unitDefinition!="option-premium")
+        reason:="Validated explicit instrument units unavailable"
+    else if u.kind!="linear"
+        reason:="Inverse/nonlinear/index monetary sizing unsupported"
+    else if u.unitDefinition=="option-premium" and not u.premiumChart
+        reason:="Option sizing requires its premium chart"
+    else if u.accountCurrency=="" or u.quoteCurrency=="" or na(fx) or fx<=0
+        reason:="Required currencies/conversion unavailable"
+    else if na(u.valuePerPriceUnit) or u.valuePerPriceUnit<=0 or na(u.quantityStep) or u.quantityStep<=0
+        reason:="Verified unit value and quantity step required"
+    else if s.fixedCost<0 or s.perUnitCost<0 or s.slippagePrice<0
+        reason:="Costs/slippage must be nonnegative"
+    if reason==""
+        p.budget:=s.equity*s.riskPercent/100-s.fixedCost
+        if p.budget<=0
+            reason:="Costs exhaust risk budget"
+        else
+            p.lossPerUnit:=(distance+s.slippagePrice)*u.valuePerPriceUnit*fx+s.perUnitCost
+            float quantity=math.floor(p.budget/(p.lossPerUnit*u.quantityStep)+1e-12)*u.quantityStep
+            if quantity<u.quantityStep
+                reason:="Risk budget cannot fund one quantity step"
+            else
+                p.quantity:=quantity
+                p.lots:=not na(u.lotSize) and u.lotSize>0?quantity/u.lotSize:na
+                p.riskCash:=quantity*p.lossPerUnit+s.fixedCost
+                p.rewardCash:=quantity*(reward*u.valuePerPriceUnit*fx-s.perUnitCost-s.slippagePrice*u.valuePerPriceUnit*fx)-s.fixedCost
+    p.sizeReason:=reason
+    p
+bk_qualify(BKState st,BKSettings s,BKEvent e,BKBar b,float tick) =>
+    BKPlan p=BKPlan.new()
+    int desired=e.side
+    string reason=""
+    if e.side==0
+        reason:="WAIT: direction is not confirmed"
+    else if e.mode== -1 and e.priorTrend!= -desired
+        reason:="WAIT: preceding reversal trend unavailable or incompatible"
+    else if e.mode==1 and (e.priorTrend!=desired or na(b.fast) or (desired==1?b.c<=b.fast:b.c>=b.fast))
+        reason:="WAIT: continuation requires preceding directional trend and close beyond current MA"
+    else if e.mode==0 and b.trend!=desired
+        reason:="WAIT: local breakout requires current directional trend"
+    else if s.rsiFilter and (na(b.rsi) or (desired==1?b.rsi<=50:b.rsi>=50))
+        reason:="WAIT: RSI filter failed/unavailable"
+    else if s.macdFilter and (na(b.macd) or na(b.signal) or (desired==1?b.macd<=b.signal:b.macd>=b.signal))
+        reason:="WAIT: MACD filter failed/unavailable"
+    else if s.volumeFilter and (na(b.v) or b.v<=0 or na(b.vm) or b.v<s.volumeExpansion*b.vm)
+        reason:="WAIT: volume filter failed/unavailable"
+    if reason==""
+        float stop=bk_stop(e,s,tick)
+        float distance=desired*(b.c-stop)
+        if na(distance) or distance<=0 or stop<=0
+            reason:="WAIT: supported stop on wrong side of entry"
+        else if desired==1?b.l<=stop:b.h>=stop
+            reason:="WAIT: confirmation already breaches buffered stop; order unknown"
+        else
+            string method=e.targetMethod
+            float target=na
+            if method=="measured"
+                if na(e.measuredBoundary) or na(e.measuredHeight) or e.measuredHeight<=0
+                    reason:="WAIT: measured geometry unavailable"
+                else
+                    target:=e.measuredBoundary+desired*e.measuredHeight
+            else if method=="support-resistance"
+                for level in st.levels
+                    if level.ri<b.ix and (desired==1?level.price>b.c:level.price<b.c)
+                        target:=na(target)?level.price:desired==1?math.min(target,level.price):math.max(target,level.price)
+                if na(target)
+                    method:="r-fallback"
+                    target:=b.c+desired*s.targetR*distance
+            else
+                target:=b.c+desired*s.targetR*distance
+            target:=bk_round(target,tick,desired!=1)
+            float reward=desired*(target-b.c)
+            float rr=reward/distance
+            if reason=="" and (na(target) or target<=0 or reward<=0)
+                reason:="WAIT: target not on profitable side"
+            if reason=="" and rr+1e-9<s.minRR
+                reason:="WAIT: supported target RR below minimum; target not stretched"
+            if reason==""
+                p.id:="plan:"+e.id+":"+str.tostring(b.t)
+                p.eventId:=e.id
+                p.name:=e.name
+                p.side:=e.side
+                p.createdIndex:=b.ix
+                p.createdTime:=b.t
+                p.priorTrend:=e.priorTrend
+                p.mode:=e.mode
+                p.entry:=b.c
+                p.stop:=stop
+                p.target:=target
+                p.rr:=rr
+                p.status:=1
+                p.targetMethod:=method
+                p.stopMethod:=e.stopMethod
+                bk_size(p,s,st.units)
+    e.reason:=reason==""?"Qualified closed-candle price references":reason
+    e.qualified:=reason==""
+    p
+bk_advancePlan(BKPlan p,BKBar b,BKSettings s) =>
+    if p.status==1 and b.ix>p.createdIndex
+        bool stop=b.valid and (p.side==1?b.l<=p.stop:b.h>=p.stop)
+        bool target=b.valid and (p.side==1?b.h>=p.target:b.l<=p.target)
+        p.status:=stop and target?4:stop?2:target?3:b.ix-p.createdIndex>=s.planExpiryBars?5:1
+        if p.status!=1
+            p.terminalIndex:=b.ix
+            p.terminalTime:=b.t
+    p
+bk_alert(BKState st,string id,string kind,int time) =>
+    if st.delivery
+        array.push(st.alerts,id+":"+kind+":"+str.tostring(time))
+    0
+bk_observation(BKState st,string id,string kind,int t,int side,string messageText,string photos,string parent="") =>
+    BKObservation o=BKObservation.new(id,kind,t,side,parent,array.new<BKPoint>(),messageText,photos)
+    array.push(st.evidence,o)
+    while array.size(st.evidence)>600
+        array.shift(st.evidence)
+    o
+bk_break(BKState st,BKEvent e,int i,float boundary) =>
+    if na(e.breakIndex)
+        e.breakIndex:=i
+        e.breakBoundary:=boundary
+        array.push(st.breakouts,e)
+        bk_observation(st,"break:"+e.id,"direct-breakout",bk_bar(st.bars,i).t,e.side,"Closed directional breakout at frozen boundary "+str.tostring(boundary)+"; volume is evidence, not proof against a retest","26,27",e.id)
+    0
+bk_process(BKState st,BKSettings s,BKEvent e,int i,float tick,array<BKPlan> qualified) =>
+    BKBar b=bk_bar(st.bars,i)
+    bool valid=e.kind!=1 or not na(e.armIndex) or bk_revalidate(st,s,e,i,tick)
+    if not valid
+        e.status:=2
+        e.reason:="Received geometry or family window no longer qualifies"
+    else
+        int transition=bk_evaluate(st,s,e,i,tick)
+        if e.armIndex==i
+            bk_break(st,e,i,e.boundary)
+        if transition!=0
+            e.status:=transition
+            if transition==1
+                e.confirmationIndex:=i
+                e.confirmationTime:=b.t
+                e.confirmationId:="confirm:"+e.id+":"+str.tostring(b.t)
+                if e.armingId==""
+                    e.armingId:="arm:"+e.id+":"+str.tostring(b.t)
+                    e.armedIndex:=i
+                    e.armedAt:=b.t
+                if e.kind==1
+                    bk_break(st,e,i,na(e.measuredBoundary)?e.trigger:e.measuredBoundary)
+                array.push(e.points,BKPoint.new(i,b.t,b.c,"confirmation"))
+                st.confirmedCount+=1
+                bk_alert(st,e.id,"confirmed-pattern",b.t)
+                BKPlan plan=bk_qualify(st,s,e,b,tick)
+                st.decisionIndex:=i
+                if plan.status==1
+                    e.qualificationTime:=b.t
+                    e.qualificationId:="qualify:"+e.id+":"+str.tostring(b.t)
+                    array.push(qualified,plan)
+                    array.push(st.fresh,e)
+                else
+                    st.reason:=e.reason
+                    st.nextCondition:=e.reason
+            else
+                e.reason:=transition==2?"Trigger window expired; wait for new geometry":"Pattern stop or data invalidated before confirmation"
+    0
+bk_cross(BKState st,BKBar b,float a,float z,float pa,float pz,string kind,string photos) =>
+    int side=not na(a) and not na(z) and not na(pa) and not na(pz)?(a>z and pa<=pz?1:a<z and pa>=pz?-1:0):0
+    if side!=0
+        bk_observation(st,kind+":"+str.tostring(b.t)+":"+(side==1?"long":"short"),kind,b.t,side,kind+": closed-candle cross; context only",photos)
+        st.observations+=kind+"; "
+    0
+bk_context(BKState st,BKSettings s,BKBar b) =>
+    st.observations:=""
+    BKBar p=bk_bar(st.bars,b.ix-1)
+    if not na(p)
+        bk_cross(st,b,b.fast,b.slow,p.fast,p.slow,"ma-cross","5,6")
+        bk_cross(st,b,b.c,b.fast,p.c,p.fast,"price-ma-cross","6")
+        bk_cross(st,b,b.macd,b.signal,p.macd,p.signal,"macd-signal-cross","4,5")
+        bk_cross(st,b,b.macd,0,p.macd,0,"macd-zero-cross","4")
+        if not na(b.rsi) and not na(p.rsi)
+            if p.rsi<=30 and b.rsi>30
+                bk_observation(st,"rsi30:"+str.tostring(b.t),"rsi-recross",b.t,1,"RSI recross above30; price confirmation required","8,9")
+                st.observations+="RSI30 recross; "
+            if p.rsi>=70 and b.rsi<70
+                bk_observation(st,"rsi70:"+str.tostring(b.t),"rsi-recross",b.t,-1,"RSI recross below70; price confirmation required","8,9")
+                st.observations+="RSI70 recross; "
+        if b.o>p.c
+            bk_observation(st,"gap-up:"+str.tostring(b.t),"gap",b.t,1,"Opening above previous close; no automatic entry","50")
+            st.observations+="Gap above prior close; "
+        if b.o<p.c
+            bk_observation(st,"gap-down:"+str.tostring(b.t),"gap",b.t,-1,"Opening below previous close; no automatic entry","50")
+            st.observations+="Gap below prior close; "
+    for d=0 to 1
+        array<BKPivot> ps=bk_recentPivots(st.pivots,d==0?1:-1,b.ix+1,2)
+        int n=array.size(ps)
+        if n>=2
+            BKPivot a=array.get(ps,n-2)
+            BKPivot z=array.get(ps,n-1)
+            int distance=z.ix-a.ix
+            if z.ri==b.ix and distance>=s.divergenceMinBars and distance<=s.divergenceMaxBars
+                BKBar av=bk_bar(st.bars,a.ix)
+                BKBar zv=bk_bar(st.bars,z.ix)
+                if not na(av) and not na(zv)
+                    for osc=0 to 1
+                        float x=osc==0?av.rsi:av.macd
+                        float y=osc==0?zv.rsi:zv.macd
+                        if not na(x) and not na(y) and (d==0?z.price>a.price and y<x:z.price<a.price and y>x)
+                            string kind=osc==0?"rsi-divergence":"macd-divergence"
+                            BKObservation observation=bk_observation(st,kind+":"+str.tostring(a.t)+":"+str.tostring(z.t),kind,b.t,d==0?-1:1,"Confirmed-pivot divergence; separate price breakout required",osc==0?"7,8":"4")
+                            array.push(observation.points,BKPoint.new(a.ix,a.t,a.price,"price-pivot",a.rt))
+                            array.push(observation.points,BKPoint.new(z.ix,z.t,z.price,"price-pivot",z.rt))
+                            st.observations+=kind+"; "
+    0
+bk_choose(array<BKPlan> qualified,array<BKEvent> fresh) =>
+    int selected=-1
+    if array.size(qualified)>0
+        bool conflict=false
+        int side=array.get(qualified,0).side
+        int best=0
+        for j=0 to array.size(qualified)-1
+            BKPlan p=array.get(qualified,j)
+            BKEvent e=array.get(fresh,j)
+            BKEvent old=array.get(fresh,best)
+            conflict:=conflict or p.side!=side
+            // Pine has no localeCompare; sort the two pattern IDs to obtain lexical tie order.
+            array<string> lexical=array.from(e.patternId,old.patternId)
+            array.sort(lexical)
+            bool wins=e.rank<old.rank or (e.rank==old.rank and (e.contacts>old.contacts or (e.contacts==old.contacts and (e.endIndex>old.endIndex or (e.endIndex==old.endIndex and e.patternId!=old.patternId and array.get(lexical,0)==e.patternId)))))
+            if wins
+                best:=j
+        selected:=conflict?-1:best
+    selected
+// Observe readiness on EVERY update, including unchanged/forming updates. Native adapter additionally
+// retains a delivery-only varip barrier; no intrabar pattern state is ever committed.
+bk_observe(BKState st,bool ready,bool live,int observed,int now,int closeTime,int staleSeconds) =>
+    bool validReady=ready and not na(observed) and not na(now)
+    bool resumed=st.initialized and not st.previousReady and validReady
+    if (not st.initialized or not validReady or resumed or not live) and not na(observed)
+        st.blockedThrough:=na(st.blockedThrough)?observed:math.max(st.blockedThrough,observed)
+    st.delivery:=st.initialized and not resumed and validReady and live and closeTime>st.blockedThrough and closeTime<=observed and now-closeTime<=staleSeconds
+    st.previousReady:=validReady
+    st.initialized:=true
+    st.lastObserved:=observed
+    0
+bk_step(BKState st,BKSettings s,float o,float h,float l,float c,float v,int t,int ct,int ix,float tick,bool confirmed,bool ready,bool live,int now,string identity,int interval) =>
+    array.clear(st.alerts)
+    bk_observe(st,ready,live,now,now,ct,s.staleQuoteSeconds)
+    if confirmed and ix>st.lastIndex and ct>t and ct<=now
+        array.clear(st.fresh)
+        bool valid=not na(o) and not na(h) and not na(l) and not na(c) and math.min(o,h,l,c)>0 and h>l and h>=math.max(o,c) and l<=math.min(o,c) and t>0 and (na(st.lastTime) or t>st.lastTime)
+        BKBar b=BKBar.new(o,h,l,c,v,t,ct,ix,valid)
+        array.push(st.bars,b)
+        bk_indicators(st,s,b)
+        st.lastIndex:=ix
+        st.lastTime:=t
+        if st.active
+            bk_advancePlan(st.plan,b,s)
+            if st.plan.status!=1
+                st.terminal:=st.plan
+                st.active:=false
+                array.clear(st.alternatives)
+                st.decisionIndex:=ix
+                st.reason:="Reference plan terminated; wait for a newly qualified setup"
+                st.nextCondition:="Wait for newly confirmed price geometry and context"
+                if st.plan.status!=5
+                    bk_alert(st,st.plan.id,st.plan.status==4?"ambiguous-reference-touch":st.plan.status==2?"stop-reference-touch":"target-reference-touch",t)
+        if not valid
+            for e in st.pending
+                e.status:=3
+            array.clear(st.pending)
+        else
+            bk_pivots(st,s,ix)
+            bk_context(st,s,b)
+            BKBar prev=bk_bar(st.bars,ix-1)
+            float atr=na(prev)?na:prev.atr
+            if not na(atr) and atr>0 and tick>0
+                st.levels:=bk_levels(st,s,ix,tick,atr)
+                array<BKPlan> qualified=array.new<BKPlan>()
+                for e in st.pending
+                    bk_process(st,s,e,ix,tick,qualified)
+                int pos=array.size(st.pending)-1
+                while pos>=0
+                    if array.get(st.pending,pos).status!=0
+                        array.remove(st.pending,pos)
+                    pos-=1
+                array<BKEvent> formations=bk_candles(st,s,ix,tick,atr)
+                array.concat(formations,bk_shapes(st,s,ix,tick,atr))
+                array.concat(formations,bk_levelBreaks(st,s,ix,tick,atr))
+                for e in formations
+                    BKBar start=bk_bar(st.bars,e.startIndex)
+                    BKBar end=bk_bar(st.bars,e.endIndex)
+                    BKBar recognition=bk_bar(st.bars,e.recognitionIndex)
+                    e.formationStart:=na(start)?e.formationStart:start.t
+                    e.formationEnd:=na(end)?e.formationEnd:end.t
+                    e.recognitionTime:=na(recognition)?e.recognitionTime:recognition.t
+                    e.id:=identity+":"+str.tostring(interval)+":"+e.patternId+":"+(e.side==1?"long":e.side== -1?"short":"neutral")+":"+str.tostring(e.formationStart)+":"+str.tostring(e.formationEnd)+":"+str.tostring(e.recognitionTime)
+                    if e.kind!=1 or not array.includes(st.seen,e.id)
+                        if e.kind==1
+                            array.push(st.seen,e.id)
+                        array.push(st.events,e)
+                        BKBar prior=bk_bar(st.bars,e.startIndex-1)
+                        e.priorTrend:=na(prior)?e.priorTrend:prior.trend
+                        if e.kind!=1
+                            e.armedIndex:=ix
+                            e.armedAt:=t
+                            e.armingId:="arm:"+e.id+":"+str.tostring(t)
+                        if e.kind==2 or e.kind==3
+                            bk_break(st,e,ix,na(e.measuredBoundary)?e.trigger:e.measuredBoundary)
+                        if e.kind==1 and e.recognitionIndex<ix
+                            bk_process(st,s,e,ix,tick,qualified)
+                        if e.stopCheckFrom==ix and bk_broken(e,b,s,tick)
+                            e.status:=3
+                        if e.status==0
+                            array.push(st.pending,e)
+                for e in st.breakouts
+                    int age=ix-e.breakIndex
+                    if not na(age) and age>0 and age<=math.max(s.failedBreakoutBars,s.retestBars)
+                        bool failed=e.side==1?b.c<=e.breakBoundary:b.c>=e.breakBoundary
+                        if failed and age<=s.failedBreakoutBars and not e.failed
+                            e.failed:=true
+                            bk_observation(st,"failed:"+e.id,"failed-breakout",t,0,"Completed close returned inside original boundary; no opposite permission","26,27",e.id)
+                            st.observations+="Failed breakout: "+e.patternId+"; "
+                        else if not failed and age<=s.retestBars and b.h>=e.breakBoundary-e.scale*s.levelToleranceATR and b.l<=e.breakBoundary+e.scale*s.levelToleranceATR and not e.retested
+                            e.retested:=true
+                            bk_observation(st,"retest:"+e.id,"breakout-retest",t,0,"Later retest of original frozen boundary; prior support/resistance may reverse roles","26,27,48",e.id)
+                            st.observations+="Breakout retest: "+e.patternId+"; "
+                if not st.active
+                    st.alternatives:=array.copy(st.fresh)
+                if not st.active and array.size(qualified)>0
+                    int best=bk_choose(qualified,st.fresh)
+                    if best<0
+                        st.reason:="WAIT: conflicting qualified Long and Short evidence"
+                        st.nextCondition:=st.reason
+                    else
+                        st.plan:=array.get(qualified,best)
+                        st.active:=true
+                        array.remove(st.alternatives,best)
+                        bk_alert(st,st.plan.id,"qualified-plan",t)
+                else if st.active
+                    for e in st.fresh
+                        if e.id!=st.plan.eventId
+                            array.push(st.alternatives,e)
+                    while array.size(st.alternatives)>s.maxDrawings
+                        array.shift(st.alternatives)
+                st.opposite:=false
+                if st.active
+                    for e in st.alternatives
+                        if e.side!=st.plan.side
+                            st.opposite:=true
+                    st.reason:=st.plan.name+": frozen "+(st.plan.side==1?"Long":"Short")+" reference plan"+(st.opposite?". Opposite evidence: review":"")
+                    st.nextCondition:="Wait for closed stop/target reference touch or "+str.tostring(s.planExpiryBars)+" candle expiry"
+                else if array.size(st.pending)>0 and st.decisionIndex<ix
+                    BKEvent newest=na
+                    bool foundRelevant=false
+                    for e in st.pending
+                        bool relevant=e.mode==0 or (e.mode== -1?e.priorTrend== -e.side:e.priorTrend==e.side)
+                        if na(newest) or (relevant and not foundRelevant) or (relevant==foundRelevant and (e.endIndex>newest.endIndex or (e.endIndex==newest.endIndex and e.rank<newest.rank)))
+                            newest:=e
+                            foundRelevant:=relevant
+                    st.reason:="WAIT: "+newest.name+" geometry observed"
+                    st.nextCondition:=newest.rule==1?"Very next candle open and green close above body top":newest.rule==2?"Boundary close then next open and directional close beyond":newest.rule==3?"Very next directional close beyond breakout extreme":newest.rule==4?"Later retest and directional close beyond frozen line":"Later directional close one tick outside formation"
+        // Observation lifetimes are independent of the drawing-history cap. Keep each parent until
+        // both configured follow-ups are consumed or out of time, including the inclusive final bar.
+        int followup=array.size(st.breakouts)-1
+        while followup>=0
+            BKEvent parent=array.get(st.breakouts,followup)
+            int age=ix-parent.breakIndex
+            bool failureOpen=not parent.failed and age<=s.failedBreakoutBars
+            bool retestOpen=not parent.retested and age<=s.retestBars
+            if not failureOpen and not retestOpen
+                array.remove(st.breakouts,followup)
+            followup-=1
+        // Complete state records are retained separately from chart objects. None of these removes an active plan.
+        while array.size(st.bars)>640
+            array.shift(st.bars)
+        while array.size(st.events)>600
+            array.shift(st.events)
+        while array.size(st.seen)>16384
+            array.shift(st.seen)
+    0
+// Production guide strings use the same retained decision evidence and settings as the engine.
+bk_trendText(int trend) =>
+    trend==1?"Bull":trend== -1?"Bear":trend==0?"Neutral":"Unavailable"
+bk_modeText(int mode) =>
+    mode== -1?"reversal":mode==1?"continuation":"local breakout"
+bk_contextText(BKState st,BKSettings s) =>
+    string current="Current "+bk_trendText(st.trend)
+    string result=st.active?"Prior "+bk_trendText(st.plan.priorTrend)+" ("+bk_modeText(st.plan.mode)+") | "+current:current
+    result+="\n"+str.upper(s.maType)+str.tostring(s.maFast)+"/"+str.tostring(s.maSlow)+" · "+str.tostring(s.maSlopeBars)+"-bar slope"
+    if st.active and st.trend!=st.plan.side
+        result+="\nBroader MA "+(st.trend==2?"unavailable for ":"conflicts with ")+(st.plan.side==1?"Long":"Short")+(st.plan.mode== -1?"; reversal does not require a crossover":"")
+    result
+bk_planningText(BKSettings s) =>
+    str.tostring(s.targetR)+"R fallback; buffered stop max(1 tick,"+str.tostring(s.stopBufferATR)+" ATR); no guarantee"
+bk_decisionEvidence(BKState st,int limit=4) =>
+    array<int> eligible=array.new<int>()
+    int latestLong=na
+    int latestShort=na
+    if array.size(st.alternatives)>0
+        for j=0 to array.size(st.alternatives)-1
+            BKEvent e=array.get(st.alternatives,j)
+            if not st.active or e.id!=st.plan.eventId
+                array.push(eligible,j)
+                if e.side==1
+                    latestLong:=j
+                else if e.side== -1
+                    latestShort:=j
+    array<int> selected=array.new<int>()
+    // Always expose both sides when both exist. Additional newest evidence is bounded.
+    int cap=math.max(2,math.min(4,limit))
+    if not na(latestLong)
+        array.push(selected,latestLong)
+    if not na(latestShort)
+        array.push(selected,latestShort)
+    int j=array.size(eligible)-1
+    while j>=0 and array.size(selected)<cap
+        int candidate=array.get(eligible,j)
+        if not array.includes(selected,candidate)
+            array.push(selected,candidate)
+        j-=1
+    string result=""
+    for index in selected
+        BKEvent e=array.get(st.alternatives,index)
+        result+=(result==""?"":"\n")+e.name+" ["+(e.side==1?"Long":"Short")+"] · prior "+bk_trendText(e.priorTrend)+" ("+bk_modeText(e.mode)+")\n  "+e.reason
+    int remaining=array.size(eligible)-array.size(selected)
+    if remaining>0
+        result+="\n+"+str.tostring(remaining)+" other qualified observations"
+    result==""?"No additional qualified evidence":result
+// Current structural context only; no event, trigger, plan or alert is created.
+// Each side consumes at most its two latest causally confirmed pivots.
+bk_visibleTrends(BKState st,BKSettings s,int actualLast,int actualTime) =>
+    array<BKSegment> out=array.new<BKSegment>()
+    int reserved=st.active?3:0
+    int capacity=math.max(0,math.min(2,math.min(s.maxLines-reserved,s.maxLabels-reserved)))
+    if s.showTrendLines and capacity>0
+        for d=0 to 1
+            int side=d==0?-1:1
+            array<BKPivot> ps=bk_recentPivots(st.pivots,side,st.lastIndex+1,2)
+            if array.size(ps)==2 and array.size(out)<capacity
+                BKPivot a=array.get(ps,0)
+                BKPivot z=array.get(ps,1)
+                if z.ix-a.ix>=3 and (side== -1?z.price>a.price:z.price<a.price)
+                    float value=bk_project(a,z,actualLast)
+                    if not na(value) and value>0
+                        string role=side== -1?"Support trend":"Resistance trend"
+                        array.push(out,BKSegment.new(bk_point(a),BKPoint.new(actualLast,actualTime,value,role,z.rt),role))
+    out
+// Caption placement is display-only. Confirmation points are not formation OHLC anchors.
+bk_captionAnchor(BKEvent e) =>
+    BKPoint anchor=array.get(e.points,array.size(e.points)-1)
+    if e.kind==0
+        string wanted=e.side== -1?"high":"low"
+        for p in e.points
+            if p.role==wanted
+                anchor:=p
+    anchor
+bk_captionPrice(BKEvent e,float tick) =>
+    BKPoint anchor=bk_captionAnchor(e)
+    float envelope=anchor.price
+    if e.kind==0
+        for p in e.points
+            if p.role=="high" or p.role=="low"
+                envelope:=e.side==1?math.min(envelope,p.price):math.max(envelope,p.price)
+    envelope+(e.side==1?-1:1)*math.max(tick*4,e.scale*0.25)
+// Drawing worklist is computed from actual chart index, including a forming candle.
+// Reserve three lines/labels for the selected frozen plan. Whole formations only.
+bk_geometryCost(BKEvent e) =>
+    (e.kind==0?e.contacts*4:array.size(e.segments))+1 // Include the dotted caption leader.
+bk_visible(BKState st,BKSettings s,int actualLast) =>
+    array<BKEvent> chosen=array.new<BKEvent>()
+    int contextCount=array.size(bk_visibleTrends(st,s,actualLast,0))
+    int lines=(st.active?3:0)+contextCount
+    int labels=(st.active?3:0)+contextCount
+    int j=array.size(st.events)-1
+    while j>=0
+        BKEvent e=array.get(st.events,j)
+        int anchor=e.status==1?e.confirmationIndex:e.endIndex
+        bool eligible=(e.status==1 or (s.showPending and e.status==0)) and (s.showNeutral or e.rank!=4) and (s.fullHistory or anchor>actualLast-s.labelLookback)
+        int cost=bk_geometryCost(e)
+        if eligible and array.size(chosen)<s.maxDrawings and lines+cost<=s.maxLines and labels+1<=s.maxLabels
+            array.push(chosen,e)
+            lines+=cost
+            labels+=1
+        j-=1
+    chosen
+// Unit provenance is symbol scoped; an assertion cannot turn an index/underlying into an option premium.
+bk_unitScope(BKUnits u,string configuredTicker,string actualTicker,string chartType,string actualQuoteCurrency) =>
+    u.validated:=u.validated and configuredTicker!="" and configuredTicker==actualTicker and actualQuoteCurrency!="" and actualQuoteCurrency==u.quoteCurrency and chartType!="index" and (u.unitDefinition!="option-premium" or chartType=="option")
+    u.premiumChart:=chartType=="option"
+    if chartType=="index"
+        u.kind:="index"
+    u
+// BOOK ENGINE END
+// NATIVE ADAPTER / OWNED DISPLAY. This section never places orders.
+string gDisplay="Display — independent Book guide"
+bool showGuide=input.bool(true,"Show guide",group=gDisplay,display=display.none)
+bool fullGuide=input.bool(false,"Full guide",tooltip="Expand all context, alternatives and risk explanations. Compact cells retain full text on hover.",group=gDisplay,display=display.none)
+string guidePosition=input.string(position.top_center,"Guide position",options=[position.top_center,position.top_left,position.middle_left,position.middle_center,position.middle_right,position.bottom_center,position.top_right,position.bottom_left,position.bottom_right],group=gDisplay,display=display.none)
+bool showPending=input.bool(false,"Show pending geometry",group=gDisplay,display=display.none)
+bool showNeutral=input.bool(false,"Show neutral/local patterns",group=gDisplay,display=display.none)
+bool showTrendLines=input.bool(true,"Show confirmed context trend lines",tooltip="At most one rising support and one falling resistance from confirmed pivots. Context only; no new entry or alert.",group=gDisplay,display=display.none)
+bool fullHistory=input.bool(false,"Retained full history (bounded)",group=gDisplay,display=display.none)
+int lookback=input.int(10,"Latest actual chart candles",minval=1,maxval=600,group=gDisplay,display=display.none)
+int drawingLimit=input.int(40,"Maximum complete formations",minval=1,maxval=40,group=gDisplay,display=display.none)
+string gRules="Local pattern rules"
+int pivotLeft=input.int(3,"Pivot left",minval=2,maxval=10,group=gRules,display=display.none)
+int pivotRight=input.int(3,"Pivot right",minval=2,maxval=10,group=gRules,display=display.none)
+string gapPolicy=input.string("explicit","Gap policy",options=["explicit","continuous"],group=gRules,display=display.none)
+bool strictEngulf=input.bool(false,"Require full-range engulfing",group=gRules,display=display.none)
+string maType=input.string("ema","Trend MA type",options=["ema","sma"],group=gRules,display=display.none)
+bool rsiFilter=input.bool(false,"Require RSI14 >50 Long / <50 Short",group=gRules,display=display.none)
+bool macdFilter=input.bool(false,"Require MACD12/26 vs signal9",group=gRules,display=display.none)
+bool volumeFilter=input.bool(false,"Require volume >=1.2 preceding SMA20",group=gRules,display=display.none)
+string gRisk="Independent reference risk — no account connection"
+float equity=input.float(0,"Account equity (0 = unset)",minval=0,group=gRisk,display=display.none)
+float riskPercent=input.float(0.25,"Risk percent",minval=0,maxval=100,step=0.05,group=gRisk,display=display.none)
+float targetR=input.float(3,"Local R target / structural fallback",minval=0.1,step=0.1,group=gRisk,display=display.none)
+float minimumRR=input.float(3,"Minimum reward/risk",minval=0,step=0.1,group=gRisk,display=display.none)
+int expiry=input.int(50,"Plan expiry completed candles",minval=1,maxval=500,group=gRisk,display=display.none)
+float fixedCost=input.float(0,"Fixed round-trip cost",minval=0,group=gRisk,display=display.none)
+float unitCost=input.float(0,"Per-unit round-trip cost",minval=0,group=gRisk,display=display.none)
+float slippage=input.float(0,"Per-unit slippage price",minval=0,group=gRisk,display=display.none)
+string gUnits="Monetary units — must be verified for this exact ticker"
+bool unitsVerified=input.bool(false,"I verified the following monetary unit definition",group=gUnits,display=display.none)
+string unitsTicker=input.string("","Exact verified ticker ID (exchange:ticker)",group=gUnits,display=display.none)
+string productKind=input.string("unverified","Product",options=["unverified","linear","inverse","nonlinear","index"],group=gUnits,display=display.none)
+string unitDefinition=input.string("unverified","Quantity unit",options=["unverified","underlying","contract","option-premium"],group=gUnits,display=display.none)
+string accountCurrency=input.string("","Account currency",group=gUnits,display=display.none)
+string quoteCurrency=input.string("","Verified quote currency",group=gUnits,display=display.none)
+float conversion=input.float(0,"Quote to account currency conversion (0 = unset)",minval=0,group=gUnits,display=display.none)
+float unitValue=input.float(0,"Value per price unit, already per selected quantity unit",minval=0,group=gUnits,display=display.none)
+float quantityStep=input.float(0,"Quantity step (0 = unset)",minval=0,group=gUnits,display=display.none)
+float lotSize=input.float(0,"Units per displayed lot (presentation only)",minval=0,group=gUnits,display=display.none)
+string gAdvanced="Advanced local numerical rules — independent of existing indicators"
+int rule_pivotSpacing=input.int(3,"Pivot Spacing",minval=1,maxval=50,group=gAdvanced,display=display.none)
+int rule_atrPeriod=input.int(14,"Atr Period",minval=1,maxval=200,group=gAdvanced,display=display.none)
+float rule_levelToleranceATR=input.float(0.25,"Level Tolerance  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_equalCandleATR=input.float(0.05,"Equal Candle  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+int rule_minToleranceTicks=input.int(2,"Min Tolerance Ticks",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_shapeMinBars=input.int(12,"Shape Min Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+int rule_shapeMaxBars=input.int(180,"Shape Max Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+float rule_convergenceRatio=input.float(0.75,"Convergence Ratio",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_parallelMaxRatio=input.float(1.25,"Parallel Max Ratio",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_poleMinATR=input.float(3,"Pole Min  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+int rule_poleMinBars=input.int(3,"Pole Min Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+int rule_poleMaxBars=input.int(15,"Pole Max Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+int rule_flagMinBars=input.int(4,"Flag Min Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+int rule_flagMaxBars=input.int(20,"Flag Max Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+float rule_flagMaxRetracement=input.float(0.5,"Flag Max Retracement",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+int rule_cupMinBars=input.int(40,"Cup Min Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+int rule_cupMaxBars=input.int(150,"Cup Max Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+int rule_handleMinBars=input.int(3,"Handle Min Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+int rule_handleMaxBars=input.int(20,"Handle Max Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+float rule_rimToleranceATR=input.float(0.5,"Rim Tolerance  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_cupMinDepthATR=input.float(2,"Cup Min Depth  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_cupMaxDepthFraction=input.float(0.3,"Cup Max Depth Fraction",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_handleMaxDepthFraction=input.float(1 / 3,"Handle Max Depth Fraction",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_dojiBody=input.float(0.1,"Doji Body",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_smallBody=input.float(0.3,"Small Body",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_longBody=input.float(0.6,"Long Body",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_negligibleWick=input.float(0.1,"Negligible Wick",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_dominantWickRatio=input.float(2,"Dominant Wick Ratio",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_marubozuBody=input.float(0.9,"Marubozu Body",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_marubozuWick=input.float(0.05,"Marubozu Wick",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+float rule_spinningWick=input.float(0.3,"Spinning Wick",minval=0,maxval=1,step=0.01,group=gAdvanced,display=display.none)
+int rule_averageBodyPeriod=input.int(14,"Average Body Period",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_candleTriggerBars=input.int(3,"Candle Trigger Bars",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_retestBars=input.int(10,"Retest Bars",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_failedBreakoutBars=input.int(3,"Failed Breakout Bars",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_levelLookback=input.int(200,"Level Lookback",minval=1,maxval=600,group=gAdvanced,display=display.none)
+int rule_multiSwingMinBars=input.int(3,"Multi Swing Min Bars",minval=1,maxval=250,group=gAdvanced,display=display.none)
+int rule_multiSwingMaxBars=input.int(80,"Multi Swing Max Bars",minval=1,maxval=250,group=gAdvanced,display=display.none)
+float rule_reboundATR=input.float(1,"Rebound  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_headDepthATR=input.float(0.5,"Head Depth  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+float rule_shoulderToleranceATR=input.float(0.5,"Shoulder Tolerance  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+int rule_maFast=input.int(20,"Ma Fast",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_maSlow=input.int(50,"Ma Slow",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_maSlopeBars=input.int(5,"Ma Slope Bars",minval=1,maxval=100,group=gAdvanced,display=display.none)
+int rule_trendWarmup=input.int(55,"Trend Warmup",minval=1,maxval=600,group=gAdvanced,display=display.none)
+int rule_rsiPeriod=input.int(14,"Rsi Period",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_macdFast=input.int(12,"Macd Fast",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_macdSlow=input.int(26,"Macd Slow",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_macdSignal=input.int(9,"Macd Signal",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_volumePeriod=input.int(20,"Volume Period",minval=1,maxval=200,group=gAdvanced,display=display.none)
+float rule_volumeExpansion=input.float(1.2,"Volume Expansion",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+int rule_divergenceMinBars=input.int(5,"Divergence Min Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+int rule_divergenceMaxBars=input.int(80,"Divergence Max Bars",minval=1,maxval=500,group=gAdvanced,display=display.none)
+float rule_stopBufferATR=input.float(0.05,"Stop Buffer  ATR",minval=0,maxval=10,step=0.01,group=gAdvanced,display=display.none)
+int rule_staleQuoteSeconds=input.int(15,"Stale Quote Seconds",minval=1,maxval=200,group=gAdvanced,display=display.none)
+int rule_maxLabels=input.int(160,"Max Labels",minval=3,maxval=160,group=gAdvanced,display=display.none)
+int rule_maxLines=input.int(120,"Max Lines",minval=3,maxval=120,group=gAdvanced,display=display.none)
+string rule_disabledPatterns=input.string("","Disabled pattern IDs (comma separated)",group=gAdvanced,display=display.none)
+var BKSettings config=BKSettings.new()
+config.pivotSpacing:=rule_pivotSpacing
+config.atrPeriod:=rule_atrPeriod
+config.levelToleranceATR:=rule_levelToleranceATR
+config.equalCandleATR:=rule_equalCandleATR
+config.minToleranceTicks:=rule_minToleranceTicks
+config.shapeMinBars:=rule_shapeMinBars
+config.shapeMaxBars:=rule_shapeMaxBars
+config.convergenceRatio:=rule_convergenceRatio
+config.parallelMaxRatio:=rule_parallelMaxRatio
+config.poleMinATR:=rule_poleMinATR
+config.poleMinBars:=rule_poleMinBars
+config.poleMaxBars:=rule_poleMaxBars
+config.flagMinBars:=rule_flagMinBars
+config.flagMaxBars:=rule_flagMaxBars
+config.flagMaxRetracement:=rule_flagMaxRetracement
+config.cupMinBars:=rule_cupMinBars
+config.cupMaxBars:=rule_cupMaxBars
+config.handleMinBars:=rule_handleMinBars
+config.handleMaxBars:=rule_handleMaxBars
+config.rimToleranceATR:=rule_rimToleranceATR
+config.cupMinDepthATR:=rule_cupMinDepthATR
+config.cupMaxDepthFraction:=rule_cupMaxDepthFraction
+config.handleMaxDepthFraction:=rule_handleMaxDepthFraction
+config.dojiBody:=rule_dojiBody
+config.smallBody:=rule_smallBody
+config.longBody:=rule_longBody
+config.negligibleWick:=rule_negligibleWick
+config.dominantWickRatio:=rule_dominantWickRatio
+config.marubozuBody:=rule_marubozuBody
+config.marubozuWick:=rule_marubozuWick
+config.spinningWick:=rule_spinningWick
+config.averageBodyPeriod:=rule_averageBodyPeriod
+config.candleTriggerBars:=rule_candleTriggerBars
+config.retestBars:=rule_retestBars
+config.failedBreakoutBars:=rule_failedBreakoutBars
+config.levelLookback:=rule_levelLookback
+config.multiSwingMinBars:=rule_multiSwingMinBars
+config.multiSwingMaxBars:=rule_multiSwingMaxBars
+config.reboundATR:=rule_reboundATR
+config.headDepthATR:=rule_headDepthATR
+config.shoulderToleranceATR:=rule_shoulderToleranceATR
+config.maFast:=rule_maFast
+config.maSlow:=rule_maSlow
+config.maSlopeBars:=rule_maSlopeBars
+config.trendWarmup:=rule_trendWarmup
+config.rsiPeriod:=rule_rsiPeriod
+config.macdFast:=rule_macdFast
+config.macdSlow:=rule_macdSlow
+config.macdSignal:=rule_macdSignal
+config.volumePeriod:=rule_volumePeriod
+config.volumeExpansion:=rule_volumeExpansion
+config.divergenceMinBars:=rule_divergenceMinBars
+config.divergenceMaxBars:=rule_divergenceMaxBars
+config.stopBufferATR:=rule_stopBufferATR
+config.staleQuoteSeconds:=rule_staleQuoteSeconds
+config.maxLabels:=rule_maxLabels
+config.maxLines:=rule_maxLines
+config.disabledPatterns:=rule_disabledPatterns
+config.pivotLeft:=pivotLeft
+config.pivotRight:=pivotRight
+config.gapPolicy:=gapPolicy
+config.strictRangeEngulfing:=strictEngulf
+config.maType:=maType
+config.rsiFilter:=rsiFilter
+config.macdFilter:=macdFilter
+config.volumeFilter:=volumeFilter
+config.equity:=equity
+config.riskPercent:=riskPercent
+config.targetR:=targetR
+config.minRR:=minimumRR
+config.planExpiryBars:=expiry
+config.fixedCost:=fixedCost
+config.perUnitCost:=unitCost
+config.slippagePrice:=slippage
+config.showPending:=showPending
+config.showNeutral:=showNeutral
+config.showTrendLines:=showTrendLines
+config.fullHistory:=fullHistory
+config.labelLookback:=lookback
+config.maxDrawings:=drawingLimit
+var BKState book=bk_state()
+book.units:=BKUnits.new(unitsVerified,productKind,unitDefinition,accountCurrency,quoteCurrency,conversion,unitValue,quantityStep,lotSize,false)
+bk_unitScope(book.units,unitsTicker,syminfo.tickerid,syminfo.type,syminfo.currency)
+// varip is restricted to delivery provenance. No geometry, indicator, pivot, event or plan advances intrabar.
+varip int deliveryBarrier=timenow
+varip int lastTick=na
+varip bool tickReady=false
+bool standard=chart.is_standard
+bool usable=standard and syminfo.mintick>0 and not na(time_close)
+if barstate.isrealtime
+    bool gap=not na(lastTick) and timenow-lastTick>config.staleQuoteSeconds*1000
+    if not usable or gap or not tickReady
+        deliveryBarrier:=math.max(deliveryBarrier,timenow)
+    tickReady:=usable
+    lastTick:=timenow
+int observed=barstate.isrealtime?int(timenow/1000):int(time_close/1000)
+int seconds=int(timeframe.in_seconds())
+book.blockedThrough:=na(book.blockedThrough)?int(deliveryBarrier/1000):math.max(book.blockedThrough,int(deliveryBarrier/1000))
+bk_step(book,config,open,high,low,close,volume,int(time/1000),int(time_close/1000),bar_index,syminfo.mintick,barstate.isconfirmed,usable,barstate.isrealtime,observed,syminfo.prefix+":"+syminfo.ticker,seconds)
+if barstate.isrealtime and barstate.isconfirmed and usable and array.size(book.alerts)>0
+    string message="OpenAlgo Book Patterns & Risk | "+syminfo.tickerid+" | "
+    for item in book.alerts
+        message+=item+"; "
+    alert(message+"Closed price references only; no fills or profitability implied.",alert.freq_once_per_bar_close)
+var array<line> ownedLines=array.new<line>()
+var array<label> ownedLabels=array.new<label>()
+var table guide=table.new(guidePosition,2,16,bgcolor=color.new(color.black,12),frame_color=color.new(color.gray,50),frame_width=1)
+bk_ownedLine(array<line> handles,int t1,float y1,int t2,float y2,color shade,bool dotted=false) =>
+    array.push(handles,line.new(t1,y1,t2,y2,xloc=xloc.bar_time,color=shade,width=1,style=dotted?line.style_dotted:line.style_solid,force_overlay=true))
+    0
+// Bound compact text without discarding its complete hover explanation.
+bk_compact(string value,int limit=64) =>
+    string single=str.replace_all(value,"\n"," · ")
+    str.length(single)>limit?str.substring(single,0,limit-1)+"…":single
+bk_cell(table panel,int row,string key,string value,color shade=color.white) =>
+    table.cell(panel,0,row,key,text_color=color.silver,text_size=size.small,text_halign=text.align_left)
+    table.cell(panel,1,row,fullGuide?value:bk_compact(value),text_color=shade,text_size=size.small,text_halign=text.align_left,tooltip=value)
+    0
+bk_filterText(bool enabled,bool available,bool pass,float value) =>
+    (not enabled?"off":not available?"unavailable":pass?"pass":"fail")+" ["+(na(value)?"unset":str.tostring(value,"#.##"))+"]"
+if barstate.islast
+    for handle in ownedLines
+        line.delete(handle)
+    array.clear(ownedLines)
+    for handle in ownedLabels
+        label.delete(handle)
+    array.clear(ownedLabels)
+    array<BKSegment> contextTrends=bk_visibleTrends(book,config,bar_index,int(time/1000))
+    for trend in contextTrends
+        color shade=trend.role=="Support trend"?color.aqua:color.orange
+        bk_ownedLine(ownedLines,trend.a.t*1000,trend.a.price,trend.b.t*1000,trend.b.price,shade)
+        array.push(ownedLabels,label.new(trend.b.t*1000,trend.b.price,trend.role+" · context",xloc=xloc.bar_time,style=label.style_label_left,color=color.new(shade,80),textcolor=shade,size=size.tiny,force_overlay=true))
+    array<BKEvent> visible=bk_visible(book,config,bar_index)
+    array<int> captionTimes=array.new<int>()
+    array<float> captionPrices=array.new<float>()
+    for e in visible
+        color shade=e.status==0?color.new(color.gray,20):e.side==1?color.new(color.lime,10):color.new(color.red,10)
+        if e.kind==0
+            int p=0
+            while p+1<array.size(e.points)
+                BKPoint a=array.get(e.points,p)
+                BKPoint z=array.get(e.points,p+1)
+                if a.role=="high" and z.role=="low"
+                    int width=int(math.max(1,seconds)*1000/4)
+                    int left=a.t*1000-width
+                    int right=a.t*1000+width
+                    bk_ownedLine(ownedLines,left,a.price,right,a.price,shade,e.status==0)
+                    bk_ownedLine(ownedLines,left,z.price,right,z.price,shade,e.status==0)
+                    bk_ownedLine(ownedLines,left,a.price,left,z.price,shade,e.status==0)
+                    bk_ownedLine(ownedLines,right,a.price,right,z.price,shade,e.status==0)
+                p+=2
+        else
+            for segment in e.segments
+                bk_ownedLine(ownedLines,segment.a.t*1000,segment.a.price,segment.b.t*1000,segment.b.price,shade,e.status==0)
+        BKPoint anchor=bk_captionAnchor(e)
+        float labelY=bk_captionPrice(e,syminfo.mintick)
+        float laneGap=math.max(syminfo.mintick*4,e.scale*0.25)*1.5
+        for lane=0 to 7
+            bool collision=false
+            if array.size(captionTimes)>0
+                for j=0 to array.size(captionTimes)-1
+                    if math.abs(anchor.t-array.get(captionTimes,j))<=seconds*3 and math.abs(labelY-array.get(captionPrices,j))<laneGap
+                        collision:=true
+            if not collision
+                break
+            labelY+=(e.side==1?-1:1)*laneGap
+        array.push(captionTimes,anchor.t)
+        array.push(captionPrices,labelY)
+        bk_ownedLine(ownedLines,anchor.t*1000,anchor.price,anchor.t*1000,labelY,shade,true)
+        string caption=(e.status==0?"Pending ":"")+e.name+" · "+(e.side==1?"Long":e.side== -1?"Short":"Neutral")
+        string tooltip="Photo(s) "+e.photos+"\n"+e.reason+"\nStop: "+e.stopMethod+"\nTarget: "+e.targetMethod+"\nRecognition is causal; outlines are formation candles.\n"+e.id
+        array.push(ownedLabels,label.new(anchor.t*1000,labelY,caption,xloc=xloc.bar_time,style=e.side==1?label.style_label_up:label.style_label_down,color=color.new(shade,65),textcolor=color.white,size=size.tiny,tooltip=tooltip,force_overlay=true))
+    if book.active
+        for j=0 to 2
+            float price=j==0?book.plan.entry:j==1?book.plan.stop:book.plan.target
+            color shade=j==0?color.aqua:j==1?color.red:color.lime
+            string name=j==0?"Entry reference":j==1?"SL reference":"Target reference"
+            int end=na(time_close)?time:time_close
+            bk_ownedLine(ownedLines,book.plan.createdTime*1000,price,end,price,shade)
+            array.push(ownedLabels,label.new(end,price,name+" "+str.tostring(price,format.mintick),xloc=xloc.bar_time,style=label.style_label_left,color=color.new(shade,75),textcolor=color.white,size=size.small,force_overlay=true))
+    table.clear(guide,0,0,1,15)
+    if showGuide
+        BKBar x=array.size(book.bars)>0?array.get(book.bars,array.size(book.bars)-1):na
+        int direction=book.active?book.plan.side:1
+        string availability=not standard?"Unsupported synthetic chart":barstate.isrealtime?"Received live updates":"Last-session / historical references"
+        if not fullGuide
+            bk_cell(guide,0,"Strategy / side",book.active?book.plan.name+" · "+(book.plan.side==1?"Long":"Short")+" · frozen":book.reason,book.active?color.white:color.yellow)
+            bk_cell(guide,1,"Next","Trend "+bk_trendText(book.trend)+" · "+book.nextCondition)
+            bk_cell(guide,2,"Entry / SL / target",book.active?str.tostring(book.plan.entry,format.mintick)+" / "+str.tostring(book.plan.stop,format.mintick)+" / "+str.tostring(book.plan.target,format.mintick):"— / — / —")
+            bk_cell(guide,3,"RR / sizing",book.active?str.tostring(book.plan.rr,"#.##")+"R · "+(not na(book.plan.quantity)?str.tostring(book.plan.quantity)+" units":"Sizing unavailable: "+book.plan.sizeReason):"— · sizing awaits a qualified plan")
+            bk_cell(guide,4,"Status · Details",availability+" · Settings → Full guide",usable?color.aqua:color.orange)
+        else
+            bk_cell(guide,0,"BOOK PATTERNS & RISK",availability,usable?color.aqua:color.orange)
+            bk_cell(guide,1,"Pattern / decision",book.reason,book.active?color.white:color.yellow)
+            bk_cell(guide,2,"Prior/current context",bk_contextText(book,config))
+            bk_cell(guide,3,"Expected / next",book.active?(book.plan.side==1?"Long":"Short")+" | "+book.nextCondition:book.nextCondition)
+            bk_cell(guide,4,"Invalidation",book.active?"SL "+str.tostring(book.plan.stop,format.mintick)+" | "+book.plan.stopMethod:"Pending stop breach, window expiry, changed geometry")
+            bk_cell(guide,5,"Entry / SL / target",book.active?str.tostring(book.plan.entry,format.mintick)+" / "+str.tostring(book.plan.stop,format.mintick)+" / "+str.tostring(book.plan.target,format.mintick):"WAIT — no qualified reference plan")
+            bk_cell(guide,6,"Target method / RR",book.active?book.plan.targetMethod+" · "+str.tostring(book.plan.rr,"#.##")+"R":"Minimum "+str.tostring(minimumRR)+"R; structural targets never stretched")
+            bk_cell(guide,7,"RSI"+str.tostring(config.rsiPeriod)+" / MACD"+str.tostring(config.macdFast)+"/"+str.tostring(config.macdSlow)+"/"+str.tostring(config.macdSignal)+" / V"+str.tostring(config.volumePeriod),na(x)?"unavailable":bk_filterText(rsiFilter,not na(x.rsi),direction==1?x.rsi>50:x.rsi<50,x.rsi)+" | "+bk_filterText(macdFilter,not na(x.signal),direction==1?x.macd>x.signal:x.macd<x.signal,x.macd)+" | "+bk_filterText(volumeFilter,not na(x.vm) and x.v>0,x.v>=config.volumeExpansion*x.vm,x.v))
+            bk_cell(guide,8,"Quantity / lots",book.active and not na(book.plan.quantity)?str.tostring(book.plan.quantity)+" units / "+str.tostring(book.plan.lots)+" lots":book.active?book.plan.sizeReason:"Unset until a qualified plan and verified ticker units")
+            bk_cell(guide,9,"Risk reference",book.active and not na(book.plan.riskCash)?str.tostring(book.plan.riskCash,"#.##")+" "+accountCurrency+" · budget "+str.tostring(book.plan.budget,"#.##"):"Equity "+str.tostring(equity)+" · risk "+str.tostring(riskPercent)+"%")
+            bk_cell(guide,10,"Forming progress",book.active and not barstate.isconfirmed?"Provisional distance SL "+str.tostring(math.abs(close-book.plan.stop),format.mintick)+" / target "+str.tostring(math.abs(close-book.plan.target),format.mintick):"Closed state only; touches are price references")
+            bk_cell(guide,11,"Context only",book.observations==""?"No new cross/divergence/break annotation":book.observations)
+            bk_cell(guide,12,"Local rules",gapPolicy=="continuous"?"Continuous-market local variant: explicit gaps relaxed":"Explicit previous-close/body gaps; source exceptions")
+            bk_cell(guide,13,"Local planning",bk_planningText(config))
+            bk_cell(guide,14,"Sizing scope",unitsTicker==syminfo.tickerid?"Verified units still require positive equity/value/step/FX":"Units unbound for "+syminfo.tickerid+". Margin/exposure not established")
+            bk_cell(guide,15,book.active?"Qualified alternatives":"Qualified evidence / conflict",bk_decisionEvidence(book,4),book.opposite?color.orange:color.white)

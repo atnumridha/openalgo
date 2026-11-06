@@ -1,0 +1,96 @@
+CHART-AWARE UPDATE — 28 October 2026
+The chart layout now uses chart_sd_condor_signals.pine and
+chart_atr_strangle_signals.pine. These original nifty_* files remain unchanged
+as validated NIFTY snapshots. See chart_options_signals_notes.txt for active
+chart routing, other-market configuration and current verification limits.
+
+NIFTY weekly options — individual chart indicators
+Prepared 28 October 2026
+
+FILES
+1. nifty_sd_condor_signals.pine — NIFTY 1.5-SD Condor | Clear Signals
+2. nifty_atr_strangle_signals.pine — NIFTY ATR Strangle | Clear Signals
+
+ONE AT A TIME
+Use a standard NSE:NIFTY chart, 1-minute interval. Each file is an independent
+indicator. Test one, remove that temporary chart instance, then test the other.
+Keep the source files locally if the TradingView account limits saved scripts.
+Enabling only one chart indicator does not necessarily change the account's
+separate saved-script limit. Do not overwrite an unrelated saved script.
+
+SIGNALS
+Green ENTER / HOLD: the configured cycle qualified at the confirmed entry close.
+Red EXIT: the tested premium-stop condition has triggered.
+Yellow WAIT / NO ENTRY / REVIEW: no valid entry, wrong chart, missing quotes,
+or a required stop observation could not be evaluated.
+Blue expiry label: the selected expiry was reached; use official cash settlement.
+Each entry label specifies all legs. These are option-selling combinations,
+not directional BUY CALL / BUY PUT signals. The strangle is unhedged.
+
+CURRENT CYCLE (IST)
+Expiry: 3 November 2026, 15:30.
+SD condor entry: 29 October 2026, 15:25.
+ATR strangle entry: 28 October 2026, 11:15.
+These are single-cycle indicators. Refresh the dates and strike-bank anchors
+for each new expiry; dates are not automatically rolled for exchange holidays.
+
+SD CONDOR
+ATM anchor: 22700 (22650, 22700 and 22750 CE/PE requested).
+Short PE / CE bank centres: 22100 / 23300.
+Hedge PE / CE bank centres: 21650 / 23750.
+Each leg bank covers centre -150 through centre +200 in 50-point steps.
+Strikes use ATM put-call parity, implied volatility and 1.5 standard deviations
+over 3/252 years. Hedge width is 2% of the forward, rounded to 50 points.
+Entry freezes all four legs. Preview values are explicitly not frozen.
+Stop checks the combined debit at 15:25 on subsequent trading days only,
+with a 3x-credit threshold. There is no expiry-day stop in this tested variant.
+
+ATR STRANGLE
+ATM anchor: 22600 (22550, 22600 and 22650 CE/PE requested).
+PE / CE bank centres: 21800 / 23350.
+Each bank covers centre -350 through centre +400 in 50-point steps.
+The pinned 5-week Wilder ATR for this cycle is 632.78997083, computed from
+the research's rolled NSE futures series. Update it for subsequent cycles.
+Setting the override to 0 instead uses TradingView's confirmed previous weekly
+NIFTY1! ATR. Continuous-contract construction may differ from the research.
+Strikes are at least 1.25 ATR from ATM and at least as distant as the selected
+0.05-delta contracts. The closest delta must be within 0.02 and inside the bank.
+Prior-day India VIX >30 blocks entry. Stop is 2.5x entry credit, or 3x if the
+entry VIX is >18, evaluated on every confirmed in-session minute.
+
+DATA AND EXECUTION
+Only exact-minute quotes qualify; entry legs must have positive traded volume.
+An unavailable symbol returns missing data rather than crashing the indicator.
+Missing entry data gives NO ENTRY. It never inserts a late replacement entry.
+A missing required stop observation gives REVIEW - DATA GAP. The script cannot
+infer whether a stop would have filled during that gap.
+The strike banks keep the number of requested symbols within TradingView's
+request limits. Adjust bank centres if a required contract is outside the bank.
+
+The credit shown is a signal-minute close reference. It is not a broker fill.
+An optional Actual filled net credit input can set the stop reference for an
+already executed combination. This does not create or validate any fill.
+The historical research used next-minute-open execution and trading costs;
+these indicators do not calculate that backtest P&L or promise its win rate.
+Expiry labels do not treat last-traded option premiums as official settlement.
+Alerts are signals only. Neither file submits orders or manages broker positions.
+
+VERIFICATION STATUS
+20 focused local Pine execution tests passed, including lifecycle, full-script
+missing-quote paths, and an independent option-pricing/IV benchmark. The full
+local Pine test suite passed 139/139 cases on 28 October 2026.
+Both sources also compiled and ran successfully in TradingView on NSE:NIFTY,
+1 minute, on 28 October 2026. Each loaded 38/38 exact-bar option quotes.
+SD: WAIT for 29 Oct 15:25 IST; preview shorts 22100 PE / 23300 CE.
+ATR: entry at the 28 Oct 11:15 close, shorts 21650 PE / 23400 CE, credit
+reference 21.25, stop threshold 53.13; latest observed debit 16.60 and HOLD.
+The readable green entry label was verified on the historical chart.
+These observations are an open-cycle signal check, not a completed trade
+result. The earlier Kotak snapshot selected a different put strike (21700)
+with incomplete data, so this TradingView case must not be treated as an
+exact reproduction of that data source or the historical performance report.
+The layout contains the separate chart instances with ATR visible and SD
+hidden. Saving and reloading the layout retained both instances and their
+visibility states. Use the eye icon beside each name to switch one off before
+enabling the other. Private-library saving is a separate account-plan limit.
+Chart: https://in.tradingview.com/chart/lyqjV7r1/?symbol=NSE%3ANIFTY

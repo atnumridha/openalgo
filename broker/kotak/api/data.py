@@ -8,7 +8,7 @@ import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_brexchange, get_token
-from utils.httpx_client import get_httpx_client
+from broker.kotak.api.market_data_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -296,7 +296,10 @@ class BrokerData:
             # quarter of the budget for the length of the wait.
             for attempt in range(QUOTES_MAX_RETRIES + 1):
                 with _quotes_gate:
-                    response = client.get(url, headers=headers, timeout=QUOTES_TIMEOUT)
+                    response = client.get(
+                        url, headers=headers,
+                        timeout=httpx.Timeout(QUOTES_TIMEOUT, connect=5.0, pool=5.0),
+                    )
                 if response.status_code != 429:
                     break
                 if attempt == QUOTES_MAX_RETRIES:
@@ -978,7 +981,10 @@ class BrokerData:
         # already exhausted, and would blame the symbol for a pacing problem.
         for attempt in range(HISTORY_MAX_RETRIES + 1):
             _history_pace()
-            response = client.get(url, headers=headers, timeout=60)
+            response = client.get(
+                url, headers=headers,
+                timeout=httpx.Timeout(20.0, connect=5.0, pool=5.0),
+            )
             if response.status_code != 429:
                 break
             if attempt == HISTORY_MAX_RETRIES:

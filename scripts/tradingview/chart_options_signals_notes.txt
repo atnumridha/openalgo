@@ -1,0 +1,85 @@
+CHART-AWARE SD CONDOR AND ATR STRANGLE
+Updated 28 October 2026
+
+The active chart determines the underlying market. These remain separate
+option-selling combination indicators, with one enabled at a time.
+Use standard 1-minute candles and confirmed closes.
+
+AUTOMATIC MARKET IDENTIFICATION
+NSE:NIFTY, NSE:BANKNIFTY and BSE:SENSEX, plus their recognized dated C/P option
+tickers. The table identifies the chart and underlying. Similar names such as
+NIFTYBEES and NIFTY100 do not silently map to NIFTY. Underlying prices select
+strikes; option-chart premiums are used only to position labels. Underlying
+strike-price plots are suppressed on option charts.
+
+NIFTY DEFAULT CYCLE
+The prior 3 November 2026 expiry setup is preserved. SD entry 29 October 15:25;
+ATR entry 28 October 11:15 IST. Dates and anchors do not roll automatically.
+The unchanged nifty_* sources remain local snapshots of the original version.
+
+CONFIGURING ANOTHER MARKET OR CYCLE
+Enable Use configured cycle below. Bind Configured underlying to the detected
+market, set exact entry/expiry times and timezone/session, then supply the ATM
+and leg-bank centres. Use the strike interval supported by that expiry; preset
+intervals are 50 for NIFTY and 100 for BANKNIFTY/SENSEX. An explicit interval
+can override them for a configured cycle, including fractional increments.
+For SD, configure both hedge-bank centres and the trading-session horizon.
+For ATR, supply that market's 5-week ATR or continuous future feed, and a
+prior-day annualized volatility percentage or volatility-index feed. NIFTY's
+pinned ATR and India VIX are never silently used for a different market.
+
+Verify the option symbol template against an actual TradingView contract.
+Tokens: {root}, {expiry}, {side}, {strike}. Default NSE-style template is
+{root}{expiry}{side}{strike}, date yyMMdd, side C/P. Custom roots must include
+the exchange. BSE and other markets require verification of their actual feed
+and contract format before configuration. Missing symbols produce WAIT/no
+entry rather than an invalid-symbol runtime failure.
+
+Only European cash-settled options quoted in underlying price units fit the
+current pricing model. Configured profiles require acknowledgment of this
+condition. American exercise, inverse/coin-denominated premiums, and physical
+delivery need different modelling and are not validated by this adaptation.
+For other markets bind an exact underlying ID. To display on another option
+chart, also bind that exact chart ID and its verified expiry/settlement time.
+Changing the configured cycle without matching that expiry blocks signals.
+
+DATA COVERAGE
+Fixed banks request at most 39 contexts per indicator, including base feeds.
+ATR scans 15 strikes per side plus the three-strike ATM bank; SD retains four
+eight-strike leg banks plus ATM. Adjust bank centres when required strikes fall
+outside coverage. New strike contexts are not added during realtime execution.
+Underlying source-bar sequence detects missing option-chart candles even over
+session boundaries. Missing required observations give REVIEW - DATA GAP;
+this state is persistent through the open cycle. The script cannot infer a
+stop fill from unseen bars. Holidays do not count as gaps when the underlying
+also has no bars. Custom feeds with different sessions may conservatively
+require review. A chart with sparse bars can therefore differ in coverage
+status from the underlying chart while retaining the same entry legs.
+
+VALIDATION
+No historical win-rate claim transfers to other markets. Non-NIFTY profiles
+are explicitly labelled ADAPTED RULES - NOT BACKTESTED. Synthetic tests prove
+routing/math behavior, not market profitability or available option liquidity.
+Signals and quoted credits are not broker fills; no orders are submitted.
+
+LOCAL VERIFICATION
+26 focused PineTS execution tests and the full 165-case Pine suite passed. Tests include exact routing, expiry
+binding, fractional strike/template support, stale underlying data, missing
+quotes, session-boundary gaps, NIFTY snapshot regression, context bounds, and
+an explicitly configured synthetic non-NIFTY market using its own price scale.
+
+TRADINGVIEW OBSERVATIONS
+Both chart-aware indicators compiled successfully on 28 October 2026.
+NIFTY index: ATR retained PE 21650 / CE 23400, credit 21.25, stop 53.13,
+HOLD, 36/36 fresh option quotes. SD retained WAIT for 29 October 15:25 and
+preview PE 22100 / CE 23300, with 38/38 fresh option quotes.
+NIFTY 3 November 22700 CE chart: ATR retained the same entry legs/credit but
+reported REVIEW - DATA GAP. This is incomplete chart coverage, not a new
+entry or a proven loss/win. Index-scale strike lines did not distort premiums.
+SENSEX chart: auto-detected BSE:SENSEX; displayed WAIT - CONFIGURE BSE:SENSEX,
+empty NIFTY legs and unvalidated adaptation status. No SENSEX trade was tested.
+
+PERSISTENCE
+TradingView reported All changes saved. Reloading the NIFTY 1-minute layout
+retained both chart-aware indicators with ATR visible and SD hidden.
+Chart: https://in.tradingview.com/chart/lyqjV7r1/?symbol=NSE%3ANIFTY

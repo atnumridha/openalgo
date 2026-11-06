@@ -1,0 +1,256 @@
+//@version=6
+indicator("Chart Entry Exit • SL • Support Resistance [Research]", shorttitle="ENTRY EXIT S/R", overlay=true, max_labels_count=300, max_lines_count=100)
+
+// Independent long-only chart-price rule set. No broker positions or orders are read.
+// A CE or PE chart is bought on rising premium. Historical labels are signal references.
+swingBars = input.int(3, "Swing confirmation: left / right bars", minval=1, maxval=20, group="Setup")
+emaLength = input.int(21, "Trend EMA", minval=2, group="Setup")
+retestBars = input.int(8, "Retest must occur within bars", minval=1, maxval=30, group="Setup")
+touchATR = input.float(0.15, "Retest tolerance in ATR", minval=0, step=0.05, group="Setup")
+stopATR = input.float(0.1, "SL buffer in ATR (minimum 2 ticks)", minval=0, step=0.05, group="Risk")
+rewardR = input.float(2.0, "Target reward / risk", minval=1, step=0.25, group="Risk")
+minimumR = input.float(1.5, "Minimum room to next resistance (R)", minval=0.5, step=0.25, group="Risk")
+cooldownBars = input.int(3, "Bars to wait after exit", minval=1, group="Risk")
+useIndiaHours = input.bool(true, "NSE / BSE: entry 09:20–15:00, exit 15:15 IST", group="Session")
+showLevels = input.bool(true, "Show support / resistance", group="Display")
+showEMA = input.bool(false, "Show trend EMA", group="Display")
+showHistory = input.bool(true, "Show historical entry / exit labels", group="Display")
+
+// LEVEL CORE START
+f_levels(bool confirmed) =>
+    float ph = ta.pivothigh(high, swingBars, swingBars)
+    float pl = ta.pivotlow(low, swingBars, swingBars)
+    var array<float> levels = array.new_float()
+    if confirmed
+        if not na(ph)
+            array.push(levels, ph)
+        if not na(pl)
+            array.push(levels, pl)
+        while array.size(levels) > 40
+            array.shift(levels)
+    float support = na
+    float resistance = na
+    if array.size(levels) > 0
+        for i = 0 to array.size(levels) - 1
+            float v = array.get(levels, i)
+            if v < close and (na(support) or v > support)
+                support := v
+            if v > close and (na(resistance) or v < resistance)
+                resistance := v
+    [support, resistance]
+// LEVEL CORE END
+
+// TRADE CORE START
+// phase: 0 flat, 1 awaiting retest, 2 signal trade.
+// event: 1 entry, 2 target, 3 SL, 4 ambiguous, 5 session exit, 6 data gap, 8 gap SL.
+// reason: 0 breakout needed, 1 retest pending, 2 expired, 3 invalidated,
+//         4 insufficient room, 5 unavailable, 6 cooldown, 7 signal trade.
+f_trade(float priorResistance, float overhead, float atr, bool trend, bool confirmed, bool eligible, bool flatten, bool gap) =>
+    var int phase = 0
+    var int armedBar = na
+    var int entryBar = na
+    var int lastExit = na
+    var float level = na
+    var float entry = na
+    var float stop = na
+    var float target = na
+    var int reason = 0
+    int event = 0
+    float exitRef = na
+    if confirmed
+        bool cooling = not na(lastExit) and bar_index - lastExit <= cooldownBars
+        if gap
+            if phase == 2
+                event := 6
+                lastExit := bar_index
+            phase := 0
+            reason := 5
+        else if phase == 2 and bar_index > entryBar
+            if open <= stop
+                event := 8
+                exitRef := open
+            else if open >= target
+                event := 2
+                exitRef := target
+            else if low <= stop and high >= target
+                event := 4
+            else if low <= stop
+                event := 3
+                exitRef := stop
+            else if high >= target
+                event := 2
+                exitRef := target
+            else if flatten
+                event := 5
+                exitRef := close
+            if event > 0
+                phase := 0
+                lastExit := bar_index
+                reason := 6
+        else if not eligible or flatten or na(atr) or atr <= 0
+            phase := 0
+            reason := 5
+        else if phase == 1
+            if bar_index - armedBar > retestBars
+                phase := 0
+                reason := 2
+            else if close < level - atr * touchATR
+                phase := 0
+                reason := 3
+            else if bar_index > armedBar and low <= level + atr * touchATR and close > level and close > open and trend
+                float pad = math.max(2 * syminfo.mintick, atr * stopATR)
+                float suggestedSL = math.floor((math.min(low, level) - pad) / syminfo.mintick + 0.00000001) * syminfo.mintick
+                float risk = close - suggestedSL
+                float proposedTarget = close + rewardR * risk
+                if not na(overhead)
+                    proposedTarget := math.min(proposedTarget, overhead - syminfo.mintick)
+                proposedTarget := math.floor(proposedTarget / syminfo.mintick + 0.00000001) * syminfo.mintick
+                float rr = risk > 0 ? (proposedTarget - close) / risk : 0
+                if suggestedSL > 0 and risk > 0 and rr + 0.00000001 >= minimumR
+                    entry := close
+                    stop := suggestedSL
+                    target := proposedTarget
+                    entryBar := bar_index
+                    phase := 2
+                    event := 1
+                    reason := 7
+                else
+                    phase := 0
+                    reason := 4
+        else if phase == 0
+            reason := cooling ? 6 : 0
+            if not cooling and trend and not na(priorResistance) and close[1] <= priorResistance and close > priorResistance and close > open
+                level := priorResistance
+                armedBar := bar_index
+                phase := 1
+                reason := 1
+    [phase, event, entry, stop, target, level, exitRef, reason]
+// TRADE CORE END
+
+// SESSION CORE START
+f_session(bool india, bool standard, bool intraday, bool confirmed) =>
+    int minuteOpen = hour(time, "Asia/Kolkata") * 60 + minute(time, "Asia/Kolkata")
+    int minuteEnd = hour(time_close, "Asia/Kolkata") * 60 + minute(time_close, "Asia/Kolkata")
+    bool sessionAllowed = not india or (minuteOpen >= 560 and minuteEnd <= 900)
+    bool flatten = india and minuteEnd >= 915
+    bool gap = not na(time_close[1]) and time > time_close[1]
+    int previousEnd = hour(time_close[1], "Asia/Kolkata") * 60 + minute(time_close[1], "Asia/Kolkata")
+    bool scheduledBreak = india and gap and minuteOpen == 555 and previousEnd >= 915 and dayofmonth(time, "Asia/Kolkata") != dayofmonth(time[1], "Asia/Kolkata")
+    var int recoveryBars = 3
+    if confirmed
+        recoveryBars := gap and not scheduledBreak ? 0 : recoveryBars + 1
+    bool eligible = standard and intraday and sessionAllowed and bar_index >= math.max(emaLength, 15) and recoveryBars >= 3
+    [eligible, flatten, gap]
+// SESSION CORE END
+
+float ema = ta.ema(close, emaLength)
+float atr = ta.atr(14)
+bool confirmed = barstate.isconfirmed
+bool india = useIndiaHours and (syminfo.prefix == "NSE" or syminfo.prefix == "BSE")
+[eligible, flatten, gap] = f_session(india, chart.is_standard, timeframe.isintraday, confirmed)
+bool trend = close > ema and ema > ema[1]
+[support, resistance] = f_levels(confirmed)
+[phase, event, entry, stop, target, retestLevel, exitRef, reason] = f_trade(resistance[1], resistance, atr, trend, confirmed, eligible, flatten, gap)
+
+f_price(float v) => na(v) ? "—" : str.tostring(v, format.mintick)
+f_exit(int e) =>
+    switch e
+        2 => "TARGET TOUCHED"
+        3 => "SL TOUCHED"
+        4 => "SL + TARGET: ORDER UNKNOWN"
+        5 => "SESSION EXIT"
+        6 => "DATA GAP: REVIEW TRADE"
+        8 => "GAP BELOW SL"
+        => ""
+f_reason(int r) =>
+    switch r
+        1 => "Retest above " + f_price(retestLevel)
+        2 => "Retest expired — wait for new breakout"
+        3 => "Retest failed — wait for new breakout"
+        4 => "Too little room to resistance"
+        5 => "Waiting for session / continuous bars"
+        6 => "Cooldown — wait for a new setup"
+        7 => "Follow fixed SL and target"
+        => "Wait for resistance breakout + retest"
+
+color green = color.rgb(0, 198, 132)
+color red = color.rgb(255, 82, 100)
+color yellow = color.rgb(255, 205, 74)
+color blue = color.rgb(75, 155, 255)
+color bg = color.rgb(17, 24, 34)
+bool active = phase == 2
+plot(showLevels ? support : na, "Confirmed support", color=color.new(color.aqua, 30), linewidth=2, style=plot.style_stepline)
+plot(showLevels ? resistance : na, "Confirmed resistance", color=color.new(color.orange, 25), linewidth=2, style=plot.style_stepline)
+plot(showEMA ? ema : na, "Trend EMA", color=color.new(color.white, 60))
+plot(active or event > 1 ? entry : na, "Entry reference", color=blue, linewidth=2, style=plot.style_linebr)
+plot(active or event > 1 ? stop : na, "Suggested SL", color=red, linewidth=2, style=plot.style_linebr)
+plot(active or event > 1 ? target : na, "Target", color=green, linewidth=2, style=plot.style_linebr)
+plot(phase == 1 ? retestLevel : na, "Waiting retest", color=yellow, linewidth=2, style=plot.style_linebr)
+
+if showHistory and event == 1
+    label.new(bar_index, low, "BUY • ENTRY " + f_price(entry) + "\nSL " + f_price(stop) + "  |  TARGET " + f_price(target), style=label.style_label_up, color=green, textcolor=color.black, size=size.normal)
+if showHistory and event > 1
+    label.new(bar_index, high, "EXIT • " + f_exit(event) + (na(exitRef) ? "" : "\nReference " + f_price(exitRef)), style=label.style_label_down, color=event == 2 ? green : event == 4 or event == 6 ? yellow : red, textcolor=color.black, size=size.normal)
+
+// Price tags are replaced on the latest candle; historical entry/exit labels remain.
+var label supportTag = na
+var label resistanceTag = na
+var label stopTag = na
+var label targetTag = na
+var label entryTag = na
+var int lastEventTime = na
+var string lastEventText = "No signal in loaded bars"
+if event > 0
+    lastEventTime := time_close
+    lastEventText := event == 1 ? "ENTRY " + f_price(entry) : f_exit(event)
+
+var table panel = table.new(position.top_right, 2, 9, bgcolor=bg, border_width=1, border_color=color.rgb(42, 51, 65))
+if barstate.islast
+    label.delete(supportTag)
+    label.delete(resistanceTag)
+    label.delete(stopTag)
+    label.delete(targetTag)
+    label.delete(entryTag)
+    if showLevels and not na(support)
+        supportTag := label.new(bar_index + 2, support, "SUPPORT " + f_price(support), style=label.style_label_left, color=color.new(color.aqua, 15), textcolor=color.black)
+    if showLevels and not na(resistance)
+        resistanceTag := label.new(bar_index + 2, resistance, "RESISTANCE " + f_price(resistance), style=label.style_label_left, color=color.orange, textcolor=color.black)
+    if active
+        stopTag := label.new(bar_index + 6, stop, "SL " + f_price(stop), style=label.style_label_left, color=red, textcolor=color.white)
+        targetTag := label.new(bar_index + 6, target, "TARGET " + f_price(target), style=label.style_label_left, color=green, textcolor=color.black)
+        entryTag := label.new(bar_index + 6, entry, "ENTRY " + f_price(entry), style=label.style_label_left, color=blue, textcolor=color.white)
+    bool stale = timenow > time_close + timeframe.in_seconds() * 2000
+    string decision = event == 1 ? "BUY THIS CHART" : event > 1 ? "EXIT / REVIEW" : active ? "HOLD • SIGNAL TRADE" : phase == 1 ? "WAIT • RETEST" : "WAIT"
+    string detail = event > 1 ? f_exit(event) : f_reason(reason)
+    if not chart.is_standard or not timeframe.isintraday
+        decision := "USE INTRADAY CANDLES"
+        detail := "Standard candles required"
+    else if stale
+        decision := "MARKET CLOSED / NO NEW BARS"
+        detail := active ? "Last signal trade still tracked — review" : "Historical signals shown on chart"
+    color stateColor = stale ? yellow : event > 1 ? (event == 2 ? green : red) : active ? green : yellow
+    table.cell(panel, 0, 0, "ENTRY / EXIT • RESEARCH", text_color=color.white, bgcolor=color.rgb(35, 59, 86), text_size=size.normal)
+    table.cell(panel, 1, 0, syminfo.ticker + " • " + timeframe.period, text_color=color.white, text_size=size.normal)
+    table.cell(panel, 0, 1, "Decision", text_color=color.silver)
+    table.cell(panel, 1, 1, decision, text_color=stateColor, text_size=size.normal)
+    table.cell(panel, 0, 2, "Reason", text_color=color.silver)
+    table.cell(panel, 1, 2, detail, text_color=color.white)
+    table.cell(panel, 0, 3, "Entry reference", text_color=color.silver)
+    table.cell(panel, 1, 3, active ? f_price(entry) : "— (no active signal trade)", text_color=blue)
+    table.cell(panel, 0, 4, "Suggested SL", text_color=color.silver)
+    table.cell(panel, 1, 4, active ? f_price(stop) + "  |  Risk " + str.tostring((entry-stop)/entry*100, "#.##") + "%" : "—", text_color=red)
+    table.cell(panel, 0, 5, "Target", text_color=color.silver)
+    table.cell(panel, 1, 5, active ? f_price(target) + "  |  " + str.tostring((target-entry)/(entry-stop), "#.##") + "R" : "—", text_color=green)
+    table.cell(panel, 0, 6, "Support / Resistance", text_color=color.silver)
+    table.cell(panel, 1, 6, f_price(support) + " / " + f_price(resistance), text_color=color.aqua)
+    table.cell(panel, 0, 7, "Last event", text_color=color.silver)
+    table.cell(panel, 1, 7, lastEventText + (na(lastEventTime) ? "" : "\n" + str.format_time(lastEventTime, "dd MMM HH:mm", syminfo.timezone) + " " + syminfo.timezone), text_color=color.silver)
+    table.cell(panel, 0, 8, "Signal tracking only", text_color=yellow)
+    table.cell(panel, 1, 8, "Not linked to broker • close-confirmed", text_color=color.silver)
+
+alertcondition(event == 1, "BUY — chart entry", "BUY signal on {{ticker}} {{interval}}. Entry {{close}}. See fixed suggested SL and target on chart. Signal only.")
+alertcondition(event > 1, "EXIT / REVIEW — chart trade", "EXIT or REVIEW signal on {{ticker}} {{interval}}. Read chart exit reason. No broker order is placed.")
+if event == 1
+    alert("BUY " + syminfo.tickerid + " | Entry " + f_price(entry) + " | SL " + f_price(stop) + " | Target " + f_price(target), alert.freq_once_per_bar_close)
+else if event > 1
+    alert(syminfo.tickerid + " | " + f_exit(event) + " | Exit reference " + f_price(exitRef), alert.freq_once_per_bar_close)

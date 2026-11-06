@@ -13,7 +13,7 @@ export const optionChainApi = {
     underlying: string,
     exchange: string,
     expiryDate: string,
-    strikeCount?: number,
+    strikeCount?: number | null,
     options: { withGreeks?: boolean } = {}
   ): Promise<OptionChainResponse> => {
     const response = await apiClient.post<OptionChainResponse>('/optionchain', {
@@ -21,7 +21,7 @@ export const optionChainApi = {
       underlying,
       exchange,
       expiry_date: expiryDate,
-      strike_count: strikeCount ?? 20,
+      strike_count: strikeCount === null ? null : strikeCount ?? 20,
       ...(options.withGreeks ? { with_greeks: true } : {}),
     })
     return response.data

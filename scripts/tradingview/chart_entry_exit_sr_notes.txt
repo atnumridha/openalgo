@@ -1,0 +1,27 @@
+CHART ENTRY / EXIT + SUGGESTED SL + SUPPORT / RESISTANCE
+
+This is a separate research indicator for the exact symbol on the chart. It does not read, modify or protect a broker position. A blue broker position line can coexist with independent signal-trade levels.
+
+Read the chart:
+- Cyan SUPPORT and orange RESISTANCE: nearest confirmed swing levels. A swing becomes available only after its right-side confirmation bars. Levels change as price and confirmed swings change.
+- Yellow WAIT / RETEST: no entry yet. A resistance breakout must close above a rising EMA21, then a later bullish candle must retest the broken level within 8 bars and close back above it.
+- Green BUY / ENTRY: a confirmed entry reference on that exact chart. On CE and PE charts alike, this means buying the premium; it does not select the opposite option.
+- Red SL: fixed suggested stop below the retest low/broken resistance, with an ATR/tick buffer.
+- Green TARGET: up to 2R, capped below a known resistance. A setup with less than 1.5R room is rejected.
+- EXIT label: target touched, SL touched, session close, gap below SL, ambiguous range, or missing-data review. SL and target touch reporting occurs at candle close. It is not an immediately active protective broker order.
+
+Defaults are intraday standard candles. NSE/BSE: entries 09:20 to 15:00 IST; session exit at the first bar closing at/after 15:15. Other exchanges: continuous intraday entries, with gaps ending signal tracking if outcomes cannot be established. Larger chart intervals mean later exit reporting. Historical fills are not promised.
+
+If WAIT or MARKET CLOSED is displayed, there is no new entry instruction. Historical signals remain visible. Entry/SL/target fields are blank when there is no active signal trade. Existing broker positions are not automatically adopted.
+
+Validation on 28 October 2026:
+- 18 focused Pine tests passed, including the actual session wrapper on multi-day 30-minute bars. Full local Pine suite: 183 passed.
+- Production Pine logic replayed across 7,696 cached one-minute bars from 10 NIFTY CE/PE contracts, 27–28 October 2026.
+- Final defaults: 26 entries; 9 gross positive exits, 16 gross negative exits, 1 unknown; 0 left open. 36% positive among 25 determinate exits, before spread, fees and slippage.
+- This small, correlated two-day sample is a behavior/replay check, not proof of an edge. It fails the requested 80% win-rate threshold. No parameter optimization was done to inflate results. Previous condor/strangle win rates do not apply.
+- Current chart 23050 CE is not one of these cached ten contracts. Native TradingView compilation and display verified on NSE:NIFTY261103C23050 1 minute. Layout saved with only ENTRY EXIT S/R visible among the custom indicators. Current market-closed panel shows support 49.70 / resistance 50.55 and no active signal trade; these are historical chart observations, not a current entry recommendation.
+
+Source: chart_entry_exit_sr.pine. Detailed local replay: workspace/chart-entry-exit-sr/replay-results.json.
+
+TradingView explains why close-confirmed signals arrive later than intrabar signals:
+https://www.tradingview.com/pine-script-docs/concepts/repainting/

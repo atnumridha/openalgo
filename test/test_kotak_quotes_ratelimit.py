@@ -111,7 +111,9 @@ def test_request_carries_an_explicit_timeout(broker_data):
     with patch.object(kotak_data, "get_httpx_client", return_value=client):
         broker_data._make_quotes_request("nse_cm|Nifty 50")
 
-    assert calls[0]["timeout"] == kotak_data.QUOTES_TIMEOUT
+    assert calls[0]["timeout"].read == kotak_data.QUOTES_TIMEOUT
+    assert calls[0]["timeout"].connect == 5.0
+    assert calls[0]["timeout"].pool == 5.0
     assert 0 < kotak_data.QUOTES_TIMEOUT <= 30
 
 

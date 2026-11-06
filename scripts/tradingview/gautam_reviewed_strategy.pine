@@ -1,0 +1,326 @@
+//@version=6
+strategy("Gautam Jha | Reviewed DQRS · 1 BTC", shorttitle="GJ Reviewed 1 BTC", overlay=true, pyramiding=0, initial_capital=100000, currency=currency.USD, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.059, slippage=1, calc_on_order_fills=false, calc_on_every_tick=false, process_orders_on_close=false, use_bar_magnifier=false, margin_long=100, margin_short=100)
+// Retrospective approved ledger only: not the author's own signals or fills.
+// Source-only DQRS variant: original next-candle break, own stop, 80/20 at two
+// manually selected prior swings. No automatic Paper Trading connection.
+int testFrom = input.time(timestamp("28 Sep 2026 02:40 +0000"), "Test from (inclusive)", group="Window")
+int testUntil = input.time(timestamp("28 Oct 2026 02:40 +0000"), "Test until (exclusive)", group="Window")
+// REVIEWED LEDGER START
+string reviewedLedger = input.text_area("1790563200000,1,83491,83416.5,83541.5,83690,1\n1790563740000,1,83415,83370.5,83508,83541.5,2\n1790565180000,1,83417,83341.5,83455.5,83463.5,4\n1790566440000,1,83254,83180.5,83351.5,83402.5,7\n1790573160000,1,83042,82976.5,83237.5,83315.5,9\n1790573700000,1,82909,82879,83099.5,83237.5,10\n1790573940000,1,82772.5,82658.5,82909,83099.5,11\n1790586600000,1,82641.5,82586,82762.5,82976,12\n1790771760000,-1,84558,84726.5,84234,83736,14\n1790772060000,-1,84880.5,85029.5,84507.5,84234,15\n1790773800000,-1,85429,85562,85241,85070.5,18\n1790914920000,-1,86163.5,86376,85519,85419.5,23\n1790915460000,-1,86669,86850,86163.5,85519,24\n1791096900000,-1,85014,85031.5,84915,84877,27\n1791100920000,-1,85086,85147.5,84977.5,84890.5,28\n1791102540000,-1,85095,85158.5,85079,85048,29\n1791106260000,-1,85211.5,85227.5,85156.5,85004,31\n1791106980000,-1,85216.5,85258,85163,85150,32\n1791109200000,-1,85314,85352,85180,85163,34\n1791127260000,-1,85354,85440.5,85301.5,85198.5,35\n1791142320000,-1,85449,85503,85420,85356,36\n1791142500000,-1,85480.5,85512.5,85449,85420,37\n1791146280000,-1,85533.5,85636.5,85402,85358,38\n1791146940000,-1,85772,85806,85677.5,85532.5,40\n1791147780000,-1,85805,85853,85747,85733,41\n1791148320000,-1,85983.5,86013,85833.5,85807,42\n1791151380000,-1,85982.5,86191,85780,85755,43\n1791151620000,-1,86143.5,86219.5,86009.5,85982.5,44\n1791163560000,-1,86833.5,86879.5,86670,86642.5,48\n1791163740000,-1,86907.5,86964,86833.5,86670,49\n1791338820000,1,83827.5,83588,83847,84172.5,52\n1791376140000,1,83458.5,83402,83559,83578,55\n1791377220000,1,83474,83377,83499.5,83690,56\n1791378600000,1,83455.5,83353.5,83520,83690,59\n1791379560000,1,83323.5,83216,83359.5,83459.5,60\n1791380400000,1,83160,83073,83404.5,83440,62\n1791380880000,1,83004.5,82715,83100,83179,64\n1791429720000,1,82829,82705,82851,82922.5,65\n1791433260000,1,82363,82223,82671,82725,67\n1791466980000,1,82067,81728.5,82100,82120.5,69\n1791473520000,1,81484,81178,81540.5,81726,73\n1791473880000,1,81213.5,80917,81249.5,81500,75\n1791478920000,1,80922.5,80707,80940.5,81060.5,78\n1791480420000,1,80552.5,80401.5,80669.5,80870.5,82\n1791701220000,-1,83152.5,83165,82991,82988.5,83\n1791702240000,-1,83129,83186,83119.5,83090,84\n1791720840000,-1,83176,83230.5,83143,83122.5,85\n1791733380000,-1,83365.5,83390,83342.5,83203.5,89\n1791733800000,-1,83421.5,83443,83350,83342.5,90\n1791736980000,-1,83945.5,84008.5,83760,83720,94\n1791740220000,-1,84092.5,84146,83925.5,83778.5,95\n1791781500000,-1,84155,84219.5,84123.5,84070.5,96\n1791808620000,1,82796,82609,83055,83182,98\n1791810240000,1,82696.5,82640,82772.5,82777,99\n1791810780000,1,82630,82585,82697,82740.5,100\n1791810900000,1,82593,82517.5,82650,82697,101\n1791811200000,1,82551,82510,82614.5,82650,102\n1791811620000,1,82584.5,82445,82618,82630,103\n1791816600000,1,82457.5,82369,82711,82990,104\n1791826680000,1,82429.5,82346,82484,82550,105\n1791830940000,1,82366,82296.5,82425,82468.5,106\n1791846000000,1,82229.5,82112.5,82461.5,82583.5,107\n1791846420000,1,81953.5,81832,82155.5,82229.5,109\n1791850140000,1,81495,81283.5,81914,82032,113\n1791851640000,1,81387.5,81222.5,81435,81462.5,114\n1791852540000,1,81287,81188.5,81461,81587,116\n1791852780000,1,81265,81065,81287,81461,117\n1792025520000,1,81507,81350,81544,81627,118\n1792031100000,1,80939,80700,81775.5,81795,119\n1792031340000,1,80821,80327,81037,81775.5,120\n1792071060000,1,80282.5,80043.5,80418,80507,121\n1792072500000,1,80153.5,79737,80478.5,80743.5,122\n1792149300000,-1,82537.5,82650,82258,82180,123\n1792149960000,-1,82800,82845.5,82709,82495.5,125\n1792150140000,-1,82768.5,82857,82709,82495.5,126\n1792273140000,1,80943.5,80767,81100.5,81209.5,127\n1792287720000,-1,81795.5,81875,81582,81545,128\n1792293120000,-1,81894,81919,81806,81748,129\n1792295280000,-1,81971.5,82043.5,81919.5,81826.5,130\n1792316220000,-1,82120,82156.5,82105,81989.5,131\n1792354740000,1,80779.5,80711,80856,80886.5,134\n1792370820000,-1,82379.5,82487,82344,82149.5,136\n1792375860000,-1,82525,82582.5,82520,82436.5,139\n1792378200000,-1,82660,82766,82405.5,82332,140\n1792378320000,-1,82661.5,82788,82656.5,82405.5,141\n1792385220000,-1,82775,82809.5,82694,82650.5,142\n1792385400000,-1,82805,82849.5,82763,82694,143\n1792391820000,-1,82826,82885.5,82712,82688,144\n1792395300000,-1,82999.5,83109,82807,82790.5,145\n1792455780000,1,81500,81430.5,81778,81823.5,146\n1792458600000,1,81359.5,81258.5,81586.5,81714,147\n1792572660000,-1,83387,83667.5,83301.5,83130.5,152\n1792587900000,-1,83725.5,83848.5,83557.5,83414,153\n1792588020000,-1,83691,83783.5,83557.5,83414,154\n1792588620000,-1,83764,83859,83725,83702,155\n1792591080000,-1,83828.5,83919,83680,83415,157\n1792593420000,-1,84136,84185.5,83815,83795,160\n1792593840000,-1,84174,84250,84004.5,83815,161\n1792594140000,-1,84266,84451.5,84132.5,84004.5,162\n1792594320000,-1,84442.5,84700,84266,84132.5,163\n1792595520000,-1,84616.5,84778,84395,84266,164\n1792600800000,-1,84617.5,84843.5,84552.5,84542.5,165\n1792650600000,1,82597,82505,82599,82729.5,167\n1792652640000,1,82466.5,82430.5,82500,82538,172\n1792653180000,1,82300.5,82254.5,82445.5,82500,174\n1792653360000,1,82316.5,82238.5,82322.5,82445.5,175\n1792654020000,1,82250.5,82210,82307.5,82316.5,177\n1792656660000,1,82141,82054.5,82228,82251,180\n1792657260000,1,82042.5,81962,82091.5,82190,181\n1792657560000,1,82047.5,81982.5,82080.5,82091.5,182\n1792658100000,1,81942.5,81890,82034.5,82068.5,183\n1792658340000,1,81880,81829.5,81942.5,82034.5,184\n1792659660000,1,81800.5,81760,81836,81917.5,186\n1792659960000,1,81774.5,81730,81824.5,81917.5,187\n1792660200000,1,81773,81723.5,81830.5,81917.5,188\n1792660380000,1,81772,81628.5,81830.5,81917.5,189\n1792674900000,1,81721,81559.5,81754.5,81814.5,192\n1792676580000,1,81753.5,81589,81871.5,82045.5,194\n1792677180000,1,81511,81360,81558.5,81770.5,196\n1792681980000,1,81520.5,81401,81670,81727.5,197\n1792851540000,1,80188.5,80071,80264,80694.5,206\n1792854600000,1,79888,79514.5,79903,80198.5,208\n1792855020000,1,79528,79363,79901,79903,209\n1792855560000,1,79414.5,79306,79526,79528,211\n1792978860000,1,79752,79643,79996,80213.5,212\n1793136720000,-1,81100,81245.5,80612.5,80595.5,215", "Approved response plans", group="Reviewed ledger", tooltip="One row: response OPEN epoch milliseconds, direction 1/-1, response trigger, own SL, manually reviewed T1, next T2, ID. Every approval and destination must be selected using only information available at the response close. Historical entries are retrospective review, not forward-test proof.")
+// REVIEWED LEDGER END
+
+// REVIEW GOVERNOR START
+f_ready(bool approved, bool flat, bool valid, int attempts, int losses, int side, float trigger, float stop, float t1, float t2) =>
+    approved and flat and valid and attempts < 3 and losses < 2 and (side == 1 or side == -1) and not na(t1) and not na(t2) and side * (trigger - stop) > 0 and side * (t1 - trigger) > 0 and side * (t2 - t1) > 0 ? 1 : 0
+f_contracts(float pointValue) =>
+    pointValue > 0 ? 1.0 / pointValue : na
+f_history_invalid(bool missingMinute, bool ordersWereLive, int currentOpen, int cutoff, int previousClose) =>
+    ordersWereLive and (missingMinute or (currentOpen >= cutoff and previousClose < cutoff) or (currentOpen < cutoff and currentOpen + 60000 > cutoff)) ? 1 : 0
+// REVIEW GOVERNOR END
+
+// SOURCE ENGINE START
+// Phase: 0 waiting; 1 outside level; 2 next candle pending; 3 last signal;
+// 4 expired; 5 stop crossed; 6 OHLC ambiguous; 7 target spent/invalid;
+// 8 attempt limit; 9 data gap; 10 mark destination; 11 disabled.
+f_setup(float hiRef, float loRef, int refKey, float longTarget, float shortTarget, bool confirmed, bool eligible, bool gap, bool closeMode, int maxAttempts, bool requireTarget, float manualStop = na) =>
+    var int key = na
+    var float runHigh = na
+    var float runLow = na
+    var float usedHigh = na
+    var float usedLow = na
+    var bool longSpent = false
+    var bool shortSpent = false
+    var int phase = 0
+    var int direction = 0
+    var int responseBar = na
+    var float trigger = na
+    var float stop = na
+    var float target = na
+    var float lastEntry = na
+    var float lastStop = na
+    var float lastTarget = na
+    var int lastDirection = 0
+    var int lastTime = na
+    var int attempts = 0
+    int signal = 0
+    if confirmed
+        bool reset = na(key) or refKey != key
+        if reset
+            key := refKey
+            runHigh := na
+            runLow := na
+            usedHigh := na
+            usedLow := na
+            longSpent := false
+            shortSpent := false
+            phase := 0
+            direction := 0
+            responseBar := na
+            trigger := na
+            stop := na
+            target := na
+            attempts := 0
+        bool blocked = false
+        if not eligible
+            phase := 11
+            responseBar := na
+            blocked := true
+        else if gap
+            phase := 9
+            responseBar := na
+            // Preserve used extremes: a missing interval cannot make old liquidity fresh.
+            usedHigh := na(runHigh) ? usedHigh : na(usedHigh) ? runHigh : math.max(usedHigh, runHigh)
+            usedLow := na(runLow) ? usedLow : na(usedLow) ? runLow : math.min(usedLow, runLow)
+            runHigh := na
+            runLow := na
+            blocked := true
+        else if phase == 2 and not na(responseBar)
+            blocked := true
+            bool stopHit = direction == 1 ? low <= stop : high >= stop
+            bool targetHit = not na(target) and (direction == 1 ? high >= target : low <= target)
+            bool crossed = direction == 1 ? (closeMode ? close > trigger : high > trigger) : (closeMode ? close < trigger : low < trigger)
+            if bar_index != responseBar + 1
+                phase := 4
+            else if not closeMode and crossed and (stopHit or targetHit)
+                phase := 6
+            else if stopHit
+                phase := 5
+            else if targetHit
+                phase := 7
+            else if crossed
+                // A strict break occurs on the next tradable tick, not at the
+                // equal-touch boundary. This is precision, not a stop buffer.
+                float fill = closeMode ? close : (direction == 1 ? math.max(open, trigger + syminfo.mintick) : math.min(open, trigger - syminfo.mintick))
+                bool validRisk = direction == 1 ? fill > stop : fill < stop
+                bool targetAhead = na(target) or (direction == 1 ? target > fill : target < fill)
+                if validRisk and targetAhead and attempts < maxAttempts
+                    signal := direction
+                    lastEntry := fill
+                    lastStop := stop
+                    lastTarget := target
+                    lastDirection := direction
+                    lastTime := time_close
+                    attempts += 1
+                    phase := 3
+                else
+                    phase := 7
+            else
+                phase := 4
+            responseBar := na
+        if eligible
+            // Observed gap-bar OHLC still counts; absence of a current optional
+            // target cannot inherit a rejection from an expired target window.
+            longSpent := longSpent or (not na(longTarget) and high >= longTarget)
+            shortSpent := shortSpent or (not na(shortTarget) and low <= shortTarget)
+        if eligible and not gap
+            bool beyondHigh = not na(hiRef) and high > hiRef
+            bool beyondLow = not na(loRef) and low < loRef
+            if beyondHigh
+                runHigh := na(runHigh) ? high : math.max(runHigh, high)
+            if beyondLow
+                runLow := na(runLow) ? low : math.min(runLow, low)
+            if not blocked
+                bool freshHigh = beyondHigh and (na(usedHigh) or runHigh > usedHigh)
+                bool freshLow = beyondLow and (na(usedLow) or runLow < usedLow)
+                if beyondHigh and beyondLow
+                    phase := 6
+                    usedHigh := runHigh
+                    usedLow := runLow
+                else if attempts >= maxAttempts
+                    phase := 8
+                else
+                    bool bearResponse = freshHigh and close < open
+                    bool bullResponse = freshLow and close > open
+                    if bearResponse or bullResponse
+                        direction := bullResponse ? 1 : -1
+                        trigger := bullResponse ? high : low
+                        stop := not na(manualStop) ? manualStop : bullResponse ? low : high
+                        target := bullResponse ? longTarget : shortTarget
+                        bool spent = not na(target) and (bullResponse ? longSpent : shortSpent)
+                        bool ahead = na(target) or (bullResponse ? target > trigger : target < trigger)
+                        if bullResponse
+                            usedLow := runLow
+                        else
+                            usedHigh := runHigh
+                        bool validStop = bullResponse ? stop < trigger : stop > trigger
+                        if not validStop
+                            phase := 5
+                        else if requireTarget and na(target)
+                            phase := 10
+                        else if spent or not ahead
+                            phase := 7
+                        else
+                            responseBar := bar_index
+                            phase := 2
+                    else if (freshHigh or freshLow) and phase != 3
+                        phase := 1
+    [signal, phase, direction, trigger, stop, target, lastEntry, lastStop, lastTarget, lastDirection, lastTime, attempts]
+
+f_overall(int a, int b, int c) =>
+    bool bull = a == 1 or b == 1 or c == 1
+    bool bear = a == -1 or b == -1 or c == -1
+    bull and bear ? 0 : bull ? 1 : bear ? -1 : 0
+// SOURCE ENGINE END
+
+var array<int> planTimes = array.new_int()
+var array<int> planSides = array.new_int()
+var array<float> planTriggers = array.new_float()
+var array<float> planStops = array.new_float()
+var array<float> planT1 = array.new_float()
+var array<float> planT2 = array.new_float()
+var array<string> planIds = array.new_string()
+var int badRows = 0
+var int firstLoaded = time
+if barstate.isfirst and str.length(reviewedLedger) > 0
+    array<string> lines = str.split(reviewedLedger, "\n")
+    for row in lines
+        if str.length(str.trim(row)) > 0
+            array<string> fields = str.split(row, ",")
+            if array.size(fields) == 7
+                int stamp = int(str.tonumber(array.get(fields, 0)))
+                int side = int(str.tonumber(array.get(fields, 1)))
+                float trig = str.tonumber(array.get(fields, 2))
+                float sl = str.tonumber(array.get(fields, 3))
+                float t1 = str.tonumber(array.get(fields, 4))
+                float t2 = str.tonumber(array.get(fields, 5))
+                if not na(stamp) and not na(trig) and not na(sl) and f_ready(true, true, true, 0, 0, side, trig, sl, t1, t2) == 1 and not array.includes(planTimes, stamp)
+                    array.push(planTimes, stamp)
+                    array.push(planSides, side)
+                    array.push(planTriggers, trig)
+                    array.push(planStops, sl)
+                    array.push(planT1, t1)
+                    array.push(planT2, t2)
+                    array.push(planIds, array.get(fields, 6))
+                else
+                    badRows += 1
+            else
+                badRows += 1
+
+[pdh, pdl, dayKey] = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+bool chartOK = chart.is_standard and timeframe.isminutes and timeframe.multiplier == 1 and syminfo.prefix == "DELTAIN" and syminfo.ticker == "BTCUSD.P"
+bool gap = not na(time_close[1]) and time > time_close[1]
+[raw, phase, sideNow, trigNow, stopNow, tgNow, lastEntry, lastStop, lastTarget, lastSide, lastTime, rawCount] = f_setup(pdh, pdl, dayKey, float(na), float(na), barstate.isconfirmed, chartOK and not na(pdh) and not na(pdl), gap, false, 2147483647, false)
+
+var int riskDay = na
+var int attempts = 0
+var int fullLosses = 0
+var int closedChecked = 0
+var string activeId = ""
+var string pendingId = ""
+var int armedBar = na
+var bool filled = false
+var bool t1Booked = false
+var bool slBooked = false
+var float frozenSL = na
+var float frozenT1 = na
+var float frozenT2 = na
+var float frozenTrigger = na
+var int loadedPlans = 0
+var int submittedPlans = 0
+var bool ended = false
+var bool invalidHistory = false
+var float cutoffPrice = na
+int utcDay = int(math.floor(time / 86400000))
+int approvedSide = 0
+float oneBTC = f_contracts(syminfo.pointvalue)
+
+if barstate.isconfirmed
+    // Native orders can already fill on the next AVAILABLE tick. Cancellation
+    // cannot undo a stale fill after a missing minute; invalidate that report.
+    if f_history_invalid(gap, activeId != "" and not ended, time, testUntil, nz(time_close[1], time)) == 1
+        invalidHistory := true
+        strategy.cancel_all()
+    if na(riskDay) or riskDay != utcDay
+        riskDay := utcDay
+        attempts := 0
+        fullLosses := 0
+    bool observedFill = false
+    if activeId != ""
+        if strategy.opentrades > 0
+            for n = 0 to strategy.opentrades - 1
+                observedFill := observedFill or strategy.opentrades.entry_id(n) == activeId
+        if strategy.closedtrades > closedChecked
+            for n = closedChecked to strategy.closedtrades - 1
+                if strategy.closedtrades.entry_id(n) == activeId
+                    observedFill := true
+                    t1Booked := t1Booked or strategy.closedtrades.exit_comment(n) == "T1"
+                    slBooked := slBooked or strategy.closedtrades.exit_comment(n) == "SL"
+        if observedFill and not filled
+            attempts += 1
+            filled := true
+        if filled and strategy.position_size == 0
+            if slBooked and not t1Booked
+                fullLosses += 1
+            activeId := ""
+    closedChecked := strategy.closedtrades
+    if pendingId != "" and bar_index >= armedBar + 1
+        strategy.cancel(pendingId)
+        pendingId := ""
+        if not filled
+            activeId := ""
+    if time_close <= testUntil
+        cutoffPrice := close
+    if time_close >= testUntil and not ended
+        // Freeze the test without fabricating a terminal market exit.
+        // Native open P&L will still mark to the latest chart price.
+        strategy.cancel_all()
+        pendingId := ""
+        ended := true
+    int ix = array.indexof(planTimes, time)
+    if ix >= 0
+        loadedPlans += 1
+        int side = array.get(planSides, ix)
+        float trig = array.get(planTriggers, ix)
+        float sl = array.get(planStops, ix)
+        float t1 = array.get(planT1, ix)
+        float t2 = array.get(planT2, ix)
+        bool identityOK = phase == 2 and sideNow == side and trigNow == trig and stopNow == sl
+        bool knownWindow = testFrom % 60000 == 0 and testUntil % 60000 == 0 and testUntil > testFrom and time >= testFrom and time_close < testUntil and utcDay == int(math.floor(time_close / 86400000))
+        bool tickOK = not na(oneBTC) and math.abs(oneBTC / syminfo.mincontract - math.round(oneBTC / syminfo.mincontract)) < 0.000001 and math.abs(oneBTC * 0.2 / syminfo.mincontract - math.round(oneBTC * 0.2 / syminfo.mincontract)) < 0.000001
+        if f_ready(identityOK, strategy.position_size == 0 and activeId == "", chartOK and knownWindow and tickOK and not invalidHistory, attempts, fullLosses, side, trig, sl, t1, t2) == 1
+            activeId := "R" + array.get(planIds, ix)
+            pendingId := activeId
+            armedBar := bar_index
+            filled := false
+            t1Booked := false
+            slBooked := false
+            frozenSL := sl
+            frozenT1 := t1
+            frozenT2 := t2
+            frozenTrigger := trig + side * syminfo.mintick
+            strategy.entry(activeId, side == 1 ? strategy.long : strategy.short, qty=oneBTC, stop=frozenTrigger, comment="Reviewed DQRS " + array.get(planIds, ix))
+            strategy.exit(activeId + "-T1", from_entry=activeId, qty=oneBTC * 0.8, limit=t1, stop=sl, oca_name=activeId + "-80", comment_profit="T1", comment_loss="SL")
+            strategy.exit(activeId + "-T2", from_entry=activeId, qty=oneBTC * 0.2, limit=t2, stop=sl, oca_name=activeId + "-20", comment_profit="T2", comment_loss="SL")
+            submittedPlans += 1
+            approvedSide := side
+
+plot(pdh, "Prior day high", color=color.new(color.red, 50), style=plot.style_stepline)
+plot(pdl, "Prior day low", color=color.new(color.green, 50), style=plot.style_stepline)
+plot(activeId != "" ? frozenTrigger : na, "Reviewed trigger (next tick)", color=color.yellow, style=plot.style_linebr)
+plot(activeId != "" ? frozenSL : na, "Original SL", color=color.red, style=plot.style_linebr)
+plot(activeId != "" ? frozenT1 : na, "T1 80%", color=color.lime, style=plot.style_linebr)
+plot(activeId != "" ? frozenT2 : na, "T2 20%", color=color.teal, style=plot.style_linebr)
+plotshape(approvedSide == 1, title="Reviewed Bull plan", style=shape.labelup, location=location.belowbar, color=color.green, text="Bull plan", textcolor=color.white)
+plotshape(approvedSide == -1, title="Reviewed Bear plan", style=shape.labeldown, location=location.abovebar, color=color.red, text="Bear plan", textcolor=color.white)
+
+var table info = table.new(position.top_right, 2, 8, border_width=1)
+if barstate.islast or barstate.islastconfirmedhistory
+    color bg = color.rgb(20, 26, 35)
+    color ink = color.rgb(235, 240, 246)
+    bool partial = firstLoaded > testFrom
+    table.cell(info, 0, 0, "GJ REVIEWED DQRS", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 0, chartOK ? "1 BTC · original break" : "WAIT · DELTAIN BTCUSD.P 1m", bgcolor=bg, text_color=chartOK ? color.lime : color.yellow)
+    table.cell(info, 0, 1, "Native history", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 1, invalidHistory ? "INVALID NATIVE HISTORY · order crossed missing bar" : partial ? "PARTIAL HISTORY · not full month" : "From test start loaded", bgcolor=bg, text_color=invalidHistory ? color.red : partial ? color.yellow : color.lime)
+    table.cell(info, 0, 2, "First loaded · UTC", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 2, str.format_time(firstLoaded, "dd MMM HH:mm", "UTC"), bgcolor=bg, text_color=ink)
+    table.cell(info, 0, 3, "Approved / loaded / submitted", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 3, str.tostring(array.size(planTimes)) + " / " + str.tostring(loadedPlans) + " / " + str.tostring(submittedPlans), bgcolor=bg, text_color=ink)
+    table.cell(info, 0, 4, "Today attempts / full SL", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 4, str.tostring(attempts) + " / " + str.tostring(fullLosses), bgcolor=bg, text_color=ink)
+    table.cell(info, 0, 5, "Native units per 1 BTC", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 5, str.tostring(oneBTC) + " · point value " + str.tostring(syminfo.pointvalue), bgcolor=bg, text_color=ink)
+    table.cell(info, 0, 6, "Ledger errors / fixed cutoff", bgcolor=bg, text_color=ink)
+    table.cell(info, 1, 6, str.tostring(badRows) + " / " + str.tostring(cutoffPrice, format.mintick), bgcolor=bg, text_color=ink)
+    table.cell(info, 0, 7, "Emulator only", bgcolor=bg, text_color=color.yellow)
+    table.cell(info, 1, 7, "No Paper Trading orders · funding excluded", bgcolor=bg, text_color=color.yellow)

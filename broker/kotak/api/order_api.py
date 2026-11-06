@@ -17,11 +17,17 @@ from broker.kotak.mapping.transform_data import (
 from database.auth_db import get_auth_token
 from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from broker.kotak.api.market_data_client import get_httpx_client as get_read_only_client
 from utils.logging import get_logger
 from utils.position_read import read_position_book, refuse_smart_order_on_read_failure
 from utils.smart_order_guard import PositionBookCache, SymbolLocks
 
 logger = get_logger(__name__)
+
+READ_ONLY_ENDPOINTS = frozenset({
+    "/quick/user/orders", "/quick/user/trades", "/quick/user/positions",
+    "/portfolio/v1/holdings",
+})
 
 
 def get_api_response(endpoint, auth_token, method="GET", payload=""):
@@ -33,8 +39,13 @@ def get_api_response(endpoint, auth_token, method="GET", payload=""):
     # Debug logging for baseUrl
     logger.debug(f"ORDER API - Using baseUrl: {base_url}")
 
-    # Get the shared httpx client with connection pooling
-    client = get_httpx_client()
+    # Only known snapshot reads use the isolated pool. Mutations and unknown
+    # endpoints retain their existing transport and are never retried here.
+    client = (
+        get_read_only_client()
+        if method == "GET" and endpoint in READ_ONLY_ENDPOINTS
+        else get_httpx_client()
+    )
 
     headers = {
         "accept": "application/json",

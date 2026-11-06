@@ -106,20 +106,23 @@ export function readySound(): void {
 }
 
 /**
- * Two short tones, the second higher than the first.
+ * Two short tones, the second higher, with optional volume and repetition.
  *
  * Synthesised rather than played from a file. A file is a request that can fail
  * exactly when it is needed, on a page that may have been open since before the
  * network went away, and it is one more asset to serve from an origin that must
  * not be assumed.
  */
-export function playAlertSound(): boolean {
+export function playAlertSound(options: { volume?: number; repeats?: number } = {}): boolean {
   const ctx = audio()
   if (!ctx) return false
   try {
     if (ctx.state === 'suspended') void ctx.resume().catch(() => {})
     const at = ctx.currentTime
-    for (const [index, hz] of [880, 1174].entries()) {
+    const volume = Number.isFinite(options.volume) ? Math.max(0.0001, Math.min(1, options.volume!)) : 0.2
+    const repeats = Number.isFinite(options.repeats) ? Math.max(1, Math.min(3, Math.floor(options.repeats!))) : 1
+    const tones = Array.from({ length: repeats }, () => [880, 1174]).flat()
+    for (const [index, hz] of tones.entries()) {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
       osc.type = 'sine'
@@ -128,7 +131,7 @@ export function playAlertSound(): boolean {
       // click is what a broken speaker sounds like.
       const start = at + index * 0.18
       gain.gain.setValueAtTime(0.0001, start)
-      gain.gain.exponentialRampToValueAtTime(0.2, start + 0.01)
+      gain.gain.exponentialRampToValueAtTime(volume, start + 0.01)
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16)
       osc.connect(gain).connect(ctx.destination)
       osc.start(start)

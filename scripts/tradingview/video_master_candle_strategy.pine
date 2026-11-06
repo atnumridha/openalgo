@@ -1,0 +1,197 @@
+//@version=6
+// Implements the supplied rejection/PK execution rules using explicit reference inputs.
+// Original automatic S/R and PK/R1/R2 generation are not disclosed and are not invented here.
+strategy("PK Rejection Rules | Reference S/R", overlay=true, initial_capital=100000, currency=currency.INR, pyramiding=0, default_qty_type=strategy.fixed, default_qty_value=1, commission_type=strategy.commission.percent, commission_value=0.10, slippage=0, process_orders_on_close=false, calc_on_every_tick=false, calc_on_order_fills=false, margin_long=100, margin_short=100)
+
+string referenceMode = input.string("Manual S/R", "S/R reference", options=["Manual S/R", "Original indicator plots"], group="Required reference")
+float manualSupport = input.float(0.0, "Manual support", minval=0, group="Required reference", tooltip="0 disables support setups. Use a known original level; no substitute S/R formula is used.")
+float manualResistance = input.float(0.0, "Manual resistance", minval=0, group="Required reference")
+bool useSupportPlot = input.bool(false, "Use selected support plot", group="Original plots", tooltip="Enable only after selecting an actual support plot from the original indicator on this same chart.")
+float supportPlot = input.source(close, "Original support plot", group="Original plots")
+bool useResistancePlot = input.bool(false, "Use selected resistance plot", group="Original plots")
+float resistancePlot = input.source(close, "Original resistance plot", group="Original plots")
+string stopMode = input.string("S/R close", "Rejection stop", options=["S/R close", "Sweep extreme"], group="Execution rules", tooltip="S/R close: exit when a candle closes beyond the frozen level. Sweep extreme: price stop beyond the sweep candle high/low.")
+int validBars = input.int(3, "Trigger within next candles", minval=1, maxval=3, group="Execution rules")
+int bufferTicks = input.int(1, "High/low break buffer (ticks)", minval=1, group="Execution rules")
+int knownPkTime = input.time(0, "Known PK candle time (optional)", group="PK reference", tooltip="Select an actual PK label candle to replay its entry and own-candle stop. 0 disables it. This does not auto-generate PK labels.")
+string knownPkSide = input.string("Bull", "Known PK direction", options=["Bull", "Bear"], group="PK reference")
+bool usePkPlot = input.bool(false, "Use external PK direction plot", group="PK reference", tooltip="Requires a compatible plotted series: +1 on Bull PK label candles, -1 on Bear PK label candles, 0/na otherwise. Chart labels alone cannot be read as a plot.")
+float pkPlot = input.source(close, "PK direction plot (+1/-1)", group="PK reference")
+int fromDate = input.time(timestamp("27 Oct 2026 09:15 +0530"), "From (IST)", group="Replay range")
+int throughDate = input.time(timestamp("27 Oct 2026 15:30 +0530"), "Through (IST)", group="Replay range")
+bool useTarget = input.bool(false, "Enable optional R target", group="Optional target", tooltip="The transcript does not specify a target formula. Disabled by default.")
+float reward = input.float(1.0, "R from planned trigger price", minval=0.25, step=0.25, group="Optional target")
+
+// RULE CORE START
+f_rules(float supportRef, float resistanceRef, int pkDirection, bool confirmed, bool armed, bool flatNow) =>
+    var int sweepDirection = 0
+    var int sweepAt = na
+    var float sweepLevel = na
+    var float sweepExtreme = na
+    var int direction = 0
+    var int setupAt = na
+    var float entry = na
+    var float stop = na
+    var float level = na
+    var bool closeStop = false
+    var int kind = 0
+    bool created = false
+    bool cancelled = false
+    bool ambiguous = false
+    bool gap = bar_index > 0 and (timeframe.change("D") or time - time[1] != timeframe.in_seconds() * 1000)
+    float buffer = bufferTicks * syminfo.mintick
+    if confirmed
+        if not armed or gap or not flatNow
+            cancelled := direction != 0
+            direction := 0
+            sweepDirection := 0
+        else
+            if direction != 0
+                bool expired = bar_index - setupAt >= validBars
+                bool invalid = closeStop ? (direction == 1 ? close < stop : close > stop) : (direction == 1 ? low <= stop : high >= stop)
+                if expired or invalid
+                    direction := 0
+                    cancelled := true
+            int candidate = 0
+            int candidateKind = 0
+            float candidateLevel = na
+            float candidateStop = na
+            bool candidateCloseStop = false
+            // Sweep candle color is unrestricted; confirmation is a separate adjacent candle.
+            if sweepDirection != 0
+                bool nextCandle = bar_index == sweepAt + 1
+                bool confirms = sweepDirection == 1 ? close > open and close > sweepLevel : close < open and close < sweepLevel
+                if nextCandle and confirms
+                    candidate := sweepDirection
+                    candidateKind := 1
+                    candidateLevel := sweepLevel
+                    candidateCloseStop := stopMode == "S/R close"
+                    candidateStop := candidateCloseStop ? sweepLevel : (candidate == 1 ? sweepExtreme - buffer : sweepExtreme + buffer)
+                sweepDirection := 0
+            // A PK candle is explicitly supplied. Its stop always uses its own extreme.
+            if pkDirection == 1 or pkDirection == -1
+                candidate := pkDirection
+                candidateKind := 2
+                candidateLevel := na
+                candidateCloseStop := false
+                candidateStop := candidate == 1 ? low - buffer : high + buffer
+            if direction == 0 and candidate != 0
+                float candidateEntry = candidate == 1 ? high + buffer : low - buffer
+                bool validRisk = candidate == 1 ? candidateEntry > candidateStop : candidateEntry < candidateStop
+                if validRisk
+                    direction := candidate
+                    setupAt := bar_index
+                    entry := candidateEntry
+                    stop := candidateStop
+                    level := candidateLevel
+                    closeStop := candidateCloseStop
+                    kind := candidateKind
+                    created := true
+            bool bullSweep = supportRef > 0 and close[1] > supportRef and low < supportRef and close > supportRef
+            bool bearSweep = resistanceRef > 0 and close[1] < resistanceRef and high > resistanceRef and close < resistanceRef
+            ambiguous := bullSweep and bearSweep
+            // Do not refresh an existing pending order with repeated sweeps.
+            if direction == 0 and not cancelled and not created and not ambiguous
+                if bullSweep or bearSweep
+                    sweepDirection := bullSweep ? 1 : -1
+                    sweepAt := bar_index
+                    sweepLevel := bullSweep ? supportRef : resistanceRef
+                    sweepExtreme := bullSweep ? low : high
+    [direction, entry, stop, level, closeStop, kind, created, cancelled, ambiguous]
+// RULE CORE END
+
+float supportRef = referenceMode == "Manual S/R" ? manualSupport : (useSupportPlot ? supportPlot[1] : na)
+float resistanceRef = referenceMode == "Manual S/R" ? manualResistance : (useResistancePlot ? resistancePlot[1] : na)
+int pkDirection = knownPkTime > 0 and time == knownPkTime ? (knownPkSide == "Bull" ? 1 : -1) : (usePkPlot and pkPlot == 1 ? 1 : usePkPlot and pkPlot == -1 ? -1 : 0)
+bool configured = supportRef > 0 or resistanceRef > 0 or knownPkTime > 0 or usePkPlot
+bool session = not na(time(timeframe.period, "0915-1530:23456", "Asia/Kolkata"))
+bool dateActive = time >= fromDate and time_close <= throughDate
+int minutes = hour(time_close, "Asia/Kolkata") * 60 + minute(time_close, "Asia/Kolkata")
+bool eligible = session and dateActive and minutes < 930
+int tradeCount = strategy.closedtrades + strategy.opentrades
+bool justFilled = tradeCount > nz(tradeCount[1])
+bool canPrepare = strategy.position_size == 0 and not justFilled
+[pendingDirection, pendingEntry, pendingStop, pendingLevel, pendingCloseStop, pendingKind, newSetup, cancelPending, ambiguousSweep] = f_rules(supportRef, resistanceRef, pkDirection, barstate.isconfirmed, eligible, canPrepare)
+var float tradeStop = na
+var float tradeTarget = na
+var bool tradeCloseStop = false
+var int tradeDirection = 0
+var int tradeKind = 0
+var int ambiguousFills = 0
+// OHLC cannot establish whether invalidation preceded a pending entry in the same bar.
+// Retain the simulator's ledger, suppress the signal, flatten, and flag the replay.
+bool ambiguousEntry = justFilled and not tradeCloseStop and (tradeDirection == 1 ? low <= tradeStop : high >= tradeStop)
+
+if barstate.isfirst
+    if not timeframe.isminutes or timeframe.multiplier != 5 or not chart.is_standard
+        runtime.error("Use a standard 5-minute underlying index chart.")
+    if syminfo.type == "option"
+        runtime.error("Use NIFTY/SENSEX underlying prices. Index S/R levels cannot be used as option-premium stop prices.")
+    if fromDate >= throughDate
+        runtime.error("From must precede Through.")
+    if referenceMode == "Manual S/R" and manualSupport > 0 and manualResistance > 0 and manualSupport >= manualResistance
+        runtime.error("Support must be below resistance.")
+
+if barstate.isconfirmed
+    if cancelPending or not eligible
+        strategy.cancel("Bull")
+        strategy.cancel("Bear")
+        if strategy.position_size == 0
+            strategy.cancel("Bull risk")
+            strategy.cancel("Bear risk")
+    if newSetup
+        tradeStop := pendingStop
+        tradeCloseStop := pendingCloseStop
+        tradeDirection := pendingDirection
+        tradeKind := pendingKind
+        float plannedRisk = math.abs(pendingEntry - pendingStop)
+        tradeTarget := useTarget ? pendingEntry + pendingDirection * plannedRisk * reward : na
+        if pendingDirection == 1
+            strategy.entry("Bull", strategy.long, qty=1, stop=pendingEntry, comment="Bull / BUY CALL direction")
+            if not pendingCloseStop or useTarget
+                strategy.exit("Bull risk", "Bull", stop=pendingCloseStop ? na : tradeStop, limit=tradeTarget)
+        else
+            strategy.entry("Bear", strategy.short, qty=1, stop=pendingEntry, comment="Bear / BUY PUT direction")
+            if not pendingCloseStop or useTarget
+                strategy.exit("Bear risk", "Bear", stop=pendingCloseStop ? na : tradeStop, limit=tradeTarget)
+    if strategy.position_size > 0 and tradeCloseStop and close < tradeStop
+        strategy.close("Bull", comment="Close below support", immediately=true)
+    if strategy.position_size < 0 and tradeCloseStop and close > tradeStop
+        strategy.close("Bear", comment="Close above resistance", immediately=true)
+    if ambiguousEntry
+        ambiguousFills += 1
+        strategy.close_all(comment="Ambiguous entry/stop bar; replay unvalidated", immediately=true)
+    if not session or not dateActive or minutes >= 930
+        strategy.close_all(comment="Session/date end", immediately=true)
+
+bool bullEntry = justFilled and not ambiguousEntry and tradeDirection == 1
+bool bearEntry = justFilled and not ambiguousEntry and tradeDirection == -1
+bool showRisk = strategy.position_size != 0 or justFilled
+plot(supportRef > 0 ? supportRef : na, "Reference support", color=color.aqua, linewidth=2, style=plot.style_linebr)
+plot(resistanceRef > 0 ? resistanceRef : na, "Reference resistance", color=color.red, linewidth=2, style=plot.style_linebr)
+plot(pendingDirection != 0 ? pendingEntry : na, "Pending high/low trigger", color=color.yellow, style=plot.style_linebr)
+plot(showRisk ? tradeStop : pendingDirection != 0 ? pendingStop : na, "Structural stop reference", color=color.orange, linewidth=2, style=plot.style_linebr)
+plot(showRisk and useTarget ? tradeTarget : na, "Optional target", color=color.lime, style=plot.style_linebr)
+plotshape(newSetup and pendingDirection == 1, "Bull setup", shape.triangleup, location.belowbar, color.aqua, size=size.tiny)
+plotshape(newSetup and pendingDirection == -1, "Bear setup", shape.triangledown, location.abovebar, color.orange, size=size.tiny)
+plotshape(bullEntry, "Bull", shape.labelup, location.belowbar, color.green, text="Bull\nBUY CALL", textcolor=color.white)
+plotshape(bearEntry, "Bear", shape.labeldown, location.abovebar, color.red, text="Bear\nBUY PUT", textcolor=color.white)
+barcolor(ambiguousSweep ? color.yellow : newSetup and pendingKind == 1 ? color.blue : na)
+
+var table panel = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 10), border_width=1)
+if barstate.islast
+    string status = not configured ? "WAIT · configure actual S/R" : ambiguousFills > 0 ? "UNVALIDATED · ambiguous fills" : not eligible ? "Outside replay range/session" : strategy.position_size != 0 ? "In trade" : pendingDirection != 0 ? "Waiting for high/low break" : "Waiting for setup"
+    table.cell(panel, 0, 0, "PK REJECTION RULES", text_color=color.white)
+    table.cell(panel, 1, 0, status, text_color=not configured ? color.yellow : color.white)
+    table.cell(panel, 0, 1, "S/R reference", text_color=color.silver)
+    table.cell(panel, 1, 1, referenceMode, text_color=color.white)
+    table.cell(panel, 0, 2, "Rejection stop", text_color=color.silver)
+    table.cell(panel, 1, 2, stopMode, text_color=color.orange)
+    table.cell(panel, 0, 3, "PK stop", text_color=color.silver)
+    table.cell(panel, 1, 3, "PK candle's own high/low", text_color=color.white)
+    table.cell(panel, 0, 4, "Target / replay", text_color=color.silver)
+    table.cell(panel, 1, 4, (useTarget ? "Optional " + str.tostring(reward) + "R" : "Target disabled") + " · index units", text_color=color.white)
+    table.cell(panel, 0, 5, "Original auto formulas", text_color=color.silver)
+    table.cell(panel, 1, 5, "S/R and labels not supplied", text_color=color.yellow)
+    table.cell(panel, 0, 6, "Ambiguous entry/stop bars", text_color=color.silver)
+    table.cell(panel, 1, 6, str.tostring(ambiguousFills), text_color=ambiguousFills > 0 ? color.yellow : color.white)

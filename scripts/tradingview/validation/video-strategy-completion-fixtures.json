@@ -1,0 +1,1369 @@
+{
+  "start": 1793836800,
+  "cases": [
+    {
+      "name": "supply-demand",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 149.5,
+          "high": 151,
+          "low": 149,
+          "close": 150
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 89.5,
+          "high": 91,
+          "low": 89,
+          "close": 90
+        },
+        {
+          "open": 99.5,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 115.5,
+          "high": 117,
+          "low": 115,
+          "close": 116
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 103.5,
+          "high": 105,
+          "low": 103,
+          "close": 104
+        },
+        {
+          "open": 97.5,
+          "high": 99,
+          "low": 97,
+          "close": 98
+        },
+        {
+          "open": 103.5,
+          "high": 105,
+          "low": 103,
+          "close": 104
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 113.5,
+          "high": 115,
+          "low": 113,
+          "close": 114
+        },
+        {
+          "open": 107.5,
+          "high": 109,
+          "low": 107,
+          "close": 108
+        },
+        {
+          "open": 101.5,
+          "high": 103,
+          "low": 101,
+          "close": 102
+        },
+        {
+          "open": 93.5,
+          "high": 95,
+          "low": 93,
+          "close": 94
+        },
+        {
+          "open": 99.5,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 106.5,
+          "high": 107,
+          "low": 105,
+          "close": 106
+        },
+        {
+          "open": 106,
+          "high": 120,
+          "low": 105,
+          "close": 119
+        },
+        {
+          "open": 106,
+          "high": 112,
+          "low": 106,
+          "close": 110
+        }
+      ],
+      "want": {
+        "strategy": "supply-demand",
+        "status": "entry",
+        "side": 1,
+        "watch": 106.5,
+        "entry": 110,
+        "stop": 98.5,
+        "target": 151
+      }
+    },
+    {
+      "name": "support-resistance",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 149.5,
+          "high": 151,
+          "low": 149,
+          "close": 150
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 89.5,
+          "high": 91,
+          "low": 89,
+          "close": 90
+        },
+        {
+          "open": 99.5,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 115.5,
+          "high": 117,
+          "low": 115,
+          "close": 116
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 103.5,
+          "high": 105,
+          "low": 103,
+          "close": 104
+        },
+        {
+          "open": 89.5,
+          "high": 95,
+          "low": 89,
+          "close": 90
+        },
+        {
+          "open": 99,
+          "high": 103,
+          "low": 98,
+          "close": 102
+        },
+        {
+          "open": 102,
+          "high": 105,
+          "low": 100,
+          "close": 104
+        },
+        {
+          "open": 91,
+          "high": 96,
+          "low": 89,
+          "close": 95
+        }
+      ],
+      "want": {
+        "strategy": "support-resistance",
+        "status": "entry",
+        "side": 1,
+        "entry": 95,
+        "stop": 88.5,
+        "target": 117
+      }
+    },
+    {
+      "name": "breakout",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 149.5,
+          "high": 151,
+          "low": 149,
+          "close": 150
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 89.5,
+          "high": 91,
+          "low": 89,
+          "close": 90
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 114,
+          "low": 104,
+          "close": 113
+        },
+        {
+          "open": 110,
+          "high": 114,
+          "low": 109,
+          "close": 112
+        }
+      ],
+      "want": {
+        "strategy": "breakout",
+        "status": "entry",
+        "side": 1,
+        "watch": 110,
+        "entry": 112,
+        "stop": 108.5,
+        "target": 151
+      }
+    },
+    {
+      "name": "crt",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 101,
+          "high": 120,
+          "low": 90,
+          "close": 110
+        },
+        {
+          "open": 107,
+          "high": 108,
+          "low": 88,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 113,
+          "low": 99,
+          "close": 112
+        }
+      ],
+      "want": {
+        "strategy": "crt",
+        "status": "entry",
+        "side": 1,
+        "watch": 112,
+        "entry": 112,
+        "stop": 87.5,
+        "target": 120
+      }
+    },
+    {
+      "name": "po3",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 107,
+          "low": 103,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 101,
+          "close": 104
+        },
+        {
+          "open": 104,
+          "high": 110,
+          "low": 104,
+          "close": 109
+        },
+        {
+          "open": 107.5,
+          "high": 110,
+          "low": 106.5,
+          "close": 109
+        }
+      ],
+      "want": {
+        "strategy": "po3",
+        "status": "entry",
+        "side": 1,
+        "watch": 107,
+        "entry": 109,
+        "stop": 100.5,
+        "target": 111
+      }
+    },
+    {
+      "name": "silver-bullet",
+      "start": 1793889900,
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 139.5,
+          "high": 141,
+          "low": 139,
+          "close": 140
+        },
+        {
+          "open": 149.5,
+          "high": 151,
+          "low": 149,
+          "close": 150
+        },
+        {
+          "open": 139.5,
+          "high": 141,
+          "low": 139,
+          "close": 140
+        },
+        {
+          "open": 119.5,
+          "high": 121,
+          "low": 119,
+          "close": 120
+        },
+        {
+          "open": 93.5,
+          "high": 95,
+          "low": 93,
+          "close": 94
+        },
+        {
+          "open": 99.5,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 103.5,
+          "high": 105,
+          "low": 103,
+          "close": 104
+        },
+        {
+          "open": 93.5,
+          "high": 95,
+          "low": 93,
+          "close": 94
+        },
+        {
+          "open": 99.5,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 107.5,
+          "high": 109,
+          "low": 107,
+          "close": 108
+        },
+        {
+          "open": 95,
+          "high": 100,
+          "low": 91,
+          "close": 96
+        },
+        {
+          "open": 96,
+          "high": 115,
+          "low": 95,
+          "close": 114
+        },
+        {
+          "open": 114,
+          "high": 117,
+          "low": 112,
+          "close": 116
+        },
+        {
+          "open": 107,
+          "high": 112,
+          "low": 105,
+          "close": 110
+        }
+      ],
+      "want": {
+        "strategy": "silver-bullet",
+        "status": "entry",
+        "side": 1,
+        "watch": 106,
+        "entry": 110,
+        "stop": 90.5,
+        "target": 151
+      }
+    },
+    {
+      "name": "sr-simultaneous",
+      "bars": [
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 100,
+          "high": 101,
+          "low": 99,
+          "close": 100
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 149.5,
+          "high": 151,
+          "low": 149,
+          "close": 150
+        },
+        {
+          "open": 129.5,
+          "high": 131,
+          "low": 129,
+          "close": 130
+        },
+        {
+          "open": 109.5,
+          "high": 111,
+          "low": 109,
+          "close": 110
+        },
+        {
+          "open": 89.5,
+          "high": 91,
+          "low": 89,
+          "close": 90
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 110,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 104,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 106,
+          "low": 100,
+          "close": 105
+        },
+        {
+          "open": 105,
+          "high": 114,
+          "low": 100,
+          "close": 113
+        }
+      ],
+      "want": {
+        "strategy": "support-resistance",
+        "status": "entry",
+        "side": 1,
+        "watch": 113,
+        "entry": 113,
+        "stop": 99.5,
+        "target": 151
+      }
+    }
+  ]
+}

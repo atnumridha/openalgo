@@ -1,0 +1,304 @@
+//@version=6
+indicator("Gautam Jha | Source Liquidity", shorttitle="GJ Source Liquidity", overlay=true, max_labels_count=300)
+// Public lessons and exact coverage: gautam_liquidity_README.md.
+// Only the previous-day setup is automatic. Event / continuation context is manual.
+// The source-only default uses the lesson's next-candle high/low break.
+// Both historical modes are recorded only after the next candle closes.
+
+string mode = input.string("Original next-bar break", "Entry confirmation", options=["Original next-bar break", "Candle close (user variant)"], group="Entry", tooltip="Original: respond to a completed setup candle, then take its high/low break on the immediate next candle. The chart records the break at that candle's close; it is not a late-entry instruction. The earlier next-candle CLOSE beyond the trigger is retained separately as a user variant.")
+bool dailyOn = input.bool(true, "Previous-day reversal", group="Entry")
+bool drawDaily = input.bool(true, "Previous-day high / low", group="Display")
+bool drawOpen = input.bool(false, "Daily open (context only)", group="Display")
+bool drawGuides = input.bool(true, "Latest candidate / reviewed Entry / SL / T1 guides", group="Display")
+string font = input.string("Normal", "Table text", options=["Small", "Normal", "Large"], group="Display")
+// Targets require the author's visual swing selection; no arbitrary pivot formula.
+int markedFrom = input.time(timestamp("28 Oct 2026 00:00 +0530"), "Marked daily targets / loss count: from", group="Daily manual context")
+int markedUntil = input.time(timestamp("29 Oct 2026 00:00 +0530"), "Valid until (exclusive)", group="Daily manual context")
+float dailyLongTarget = input.float(0, "Bull: preceding swing high (0 = not marked)", minval=0, group="Daily manual context")
+float dailyShortTarget = input.float(0, "Bear: preceding swing low (0 = not marked)", minval=0, group="Daily manual context")
+int approvedDailyResponse = input.time(timestamp("01 Jan 2020 00:00 +0530"), "Approved response candle OPEN time (body quality reviewed)", group="Daily manual context", tooltip="Live DQRS lesson rejects doji/hammer-style responses and requires a body candle at fresh liquidity. No numeric body ratio is supplied. Automatic events remain candidates until you approve the actual response candle timestamp. Retrospective approval is hindsight, not forward-test evidence.")
+int reportedAttempts = input.int(0, "Actual attempts in this window (update manually)", minval=0, group="Daily manual context")
+int fullLosses = input.int(0, "Actual full stop losses in this window (update manually)", minval=0, group="Daily manual context", tooltip="The lesson stops after 2 FULL losses and at most 3 attempts. Partial / breakeven outcomes cannot be inferred from an indicator. Count only your selected session; keep the validity window within that session.")
+
+int approvedEventResponse = input.time(timestamp("01 Jan 2020 00:00 +0530"), "Approved event response candle OPEN time", group="Manual event reversal")
+bool eventOn = input.bool(false, "Trap / COC context reviewed; direct response entry permitted", group="Manual event reversal", tooltip="A level touch and body colour alone are not an event setup. Review the causal failure/trap sequence and approach path. If your chosen variant requires COC, it must already be complete before this response. This row does not detect COC/PPT or cross-market confluence.")
+string eventSide = input.string("Bull", "Direction", options=["Bull", "Bear"], group="Manual event reversal")
+float eventLevel = input.float(0, "HTF liquidity level", minval=0, group="Manual event reversal")
+float eventStop = input.float(0, "Source-selected stop (required)", minval=0, group="Manual event reversal", tooltip="Event examples do not prescribe one universal stop. Supply the stop appropriate to the source setup you have reviewed; DQRS's own-candle stop is not silently reused.")
+float eventTarget = input.float(0, "Opposing liquidity target (0 = not marked)", minval=0, group="Manual event reversal")
+int eventFrom = input.time(timestamp("28 Oct 2026 09:15 +0530"), "Known / active from", group="Manual event reversal")
+int eventUntil = input.time(timestamp("28 Oct 2026 15:30 +0530"), "Valid until (exclusive)", group="Manual event reversal")
+
+int approvedTrendResponse = input.time(timestamp("01 Jan 2020 00:00 +0530"), "Approved pullback response candle OPEN time", group="Manual trend continuation")
+bool trendOn = input.bool(false, "I confirm strong trend AND first pullback", group="Manual trend continuation")
+string trendSide = input.string("Bull", "Trend direction", options=["Bull", "Bear"], group="Manual trend continuation")
+float trendLevel = input.float(0, "Pullback boundary to sweep", minval=0, group="Manual trend continuation")
+float trendTarget = input.float(0, "Original untouched high / low target", minval=0, group="Manual trend continuation")
+int trendFrom = input.time(timestamp("28 Oct 2026 09:15 +0530"), "Context known / active from", group="Manual trend continuation")
+int trendUntil = input.time(timestamp("28 Oct 2026 15:30 +0530"), "Valid until (exclusive)", group="Manual trend continuation")
+
+// SOURCE ENGINE START
+// Phase: 0 waiting; 1 outside level; 2 next candle pending; 3 last signal;
+// 4 expired; 5 stop crossed; 6 OHLC ambiguous; 7 target spent/invalid;
+// 8 attempt limit; 9 data gap; 10 mark destination; 11 disabled.
+f_setup(float hiRef, float loRef, int refKey, float longTarget, float shortTarget, bool confirmed, bool eligible, bool gap, bool closeMode, int maxAttempts, bool requireTarget, float manualStop = na) =>
+    var int key = na
+    var float runHigh = na
+    var float runLow = na
+    var float usedHigh = na
+    var float usedLow = na
+    var bool longSpent = false
+    var bool shortSpent = false
+    var int phase = 0
+    var int direction = 0
+    var int responseBar = na
+    var float trigger = na
+    var float stop = na
+    var float target = na
+    var float lastEntry = na
+    var float lastStop = na
+    var float lastTarget = na
+    var int lastDirection = 0
+    var int lastTime = na
+    var int attempts = 0
+    int signal = 0
+    if confirmed
+        bool reset = na(key) or refKey != key
+        if reset
+            key := refKey
+            runHigh := na
+            runLow := na
+            usedHigh := na
+            usedLow := na
+            longSpent := false
+            shortSpent := false
+            phase := 0
+            direction := 0
+            responseBar := na
+            trigger := na
+            stop := na
+            target := na
+            attempts := 0
+        bool blocked = false
+        if not eligible
+            phase := 11
+            responseBar := na
+            blocked := true
+        else if gap
+            phase := 9
+            responseBar := na
+            // Preserve used extremes: a missing interval cannot make old liquidity fresh.
+            usedHigh := na(runHigh) ? usedHigh : na(usedHigh) ? runHigh : math.max(usedHigh, runHigh)
+            usedLow := na(runLow) ? usedLow : na(usedLow) ? runLow : math.min(usedLow, runLow)
+            runHigh := na
+            runLow := na
+            blocked := true
+        else if phase == 2 and not na(responseBar)
+            blocked := true
+            bool stopHit = direction == 1 ? low <= stop : high >= stop
+            bool targetHit = not na(target) and (direction == 1 ? high >= target : low <= target)
+            bool crossed = direction == 1 ? (closeMode ? close > trigger : high > trigger) : (closeMode ? close < trigger : low < trigger)
+            if bar_index != responseBar + 1
+                phase := 4
+            else if not closeMode and crossed and (stopHit or targetHit)
+                phase := 6
+            else if stopHit
+                phase := 5
+            else if targetHit
+                phase := 7
+            else if crossed
+                // A strict break occurs on the next tradable tick, not at the
+                // equal-touch boundary. This is precision, not a stop buffer.
+                float fill = closeMode ? close : (direction == 1 ? math.max(open, trigger + syminfo.mintick) : math.min(open, trigger - syminfo.mintick))
+                bool validRisk = direction == 1 ? fill > stop : fill < stop
+                bool targetAhead = na(target) or (direction == 1 ? target > fill : target < fill)
+                if validRisk and targetAhead and attempts < maxAttempts
+                    signal := direction
+                    lastEntry := fill
+                    lastStop := stop
+                    lastTarget := target
+                    lastDirection := direction
+                    lastTime := time_close
+                    attempts += 1
+                    phase := 3
+                else
+                    phase := 7
+            else
+                phase := 4
+            responseBar := na
+        if eligible
+            // Observed gap-bar OHLC still counts; absence of a current optional
+            // target cannot inherit a rejection from an expired target window.
+            longSpent := longSpent or (not na(longTarget) and high >= longTarget)
+            shortSpent := shortSpent or (not na(shortTarget) and low <= shortTarget)
+        if eligible and not gap
+            bool beyondHigh = not na(hiRef) and high > hiRef
+            bool beyondLow = not na(loRef) and low < loRef
+            if beyondHigh
+                runHigh := na(runHigh) ? high : math.max(runHigh, high)
+            if beyondLow
+                runLow := na(runLow) ? low : math.min(runLow, low)
+            if not blocked
+                bool freshHigh = beyondHigh and (na(usedHigh) or runHigh > usedHigh)
+                bool freshLow = beyondLow and (na(usedLow) or runLow < usedLow)
+                if beyondHigh and beyondLow
+                    phase := 6
+                    usedHigh := runHigh
+                    usedLow := runLow
+                else if attempts >= maxAttempts
+                    phase := 8
+                else
+                    bool bearResponse = freshHigh and close < open
+                    bool bullResponse = freshLow and close > open
+                    if bearResponse or bullResponse
+                        direction := bullResponse ? 1 : -1
+                        trigger := bullResponse ? high : low
+                        stop := not na(manualStop) ? manualStop : bullResponse ? low : high
+                        target := bullResponse ? longTarget : shortTarget
+                        bool spent = not na(target) and (bullResponse ? longSpent : shortSpent)
+                        bool ahead = na(target) or (bullResponse ? target > trigger : target < trigger)
+                        if bullResponse
+                            usedLow := runLow
+                        else
+                            usedHigh := runHigh
+                        bool validStop = bullResponse ? stop < trigger : stop > trigger
+                        if not validStop
+                            phase := 5
+                        else if requireTarget and na(target)
+                            phase := 10
+                        else if spent or not ahead
+                            phase := 7
+                        else
+                            responseBar := bar_index
+                            phase := 2
+                    else if (freshHigh or freshLow) and phase != 3
+                        phase := 1
+    [signal, phase, direction, trigger, stop, target, lastEntry, lastStop, lastTarget, lastDirection, lastTime, attempts]
+
+f_overall(int a, int b, int c) =>
+    bool bull = a == 1 or b == 1 or c == 1
+    bool bear = a == -1 or b == -1 or c == -1
+    bull and bear ? 0 : bull ? 1 : bear ? -1 : 0
+// SOURCE ENGINE END
+
+[pdh, pdl, dailyKey] = request.security(syminfo.tickerid, "D", [high[1], low[1], time[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+// Daily open is fixed at daily bar inception, unlike its unfinished high/low.
+float dayOpen = request.security(syminfo.tickerid, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+bool validChart = chart.is_standard and timeframe.isminutes and timeframe.multiplier == 1 and syminfo.type != "option"
+bool closed = barstate.isconfirmed
+bool gap = not na(time_close[1]) and time > time_close[1]
+bool closeMode = mode == "Candle close (user variant)"
+bool markedWindow = time >= markedFrom and time < markedUntil
+float dl = markedWindow and dailyLongTarget > 0 ? dailyLongTarget : na
+float ds = markedWindow and dailyShortTarget > 0 ? dailyShortTarget : na
+bool dailyEligible = validChart and dailyOn and not na(pdh) and not na(pdl) and (not markedWindow or (fullLosses < 2 and reportedAttempts < 3))
+bool eventEligible = validChart and eventOn and eventLevel > 0 and eventStop > 0 and time >= eventFrom and time_close <= eventUntil and eventUntil > eventFrom
+bool trendEligible = validChart and trendOn and trendLevel > 0 and trendTarget > 0 and time >= trendFrom and time_close <= trendUntil and trendUntil > trendFrom
+[rawSd, pd, dd, td, std, tgd, ed, lsd, ltd, ld, lmd, nd] = f_setup(pdh, pdl, dailyKey, dl, ds, closed, dailyEligible, gap, closeMode, 2147483647, false)
+[rawSe, pe, de, te, ste, tge, ee, lse, lte, le, lme, ne] = f_setup(eventSide == "Bear" ? eventLevel : na, eventSide == "Bull" ? eventLevel : na, eventFrom, eventSide == "Bull" and eventTarget > 0 ? eventTarget : na, eventSide == "Bear" and eventTarget > 0 ? eventTarget : na, closed, eventEligible, gap, closeMode, 2147483647, false, eventStop > 0 ? eventStop : na)
+[rawSt, pt, dt, tt, stt, tgt, et, lst, ltt, lt, lmt, nt] = f_setup(trendSide == "Bear" ? trendLevel : na, trendSide == "Bull" ? trendLevel : na, trendFrom, trendSide == "Bull" and trendTarget > 0 ? trendTarget : na, trendSide == "Bear" and trendTarget > 0 ? trendTarget : na, closed, trendEligible, gap, closeMode, 2147483647, true)
+// The author rejects qualitative weak bodies in live DQRS. A colour-only
+// detector is therefore a candidate, not a completed source-method signal.
+// A body approval without a destination is not a complete reviewed trade plan.
+int sd = time[1] == approvedDailyResponse and not na(ltd) ? rawSd : 0
+int se = time[1] == approvedEventResponse and not na(lte) ? rawSe : 0
+int st = time[1] == approvedTrendResponse and not na(ltt) ? rawSt : 0
+var int lastDailyResponse = na
+var int lastEventResponse = na
+var int lastTrendResponse = na
+if closed and rawSd != 0
+    lastDailyResponse := time[1]
+if closed and rawSe != 0
+    lastEventResponse := time[1]
+if closed and rawSt != 0
+    lastTrendResponse := time[1]
+int overall = f_overall(sd, se, st)
+bool conflict = (sd == 1 or se == 1 or st == 1) and (sd == -1 or se == -1 or st == -1)
+
+color bull = color.rgb(24, 190, 125)
+color bear = color.rgb(250, 87, 105)
+color wait = color.rgb(245, 198, 66)
+color panel = color.rgb(20, 26, 35)
+color ink = color.rgb(235, 240, 246)
+plot(drawDaily ? pdh : na, "Previous day high", color=color.new(bear, 35), style=plot.style_stepline)
+plot(drawDaily ? pdl : na, "Previous day low", color=color.new(bull, 35), style=plot.style_stepline)
+plot(drawOpen ? dayOpen : na, "Daily open context", color=color.new(wait, 40), style=plot.style_stepline)
+plot(eventOn and time >= eventFrom and time < eventUntil ? eventLevel : na, "Manual event level", color=color.new(color.aqua, 30), style=plot.style_linebr)
+plot(trendOn and time >= trendFrom and time < trendUntil ? trendLevel : na, "Manual pullback level", color=color.new(color.orange, 30), style=plot.style_linebr)
+
+if closed and sd != 0
+    label.new(bar_index, sd == 1 ? low : high, sd == 1 ? "Bull · Daily" : "Bear · Daily", style=sd == 1 ? label.style_label_up : label.style_label_down, color=sd == 1 ? bull : bear, textcolor=color.black, size=size.small)
+if closed and se != 0
+    label.new(bar_index, se == 1 ? low : high, se == 1 ? "Bull · Event" : "Bear · Event", style=se == 1 ? label.style_label_up : label.style_label_down, color=se == 1 ? bull : bear, textcolor=color.black, size=size.small)
+if closed and st != 0
+    label.new(bar_index, st == 1 ? low : high, st == 1 ? "Bull · Pullback" : "Bear · Pullback", style=st == 1 ? label.style_label_up : label.style_label_down, color=st == 1 ? bull : bear, textcolor=color.black, size=size.small)
+
+if closed and rawSd != 0 and sd == 0
+    label.new(bar_index, rawSd == 1 ? low : high, rawSd == 1 ? "Bull candidate · Daily\nReview body + logical T1" : "Bear candidate · Daily\nReview body + logical T1", style=rawSd == 1 ? label.style_label_up : label.style_label_down, color=wait, textcolor=color.black, size=size.small)
+if closed and rawSe != 0 and se == 0
+    label.new(bar_index, rawSe == 1 ? low : high, rawSe == 1 ? "Bull candidate · Event" : "Bear candidate · Event", style=rawSe == 1 ? label.style_label_up : label.style_label_down, color=wait, textcolor=color.black, size=size.small)
+if closed and rawSt != 0 and st == 0
+    label.new(bar_index, rawSt == 1 ? low : high, rawSt == 1 ? "Bull candidate · Pullback" : "Bear candidate · Pullback", style=rawSt == 1 ? label.style_label_up : label.style_label_down, color=wait, textcolor=color.black, size=size.small)
+
+var float guideEntry = na
+var float guideStop = na
+var float guideTarget = na
+int candidateDirection = f_overall(rawSd, rawSe, rawSt)
+if closed and candidateDirection != 0
+    guideEntry := rawSd != 0 ? ed : rawSe != 0 ? ee : et
+    guideStop := rawSd != 0 ? lsd : rawSe != 0 ? lse : lst
+    guideTarget := rawSd != 0 ? ltd : rawSe != 0 ? lte : ltt
+plot(drawGuides ? guideEntry : na, "CANDIDATE / LAST entry guide", color=wait, style=plot.style_linebr)
+plot(drawGuides ? guideStop : na, "CANDIDATE / LAST SL guide", color=bear, style=plot.style_linebr)
+plot(drawGuides ? guideTarget : na, "CANDIDATE / LAST T1 guide (manual)", color=bull, style=plot.style_linebr)
+
+f_price(float v) =>
+    na(v) ? "—" : str.tostring(v, format.mintick)
+f_stamp(int v) =>
+    na(v) ? "—" : str.format_time(v, "dd MMM HH:mm", "Asia/Kolkata")
+f_status(int p, int s) =>
+    s == 1 ? "BULL" : s == -1 ? "BEAR" : p == 2 ? "WAIT · next candle" : p == 1 ? "WAIT · response" : p == 4 ? "WAIT · expired" : p == 5 ? "WAIT · SL crossed" : p == 6 ? "WAIT · ambiguous" : p == 7 ? "WAIT · target spent" : p == 8 ? "WAIT · limit" : p == 9 ? "WAIT · data gap" : p == 10 ? "WAIT · mark target" : "WAIT"
+f_row(table dash, int row, string name, int sig, int phase, float trig, float sl, float target, float entry, float lastSL, float lastT, int lastD, int lastTime, bool reviewed, string textSize) =>
+    color tone = sig == 1 ? bull : sig == -1 ? bear : wait
+    bool pending = phase == 2
+    table.cell(dash, 0, row, name, text_color=ink, bgcolor=panel, text_size=textSize)
+    table.cell(dash, 1, row, (phase == 3 and not reviewed ? "WAIT · review candle" : f_status(phase, sig)), text_color=tone, bgcolor=panel, text_size=textSize)
+    table.cell(dash, 2, row, f_price(pending ? trig : entry), text_color=ink, bgcolor=panel, text_size=textSize)
+    table.cell(dash, 3, row, f_price(pending ? sl : lastSL), text_color=bear, bgcolor=panel, text_size=textSize)
+    table.cell(dash, 4, row, f_price(pending ? target : lastT), text_color=bull, bgcolor=panel, text_size=textSize)
+    string last = lastD == 0 ? "—" : (reviewed ? "✓ " : "? ") + (lastD == 1 ? "Bull " : "Bear ") + f_stamp(lastTime)
+    table.cell(dash, 5, row, last, text_color=not reviewed ? wait : lastD == 1 ? bull : lastD == -1 ? bear : ink, bgcolor=panel, text_size=textSize)
+
+var table dash = table.new(position.top_right, 6, 9, border_width=1, border_color=color.rgb(50, 60, 73))
+if barstate.islast or barstate.islastconfirmedhistory
+    string ts = font == "Large" ? size.large : font == "Small" ? size.small : size.normal
+    color overallColor = overall == 1 ? bull : overall == -1 ? bear : wait
+    table.cell(dash, 0, 0, "GJ SOURCE", text_color=ink, bgcolor=panel, text_size=ts)
+    table.merge_cells(dash, 1, 0, 5, 0)
+    table.cell(dash, 1, 0, not validChart ? "WAIT · use standard 1m underlying" : conflict ? "WAIT · CONFLICT" : overall == 1 ? "BULL · confirmed now" : overall == -1 ? "BEAR · confirmed now" : "WAIT · no new entry", text_color=overallColor, bgcolor=panel, text_size=ts)
+    array<string> headers = array.from("Setup", "Now", "Trigger / LAST entry", "SL", "T1 · manual", "Latest · IST")
+    for col = 0 to 5
+        table.cell(dash, col, 1, array.get(headers, col), text_color=ink, bgcolor=color.rgb(37, 46, 60), text_size=ts)
+    f_row(dash, 2, "Daily", sd, pd, td, std, tgd, ed, lsd, ltd, ld, lmd, lastDailyResponse == approvedDailyResponse and not na(ltd), ts)
+    f_row(dash, 3, "Event · manual", se, pe, te, ste, tge, ee, lse, lte, le, lme, lastEventResponse == approvedEventResponse and not na(lte), ts)
+    f_row(dash, 4, "Pullback · manual", st, pt, tt, stt, tgt, et, lst, ltt, lt, lmt, lastTrendResponse == approvedTrendResponse and not na(ltt), ts)
+    table.merge_cells(dash, 0, 5, 5, 5)
+    table.cell(dash, 0, 5, mode + " · " + syminfo.ticker + " · " + timeframe.period + "m", text_color=ink, bgcolor=panel, text_size=ts)
+    table.merge_cells(dash, 0, 6, 5, 6)
+    table.cell(dash, 0, 6, "Event / pullback: mark context + level + validity window in settings", text_color=wait, bgcolor=panel, text_size=ts)
+    table.merge_cells(dash, 0, 7, 5, 7)
+    table.cell(dash, 0, 7, "? = candidate · ✓ = body + T1 reviewed · no chasing a recorded break", text_color=ink, bgcolor=panel, text_size=ts)
+    table.merge_cells(dash, 0, 8, 5, 8)
+    table.cell(dash, 0, 8, markedWindow and (fullLosses >= 2 or reportedAttempts >= 3) ? "Daily paused · reported attempt / full-loss limit" : "Update actual attempts / full SL · max 3 attempts / 2 full losses", text_color=wait, bgcolor=panel, text_size=ts)
+
+alertcondition(closed and pd == 2, "Daily response candidate · review now", "Daily response candidate · review body + T1 before immediate next-candle high/low break · skip if missed · {{ticker}} {{interval}}")
+alertcondition(closed and pe == 2, "Event response candidate · review now", "Event response candidate · verify selected trap/COC context + stop + T1 before next candle · {{ticker}} {{interval}}")
+alertcondition(closed and pt == 2, "Pullback response candidate · review now", "Pullback response candidate · verify first-pullback context + untouched destination before next candle · {{ticker}} {{interval}}")
+alertcondition(closed and rawSd == 1, "Bull candidate · Daily", "Bull daily candidate recorded after break · not a late-entry instruction · {{ticker}} {{interval}} · {{close}}")
+alertcondition(closed and rawSd == -1, "Bear candidate · Daily", "Bear daily candidate only · review response/context · {{ticker}} {{interval}} · {{close}}")
+alertcondition(closed and rawSe == 1, "Bull candidate · Event", "Bull event candidate only · review response/context · {{ticker}} {{interval}} · {{close}}")
+alertcondition(closed and rawSe == -1, "Bear candidate · Event", "Bear event candidate only · review response/context · {{ticker}} {{interval}} · {{close}}")
+alertcondition(closed and rawSt == 1, "Bull candidate · Pullback", "Bull pullback candidate only · review response/context · {{ticker}} {{interval}} · {{close}}")
+alertcondition(closed and rawSt == -1, "Bear candidate · Pullback", "Bear pullback candidate only · review response/context · {{ticker}} {{interval}} · {{close}}")
+// Reviewed outputs are chart-only. TradingView alerts retain input snapshots;
+// recreate candidate alerts after changing any relevant inputs or risk counts.

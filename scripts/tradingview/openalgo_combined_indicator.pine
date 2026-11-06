@@ -1,0 +1,2138 @@
+//@version=6
+indicator("OpenAlgoAll EMA + Candles + Gautam Sweep + Fib + RSI Volume", shorttitle="OAlgo All", overlay=false, max_bars_back=500, max_labels_count=500, max_lines_count=500)
+// Indicator observations only: no orders, broker state, external backend or performance claim.
+// Price overlays use force_overlay. The lower pane combines RSI with normalized relative volume.
+// Full volume and MACD values are available in the Data Window.
+showEMAs = input.bool(true, "EMA 9 + 15 + 21", group="Price chart")
+showTriple = input.bool(true, "Three-EMA alignment X (green Long / red Short)", group="Price chart")
+showPair = input.bool(true, "EMA 9/15 cross dots (separate from three-EMA X)", group="Price chart")
+showCandles = input.bool(true, "Candle patterns · LONG / SHORT", group="Price chart")
+showNeutral = input.bool(false, "Neutral candle observations", group="Price chart")
+showTrend = input.bool(true, "Trend setup · RSI + MACD", group="Price chart")
+showGJ = input.bool(true, "Gautam Jha · 1H sweep reversal", group="Gautam Jha")
+gjShowPending = input.bool(false, "Show unconfirmed sweeps and pending guides", group="Gautam Jha", tooltip="Off by default. Confirmed GJ signals and their latest reference levels remain visible.")
+gjShowGuides = input.bool(true, "Latest trigger / entry reference, SL and target", group="Gautam Jha")
+gjShowLevels = input.bool(true, "Previous UTC day high and low", group="Gautam Jha")
+gjShowStatus = input.bool(true, "Small setup status", group="Gautam Jha")
+gjHistory = input.int(20, "Confirmed sweep labels to retain", minval=1, maxval=40, group="Gautam Jha", tooltip="Uses 1H candles on every chart interval. Fixed 12:30–21:30 IST window. One signal per side per UTC day. Confirmation at the next 1H close is a user variant, not an intrabar entry promise.")
+showPivots = input.bool(true, "Fibonacci pivots", group="Fibonacci pivots")
+pivotChoice = input.string("Auto", "Anchor period", options=["Auto", "60", "240", "D", "W", "M"], group="Fibonacci pivots", tooltip="Auto uses daily pivots on intraday charts, weekly on daily charts, monthly on higher charts. 240 means four hours.")
+pivotHistory = input.int(4, "Pivot periods to retain", minval=1, maxval=20, group="Fibonacci pivots", tooltip="Default four historical pivot periods; levels use the preceding completed period, not its forming high/low.")
+showPivotLabels = input.bool(true, "Label current pivot prices", group="Fibonacci pivots")
+showRSI = input.bool(true, "RSI 14", group="Lower pane")
+showVolume = input.bool(true, "Volume · relative histogram", group="Lower pane", tooltip="Volume / SMA20 is drawn in the 0–20 band, capped at 3x. Raw volume remains in the Data Window; these bars are not raw-volume units.")
+setupWindow = input.int(5, "RSI exit / MACD cross validity (bars)", minval=1, maxval=30, group="Trend setup")
+labelFont = input.int(12, "Pattern label text size", minval=10, maxval=20, group="Labels")
+showAllPatternHistory = input.bool(false, "Show patterns on all historical candles", group="Labels", tooltip="Off: pattern labels appear only for the last 10 chart candles and expire as the chart advances. On: show all available history within the retention limits. GJ annotations are dated when the 1H confirmation becomes available. EMA lines, pivots and latest confirmed setup guides remain visible.")
+labelRoom = input.float(1.0, "Label spacing (ATR)", minval=0.2, maxval=5, step=0.1, group="Labels")
+keepLabels = input.int(160, "Labels to retain", minval=10, maxval=350, group="Labels")
+bullColor = input.color(#22c55e, "Long", group="Colors")
+bearColor = input.color(#ef4444, "Short", group="Colors")
+
+showVideoGuide = input.bool(true, "Video strategies · guidance", group="Video strategy guide")
+vgChoice = input.string("Auto", "Strategy from video", options=["Auto", "Fair Value Gap", "Order Block", "Liquidity Sweep", "Break of Structure", "Change of Character", "Inverse Fair Value Gap", "Breaker Block", "Optimal Trade Entry", "KRM", "Silver Bullet", "Supply / Demand", "Support / Resistance", "Breakout", "Candle Range Theory", "Power of 3"], group="Video strategy guide")
+vgCatalogue = input.bool(false, "Show all 15 strategy states", group="Video strategy guide")
+vgShowPending = input.bool(false, "Show unconfirmed video observations", group="Video strategy guide")
+vgLookback = input.int(1500, "Source candles to calculate", minval=300, maxval=5000, group="Video strategy guide", tooltip="Fourteen methods detect chart setups. Six added recipes use explicit local rules. Only KRM is unavailable because its exact trigger is not public. No orders or backtest claims. Recent labels use the shared last-10 / all-history setting.")
+
+// VIDEO GUIDE ENGINE START
+// Clip-derived observations. Local settings: strict 2L/2R pivots, prior ATR14,
+// displacement body >= ATR and close in outer quarter; pending expiry 20 bars.
+// Status: 0 geometry, 1 wait retest, 2 entry condition, 3 invalid, 4 target,
+// 5 expired, 6 ambiguous, 7 target unavailable. No fill/order is assumed.
+type VGBar
+    int t
+    float o
+    float h
+    float l
+    float c
+    int i
+    float a
+type VGPivot
+    int side
+    float price
+    int i
+    int t
+    int known
+    bool used
+type VGEvent
+    int kind
+    int side
+    int status
+    int createdAt
+    int barTime
+    int createdIndex
+    int confirmedAt
+    int confirmedBar
+    int entryAt
+    int entryBar
+    float watch
+    float entry
+    float stop
+    float target
+    float low
+    float high
+    float trigger
+    bool priced
+    int levelKey
+type VGZone
+    int kind
+    int side
+    float low
+    float high
+    VGEvent record
+    int at
+    bool converted
+    int failedAt
+type VGState
+    array<VGBar> bars
+    array<VGPivot> pivots
+    array<VGZone> zones
+    array<VGEvent> events
+    int bias
+    float atr
+    float seed
+    int count
+    int lastTime
+    float lastClose
+    int closed
+    int lastDay
+    bool available
+vg_state() =>
+    VGState.new(array.new<VGBar>(),array.new<VGPivot>(),array.new<VGZone>(),array.new<VGEvent>(),0,na,0.0,0,na,na,na,na,true)
+vg_terminal(VGEvent e) =>
+    e.status >= 3 and e.status <= 6
+vg_reset(VGState s) =>
+    for e in s.events
+        if not vg_terminal(e)
+            e.status := 5
+    array.clear(s.bars)
+    array.clear(s.pivots)
+    array.clear(s.zones)
+    s.bias := 0
+    s.atr := na
+    s.seed := 0.0
+    s.count := 0
+    s.lastTime := na
+    s.lastClose := na
+vg_round(float p, float tick, bool up) =>
+    na(p) ? float(na) : (up ? math.ceil(p/tick-0.000000001) : math.floor(p/tick+0.000000001))*tick
+vg_latest(VGState s, int kind) =>
+    VGEvent found = na
+    for e in s.events
+        if e.kind == kind
+            found := e
+    found
+vg_priced(int side,float w,float sl,float target) =>
+    not na(w) and not na(sl) and not na(target) and math.min(w,sl,target)>0 and (side>0 ? sl<w and w<target : target<w and w<sl)
+vg_create(VGState s,int kind,int side,VGBar b,float watch,float stop,float target,float lo,float hi,float trigger,bool qualified,float tick) =>
+    float w = vg_round(watch,tick,side>0)
+    float sl = vg_round(stop,tick,side<0)
+    float tp = vg_round(target,tick,side<0)
+    bool priced = vg_priced(side,w,sl,tp)
+    VGEvent e = VGEvent.new(kind,side,qualified ? (priced ? 1 : 7) : 0,s.closed,b.t,b.i,qualified ? s.closed : int(na),qualified ? b.t : int(na),na,na,w,na,sl,tp,lo,hi,trigger,priced,na)
+    array.push(s.events,e)
+    if array.size(s.events)>160
+        array.shift(s.events)
+    e
+vg_target(VGState s,int side,float watch,VGBar c) =>
+    float result = na
+    for p in s.pivots
+        if p.side==side and (side>0 ? p.price>math.max(watch,c.c) : p.price<math.min(watch,c.c))
+            bool untouched = true
+            for b in s.bars
+                if b.i>p.known and (side>0 ? b.h>=p.price : b.l<=p.price)
+                    untouched := false
+            if untouched
+                result := na(result) ? p.price : side>0 ? math.min(result,p.price) : math.max(result,p.price)
+    result
+vg_displacement(VGBar b,int side) =>
+    not na(b.a) and math.abs(b.c-b.o)>=b.a and (side>0 ? b.c>b.o and b.c>=b.l+0.75*(b.h-b.l) : b.c<b.o and b.c<=b.l+0.25*(b.h-b.l))
+vg_silver_window(int opened,int closed,int seconds) =>
+    int dow = dayofweek(opened*1000,"America/New_York")
+    int startMinute = hour(opened*1000,"America/New_York")*60+minute(opened*1000,"America/New_York")
+    int endMinute = hour(closed*1000,"America/New_York")*60+minute(closed*1000,"America/New_York")
+    (seconds==60 or seconds==300) and dow!=dayofweek.saturday and dow!=dayofweek.sunday and startMinute>=600 and endMinute<660 and dayofweek(closed*1000,"America/New_York")==dow
+vg_mark_close(VGEvent e,VGBar b,float tick,int closed) =>
+    if e.priced and (e.side>0 ? b.l>e.stop and b.h<e.target and e.stop<b.c and b.c<e.target : b.h<e.stop and b.l>e.target and e.target<b.c and b.c<e.stop)
+        e.entry := vg_round(b.c,tick,e.side>0)
+        e.entryAt := closed
+        e.entryBar := b.t
+        e.status := 2
+vg_step(VGState s,float o,float h,float l,float c,int opened,int closed,int idx,float tick,int seconds,bool confirmed,bool session,int day) =>
+    if confirmed
+        s.closed := closed
+        bool valid = seconds>0 and seconds<86400 and not na(tick) and tick>0 and not na(o) and not na(h) and not na(l) and not na(c) and l>0 and h>=math.max(o,c,l) and l<=math.min(o,c) and (na(s.lastTime) or opened>s.lastTime)
+        if not valid
+            vg_reset(s)
+            s.available := false
+        else
+            s.available := true
+            // Match the JS reset before constructing source continuity state.
+            float atrBefore = s.atr
+            if not na(s.lastTime) and (opened-s.lastTime!=seconds or (session and day!=s.lastDay))
+                vg_reset(s)
+            float priorClose = s.lastClose
+            VGBar b = VGBar.new(opened,o,h,l,c,idx,atrBefore)
+            array.push(s.bars,b)
+            if array.size(s.bars)>300
+                array.shift(s.bars)
+            int n = array.size(s.bars)
+            if n>=5
+                VGBar p = array.get(s.bars,n-3)
+                bool hi = true
+                bool lo = true
+                for j = n-5 to n-1
+                    if j!=n-3
+                        VGBar q = array.get(s.bars,j)
+                        hi := hi and p.h>q.h
+                        lo := lo and p.l<q.l
+                if hi!=lo
+                    VGPivot point = VGPivot.new(hi ? 1 : -1,hi ? p.h : p.l,p.i,p.t,b.i,false)
+                    int sizeP = array.size(s.pivots)
+                    VGPivot tail = sizeP>0 ? array.get(s.pivots,sizeP-1) : na
+                    if not na(tail) and tail.side==point.side
+                        if point.side>0 ? point.price>tail.price : point.price<tail.price
+                            array.set(s.pivots,sizeP-1,point)
+                    else
+                        array.push(s.pivots,point)
+            while array.size(s.pivots)>0 and b.i-array.get(s.pivots,0).i>300
+                array.shift(s.pivots)
+            VGPivot swingHi = na
+            VGPivot swingLo = na
+            VGPivot prevHigh = na
+            VGPivot prevLow = na
+            for p in s.pivots
+                if p.side>0
+                    prevHigh := swingHi
+                    swingHi := p
+                else
+                    prevLow := swingLo
+                    swingLo := p
+            if s.bias==0 and not na(prevHigh) and not na(prevLow)
+                if swingHi.price>prevHigh.price and swingLo.price>prevLow.price
+                    s.bias := 1
+                else if swingHi.price<prevHigh.price and swingLo.price<prevLow.price
+                    s.bias := -1
+            int breakSide = 0
+            int breakKind = -1
+            VGPivot breakLevel = na
+            VGPivot origin = na
+            if s.bias!=0 and not na(swingHi) and not swingHi.used and c>swingHi.price
+                breakSide := 1
+                breakLevel := swingHi
+                origin := swingLo
+                swingHi.used := true
+            else if s.bias!=0 and not na(swingLo) and not swingLo.used and c<swingLo.price
+                breakSide := -1
+                breakLevel := swingLo
+                origin := swingHi
+                swingLo.used := true
+            if breakSide!=0
+                breakKind := breakSide==s.bias ? 3 : 4
+                s.bias := breakSide
+            for e in s.events
+                if not vg_terminal(e) and e.createdIndex<b.i
+                    if e.status!=2 and (b.i-e.createdIndex>20 or (e.kind==9 and not vg_silver_window(opened,closed,seconds)) or (e.kind==14 and e.status==0 and b.i-e.createdIndex>3))
+                        e.status := 5
+                    else if (e.kind==11 or e.kind==12) and not na(e.trigger) and (e.side>0 ? c<e.trigger : c>e.trigger)
+                        e.status := 3
+                    else
+                        bool stopped = not na(e.stop) and (e.side>0 ? l<=e.stop : h>=e.stop)
+                        bool hit = not na(e.target) and (e.side>0 ? h>=e.target : l<=e.target)
+                        bool reached = not na(e.watch) and (e.side>0 ? l<=e.watch : h>=e.watch)
+                        if stopped and hit
+                            e.status := 6
+                        else if stopped
+                            e.status := 3
+                        else if hit
+                            e.status := not na(e.entryAt) ? 4 : 3
+                        else if breakSide!=0 and breakSide!=e.side
+                            e.status := 3
+                        else
+                            if e.kind==2 and e.status==0 and na(e.confirmedAt) and not na(e.trigger) and (e.side>0 ? c>e.trigger : c<e.trigger)
+                                e.confirmedAt := closed
+                            if e.status==1 and reached and (e.side>0 ? c>o and c>e.watch : c<o and c<e.watch)
+                                float entry = vg_round(c,tick,e.side>0)
+                                if e.kind==12
+                                    e.stop := vg_round(e.side>0 ? l-tick : h+tick,tick,e.side<0)
+                                if e.side>0 ? e.stop<entry and entry<e.target : e.target<entry and entry<e.stop
+                                    e.entry := entry
+                                    e.entryAt := closed
+                                    e.entryBar := opened
+                                    e.status := 2
+                                else
+                                    e.status := 3
+            int levelScore = 99
+            int levelIndex = -1
+            int levelSidePick = 0
+            int levelKey = na
+            float levelLow = na
+            float levelHigh = na
+            float levelWatch = na
+            float levelStop = na
+            float levelTarget = na
+            float levelTrigger = na
+            bool levelBounce = false
+            if not na(s.atr)
+                for direction = 0 to 1
+                    int levelSide = direction==0 ? 1 : -1
+                    VGPivot a = levelSide>0 ? prevLow : prevHigh
+                    VGPivot z = levelSide>0 ? swingLo : swingHi
+                    float tol = math.max(2*tick,0.1*s.atr)
+                    if not na(a) and not na(z) and z.i-a.i>=3 and math.abs(a.price-z.price)<=tol
+                        float lo = math.min(a.price,z.price)
+                        float hi = math.max(a.price,z.price)
+                        bool bounce = levelSide>0 ? l<=hi and c>hi and c>o : h>=lo and c<lo and c<o
+                        bool flipped = not na(priorClose) and (levelSide>0 ? priorClose>=lo and c<lo-tick : priorClose<=hi and c>hi+tick)
+                        if bounce or flipped
+                            int side = flipped ? -levelSide : levelSide
+                            VGEvent old = vg_latest(s,11)
+                            bool duplicate = not na(old) and not vg_terminal(old) and old.side==side and old.levelKey==z.t
+                            if not duplicate
+                                float w = bounce ? c : side>0 ? hi : lo
+                                float stop = side>0 ? math.min(lo,l)-tick : math.max(hi,h)+tick
+                                float tp = vg_target(s,side,w,b)
+                                float wr = vg_round(w,tick,side>0)
+                                float sl = vg_round(stop,tick,side<0)
+                                float targetPrice = vg_round(tp,tick,side<0)
+                                bool priced = vg_priced(side,wr,sl,targetPrice)
+                                bool enters = bounce and priced and (side>0 ? l>sl and h<targetPrice : h<sl and l>targetPrice)
+                                int score = enters ? 0 : priced ? 1 : 2
+                                if score<levelScore or (score==levelScore and z.i>levelIndex)
+                                    levelScore := score
+                                    levelIndex := z.i
+                                    levelSidePick := side
+                                    levelKey := z.t
+                                    levelLow := lo
+                                    levelHigh := hi
+                                    levelWatch := w
+                                    levelStop := stop
+                                    levelTarget := tp
+                                    levelTrigger := bounce ? (side>0 ? lo : hi) : w
+                                    levelBounce := bounce
+            if levelSidePick!=0
+                VGEvent e = vg_create(s,11,levelSidePick,b,levelWatch,levelStop,levelTarget,levelLow,levelHigh,levelTrigger,true,tick)
+                e.levelKey := levelKey
+                if levelBounce
+                    vg_mark_close(e,b,tick,closed)
+            VGEvent oldBreakout = vg_latest(s,12)
+            if not na(s.atr) and n>=13 and (na(oldBreakout) or vg_terminal(oldBreakout))
+                float rangeLow = na
+                float rangeHigh = na
+                VGBar start = array.get(s.bars,n-13)
+                for j = n-13 to n-2
+                    VGBar q = array.get(s.bars,j)
+                    rangeLow := na(rangeLow) ? q.l : math.min(rangeLow,q.l)
+                    rangeHigh := na(rangeHigh) ? q.h : math.max(rangeHigh,q.h)
+                float tol = math.max(2*tick,0.1*s.atr)
+                int highTouches = 0
+                int lowTouches = 0
+                for pt in s.pivots
+                    if pt.i>=start.i and pt.i<b.i
+                        if pt.side>0 and math.abs(pt.price-rangeHigh)<=tol
+                            highTouches += 1
+                        if pt.side<0 and math.abs(pt.price-rangeLow)<=tol
+                            lowTouches += 1
+                int side = c>=rangeHigh+tick and priorClose<=rangeHigh ? 1 : c<=rangeLow-tick and priorClose>=rangeLow ? -1 : 0
+                if side!=0 and rangeHigh-rangeLow<=4*s.atr and highTouches>=2 and lowTouches>=2
+                    float w = side>0 ? rangeHigh : rangeLow
+                    vg_create(s,12,side,b,w,side>0 ? rangeLow-tick : rangeHigh+tick,vg_target(s,side,w,b),rangeLow,rangeHigh,w,true,tick)
+            VGEvent pendingPO3 = vg_latest(s,14)
+            if not na(pendingPO3) and pendingPO3.status==0 and b.i>pendingPO3.createdIndex and b.i-pendingPO3.createdIndex<=3 and vg_displacement(b,pendingPO3.side) and (pendingPO3.side>0 ? c>pendingPO3.trigger : c<pendingPO3.trigger)
+                pendingPO3.confirmedAt := closed
+                pendingPO3.confirmedBar := opened
+                pendingPO3.status := pendingPO3.priced ? 1 : 7
+            VGEvent oldPO3 = vg_latest(s,14)
+            if not na(s.atr) and n>=7 and (na(oldPO3) or vg_terminal(oldPO3))
+                float rangeLow = na
+                float rangeHigh = na
+                for j = n-7 to n-2
+                    VGBar q = array.get(s.bars,j)
+                    rangeLow := na(rangeLow) ? q.l : math.min(rangeLow,q.l)
+                    rangeHigh := na(rangeHigh) ? q.h : math.max(rangeHigh,q.h)
+                float span = rangeHigh-rangeLow
+                int side = l<rangeLow and h<=rangeHigh and c>rangeLow and c<rangeHigh ? 1 : h>rangeHigh and l>=rangeLow and c>rangeLow and c<rangeHigh ? -1 : 0
+                if side!=0 and span>0 and span<=2*s.atr
+                    float w = side>0 ? rangeHigh : rangeLow
+                    vg_create(s,14,side,b,w,side>0 ? l-tick : h+tick,side>0 ? rangeHigh+span : rangeLow-span,rangeLow,rangeHigh,w,false,tick)
+            if n>=3
+                VGBar a = array.get(s.bars,n-3)
+                VGBar m = array.get(s.bars,n-2)
+                int side = m.l<a.l and m.h<=a.h and m.c>a.l and m.c<a.h and c>m.h and c<a.h and c>o ? 1 : m.h>a.h and m.l>=a.l and m.c>a.l and m.c<a.h and c<m.l and c>a.l and c<o ? -1 : 0
+                if side!=0 and (side>0 ? h<a.h and l>m.l-tick : l>a.l and h<m.h+tick)
+                    VGEvent e = vg_create(s,13,side,b,c,side>0 ? m.l-tick : m.h+tick,side>0 ? a.h : a.l,a.l,a.h,na,true,tick)
+                    vg_mark_close(e,b,tick,closed)
+            if not na(s.atr)
+                for direction = 0 to 1
+                    int side = direction==0 ? 1 : -1
+                    VGPivot a = side>0 ? prevLow : prevHigh
+                    VGPivot z = side>0 ? swingLo : swingHi
+                    VGPivot trigger = side>0 ? swingHi : swingLo
+                    float tol = math.max(2*tick,0.1*s.atr)
+                    if not na(a) and not na(z) and not na(trigger) and z.i-a.i>=3 and math.abs(a.price-z.price)<=tol
+                        float lo = math.min(a.price,z.price)
+                        float hi = math.max(a.price,z.price)
+                        bool swept = side>0 ? l<lo and c>hi : h>hi and c<lo
+                        bool opposite = side>0 ? (not na(swingHi) and h>swingHi.price) : (not na(swingLo) and l<swingLo.price)
+                        if swept and not opposite and b.i-trigger.i<=300
+                            vg_create(s,2,side,b,na,side>0 ? l-tick : h+tick,vg_target(s,side,trigger.price,b),lo,hi,trigger.price,false,tick)
+            if breakSide!=0
+                int side = breakSide
+                float watch = breakLevel.price
+                float stop = na(origin) ? float(na) : side>0 ? origin.price-tick : origin.price+tick
+                vg_create(s,breakKind,side,b,breakKind==3 ? watch : float(na),stop,vg_target(s,side,watch,b),watch,watch,watch,breakKind==3,tick)
+                if vg_displacement(b,side)
+                    VGBar opposite = na
+                    if n>=2
+                        for j = math.max(0,n-4) to n-2
+                            VGBar q = array.get(s.bars,j)
+                            if side>0 ? q.c<q.o : q.c>q.o
+                                opposite := q
+                    if not na(opposite)
+                        float w = (opposite.o+opposite.c)/2
+                        VGEvent e = vg_create(s,1,side,b,w,side>0 ? opposite.l-tick : opposite.h+tick,vg_target(s,side,w,b),opposite.l,opposite.h,na,true,tick)
+                        array.push(s.zones,VGZone.new(1,side,e.low,e.high,e,b.i,false,na))
+                    int baseCount = 0
+                    float baseLow = na
+                    float baseHigh = na
+                    float bodyLow = na
+                    float bodyHigh = na
+                    if n>=2
+                        for step = 1 to math.min(3,n-1)
+                            VGBar q = array.get(s.bars,n-1-step)
+                            float nextLow = na(baseLow) ? q.l : math.min(baseLow,q.l)
+                            float nextHigh = na(baseHigh) ? q.h : math.max(baseHigh,q.h)
+                            if na(q.a) or math.abs(q.c-q.o)>0.5*q.a or nextHigh-nextLow>1.5*s.atr
+                                break
+                            baseCount += 1
+                            baseLow := nextLow
+                            baseHigh := nextHigh
+                            bodyLow := na(bodyLow) ? math.min(q.o,q.c) : math.min(bodyLow,q.o,q.c)
+                            bodyHigh := na(bodyHigh) ? math.max(q.o,q.c) : math.max(bodyHigh,q.o,q.c)
+                    if baseCount>0
+                        float lo = side>0 ? baseLow : bodyLow
+                        float hi = side>0 ? bodyHigh : baseHigh
+                        float w = side>0 ? hi : lo
+                        vg_create(s,10,side,b,w,side>0 ? lo-tick : hi+tick,vg_target(s,side,w,b),lo,hi,na,true,tick)
+                    if not na(origin)
+                        float extreme = side>0 ? h : l
+                        float span = math.abs(extreme-origin.price)
+                        float w = extreme-side*0.705*span
+                        vg_create(s,7,side,b,w,stop,extreme,math.min(extreme-side*0.62*span,extreme-side*0.79*span),math.max(extreme-side*0.62*span,extreme-side*0.79*span),na,true,tick)
+            if n>=3
+                VGBar a = array.get(s.bars,n-3)
+                VGBar m = array.get(s.bars,n-2)
+                int side = l>a.h ? 1 : h<a.l ? -1 : 0
+                if side!=0
+                    float lo = side>0 ? a.h : h
+                    float hi = side>0 ? l : a.l
+                    float w = (lo+hi)/2
+                    bool structural = false
+                    for e in s.events
+                        if (e.kind==3 or e.kind==4) and e.side==side and b.i-e.createdIndex<=5
+                            structural := true
+                    bool qualified = structural and vg_displacement(m,side)
+                    VGEvent e = vg_create(s,0,side,b,w,side>0 ? a.l-tick : a.h+tick,vg_target(s,side,w,b),lo,hi,na,qualified,tick)
+                    VGEvent sweep = vg_latest(s,2)
+                    VGEvent oldSilver = vg_latest(s,9)
+                    if qualified and vg_silver_window(opened,closed,seconds) and not na(sweep) and not vg_terminal(sweep) and sweep.side==side and not na(sweep.confirmedAt) and sweep.createdAt<closed and (na(oldSilver) or vg_terminal(oldSilver))
+                        vg_create(s,9,side,b,w,sweep.stop,vg_target(s,side,w,b),lo,hi,na,true,tick)
+                    if qualified
+                        array.push(s.zones,VGZone.new(0,side,lo,hi,e,b.i,false,na))
+            for z in s.zones
+                if not z.converted and b.i-z.at<=20 and z.at!=b.i
+                    bool failed = z.side>0 ? c<z.low : c>z.high
+                    if failed and na(z.failedAt)
+                        z.failedAt := b.i
+                        z.record.status := 3
+                    if not na(z.failedAt)
+                        int side = -z.side
+                        bool sweep = false
+                        for e in s.events
+                            if e.kind==2 and e.side==side and e.createdIndex<z.failedAt and z.failedAt-e.createdIndex<=5
+                                sweep := true
+                        if z.kind==0 or (sweep and breakSide==side)
+                            float w = z.kind==0 ? (z.low+z.high)/2 : nz(z.record.watch,(z.low+z.high)/2)
+                            vg_create(s,z.kind==0 ? 5 : 6,side,b,w,side>0 ? z.low-tick : z.high+tick,vg_target(s,side,w,b),z.low,z.high,na,true,tick)
+                            z.converted := true
+            while array.size(s.zones)>0 and b.i-array.get(s.zones,0).at>20
+                array.shift(s.zones)
+            for j = 0 to 1
+                int kind = j==0 ? 2 : 4
+                VGEvent e = vg_latest(s,kind)
+                if not na(e) and not vg_terminal(e) and e.status==0
+                    int confirmation = kind==4 ? e.createdAt : e.confirmedAt
+                    if not na(confirmation)
+                        VGZone zone = na
+                        for z in s.zones
+                            if z.side==e.side and not z.converted and z.record.createdAt>=confirmation and z.record.createdAt>e.createdAt
+                                zone := z
+                        if not na(zone)
+                            e.watch := zone.record.watch
+                            e.low := zone.low
+                            e.high := zone.high
+                            e.confirmedAt := closed
+                            e.confirmedBar := opened
+                            e.priced := vg_priced(e.side,e.watch,e.stop,e.target)
+                            e.status := e.priced ? 1 : 7
+            float tr = na(priorClose) ? h-l : math.max(h-l,math.abs(h-priorClose),math.abs(l-priorClose))
+            if na(s.atr)
+                s.seed += tr
+                s.count += 1
+                if s.count==14
+                    s.atr := s.seed/14
+            else
+                s.atr := (s.atr*13+tr)/14
+            s.lastTime := opened
+            s.lastClose := c
+            s.lastDay := day
+    s.available
+// VIDEO GUIDE ENGINE END
+
+// GJ ENGINE START
+// Screenshot rules, with confirmation at the NEXT 1H candle CLOSE (user variant).
+// Phases: 0 waiting, 1 pending, 2 confirmed, 3 expired/gap, 4 stop crossed,
+// 5 target already touched, 6 two-sided sweep, 7 missing/invalid data, 8 outside window.
+type GJPacket
+    int closed
+    int day
+    float pdh
+    float pdl
+    int signal
+    int phase
+    int side
+    int armed
+    int sweepTime
+    float extreme
+    float trigger
+    float stop
+    float target
+    float entry
+
+gj_in_session(int opened, int closed) =>
+    int start = int(math.floor(opened / 86400000)) * 86400000
+    // Fixed 12:30–21:30 IST = 07:00–16:00 UTC; no seasonal overlap claim.
+    opened >= start + 7 * 3600000 and closed <= start + 16 * 3600000 and closed - opened == 3600000
+
+gj_valid(float o, float h, float l, float c) =>
+    not na(o) and not na(h) and not na(l) and not na(c) and l > 0 and h > l and h >= math.max(o, c) and l <= math.min(o, c)
+
+gj_day_levels() =>
+    var int key = na
+    var int first = na
+    var int last = na
+    var int hours = 0
+    var bool complete = false
+    var float runningHigh = na
+    var float runningLow = na
+    var float pdh = na
+    var float pdl = na
+    int day = int(math.floor(time / 86400000))
+    bool valid = gj_valid(open, high, low, close) and time_close - time == 3600000
+    if na(key) or day != key
+        bool priorComplete = not na(key) and day == key + 1 and complete and hours == 24 and first == key * 86400000 and last == day * 86400000
+        pdh := priorComplete ? runningHigh : na
+        pdl := priorComplete ? runningLow : na
+        key := day
+        first := time
+        hours := 0
+        complete := time == day * 86400000
+        runningHigh := na
+        runningLow := na
+        last := na
+    complete := complete and valid and (na(last) or time == last)
+    hours += 1
+    runningHigh := na(runningHigh) ? high : math.max(runningHigh, high)
+    runningLow := na(runningLow) ? low : math.min(runningLow, low)
+    last := time_close
+    [pdh, pdl, day]
+
+gj_step(float o, float h, float l, float c, int opened, int closed, int day, float pdh, float pdl, float tick, bool eligible, bool confirmed) =>
+    var int key = na
+    var bool usedLong = false
+    var bool usedShort = false
+    var int pending = 0
+    var int phase = 0
+    var int side = 0
+    var int sweepTime = na
+    var int sweepClose = na
+    var float extreme = na
+    var float trigger = na
+    var float stop = na
+    var float target = na
+    float entry = na
+    int signal = 0
+    int armed = 0
+    if confirmed
+        if na(key) or key != day
+            key := day
+            usedLong := false
+            usedShort := false
+            pending := 0
+            phase := 0
+        bool valid = gj_valid(o, h, l, c) and not na(pdh) and not na(pdl) and pdh > pdl and tick > 0 and closed - opened == 3600000
+        if not valid or not eligible
+            pending := 0
+            phase := valid ? 8 : 7
+        else if pending != 0
+            bool consecutive = opened == sweepClose
+            bool stopHit = pending == 1 ? l <= stop : h >= stop
+            bool targetHit = pending == 1 ? h >= target : l <= target
+            bool matched = pending == 1 ? c > o and h > trigger : c < o and l < trigger
+            bool riskValid = pending == 1 ? stop < c and c < target : target < c and c < stop
+            phase := not consecutive ? 3 : stopHit ? 4 : targetHit ? 5 : not matched or not riskValid ? 3 : 2
+            if phase == 2
+                signal := pending
+                entry := c
+                usedLong := usedLong or pending == 1
+                usedShort := usedShort or pending == -1
+            pending := 0
+        else
+            phase := 0
+        // An hour that invalidates the prior setup can itself be a fresh sweep.
+        if signal == 0 and valid and eligible
+            bool sweptLow = l < pdl
+            bool sweptHigh = h > pdh
+            if sweptLow and sweptHigh
+                phase := 6
+            else
+                bool canConfirm = gj_in_session(closed, closed + 3600000)
+                bool bull = sweptLow and c > o and not usedLong and canConfirm
+                bool bear = sweptHigh and c < o and not usedShort and canConfirm
+                if bull or bear
+                    side := bull ? 1 : -1
+                    extreme := bull ? l : h
+                    trigger := bull ? h : l
+                    stop := bull ? l - tick : h + tick
+                    target := bull ? pdh : pdl
+                    bool ahead = bull ? trigger < target and stop > 0 : target < trigger
+                    if ahead
+                        pending := side
+                        armed := side
+                        phase := 1
+                        sweepTime := opened
+                        sweepClose := closed
+                    else
+                        phase := 5
+                else if not canConfirm
+                    phase := 8
+    GJPacket.new(closed, day, pdh, pdl, signal, phase, side, armed, sweepTime, extreme, trigger, stop, target, entry)
+
+gj_hour() =>
+    [pdh, pdl, day] = gj_day_levels()
+    gj_step(open, high, low, close, time, time_close, day, pdh, pdl, syminfo.mintick, gj_in_session(time, time_close), true)
+
+gj_closed_hour() =>
+    GJPacket packet = gj_hour()
+    packet[1]
+// GJ ENGINE END
+
+// GJ DRAW START
+f_pattern_is_recent(int candle, int latest, bool showAll) =>
+    showAll or candle >= latest - 9
+
+f_prune_pattern_history(array<label> notes, array<line> leaders, int oldest) =>
+    while array.size(notes) > 0
+        if label.get_x(array.get(notes, 0)) >= oldest
+            break
+        label.delete(array.shift(notes))
+        line.delete(array.shift(leaders))
+    0
+
+type GJView
+    int lastClosed
+    int day
+    bool pendingPlan
+    label pendingNote
+    line pendingLeader
+    array<label> notes
+    array<line> leaders
+    array<line> guides
+    array<label> guideLabels
+
+gj_view() =>
+    GJView.new(na, na, false, na, na, array.new_label(), array.new_line(), array.new_line(), array.new_label())
+
+gj_clear_pending(GJView view) =>
+    if not na(view.pendingNote)
+        label.delete(view.pendingNote)
+        view.pendingNote := na
+    if not na(view.pendingLeader)
+        line.delete(view.pendingLeader)
+        view.pendingLeader := na
+    0
+
+gj_clear_guides(GJView view) =>
+    while array.size(view.guides) > 0
+        line.delete(array.shift(view.guides))
+    while array.size(view.guideLabels) > 0
+        label.delete(array.shift(view.guideLabels))
+    0
+
+gj_guide(GJView view, int start, float level, string caption, color col, int font) =>
+    line item = line.new(start, level, start + 3600000, level, xloc=xloc.bar_time, extend=extend.right, color=col, style=line.style_dotted, width=1, force_overlay=true)
+    label note = label.new(bar_index + 3, level, caption + " " + str.tostring(level, format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=#111827, textcolor=col, size=font, tooltip="Setup reference only. This indicator does not place or manage an order.", force_overlay=true)
+    array.push(view.guides, item)
+    array.push(view.guideLabels, note)
+    0
+
+gj_share_target_caption(GJView view, float level, string dailyName, float tick) =>
+    bool shared = false
+    if array.size(view.guideLabels) == 3
+        label targetNote = array.get(view.guideLabels, 2)
+        shared := math.abs(label.get_y(targetNote) - level) < tick * 0.5
+        if shared
+            string role = view.pendingPlan ? "GJ pending target" : "GJ last target"
+            label.set_text(targetNote, role + " / " + dailyName + " " + str.tostring(level, format.mintick))
+    shared
+
+gj_consume(GJView view, GJPacket packet, int availableAt, bool drawPending, bool drawGuides, int retain, int font, float room, color bull, color bear) =>
+    int side = 0
+    if not na(packet) and packet.closed <= availableAt and (na(view.lastClosed) or packet.closed > view.lastClosed)
+        view.lastClosed := packet.closed
+        if na(view.day) or packet.day != view.day
+            gj_clear_guides(view)
+            view.pendingPlan := false
+            view.day := packet.day
+        gj_clear_pending(view)
+        if view.pendingPlan and packet.phase != 1
+            gj_clear_guides(view)
+            view.pendingPlan := false
+        if packet.phase == 1
+            view.pendingPlan := drawPending
+            bool bullish = packet.side == 1
+            if drawPending
+                float y = packet.extreme + (bullish ? -room : room)
+                string details = bullish ? "A completed green 1H candle went below yesterday's UTC low. Wait for the NEXT 1H candle to finish green and break this sweep candle's high." : "A completed red 1H candle went above yesterday's UTC high. Wait for the NEXT 1H candle to finish red and break this sweep candle's low."
+                view.pendingLeader := line.new(packet.sweepTime, packet.extreme, packet.closed, y, xloc=xloc.bar_time, color=#fbbf24, style=line.style_dotted, force_overlay=true)
+                view.pendingNote := label.new(packet.closed, y, "GJ SWEEP\nWaiting for next 1H close", xloc=xloc.bar_time, style=bullish ? label.style_label_up : label.style_label_down, color=#111827, textcolor=#fbbf24, size=font, tooltip=details + "\nThis is a pending setup, not a confirmed Long or Short.", force_overlay=true)
+                gj_clear_guides(view)
+            if drawGuides and drawPending
+                gj_guide(view, packet.closed, packet.trigger, "GJ trigger", #60a5fa, font)
+                gj_guide(view, packet.closed, packet.stop, "GJ pending SL", #ef4444, font)
+                gj_guide(view, packet.closed, packet.target, "GJ pending target", #22c55e, font)
+        if packet.signal != 0
+            side := packet.signal
+            view.pendingPlan := false
+            bool bullish = side == 1
+            color col = bullish ? bull : bear
+            int candle = packet.closed
+            float y = packet.entry + (bullish ? -room * 2 : room * 2)
+            string details = "Gautam Jha screenshot rules, with confirmation at the next 1H CLOSE.\nPrevious UTC-day sweep, followed immediately by a matching-colour candle that broke the sweep boundary.\nEntry reference is the confirmation close, not an assumed earlier fill.\nTrigger " + str.tostring(packet.trigger, format.mintick) + "\nEntry ref " + str.tostring(packet.entry, format.mintick) + "\nSL " + str.tostring(packet.stop, format.mintick) + "\nTarget " + str.tostring(packet.target, format.mintick) + "\nThe stop is one minimum tick beyond the sweep. No EMA or trend gate. One signal per direction per UTC day."
+            array.push(view.leaders, line.new(candle - 3600000, packet.entry, candle, y, xloc=xloc.bar_time, color=col, style=line.style_dotted, width=1, force_overlay=true))
+            array.push(view.notes, label.new(candle, y, bullish ? "GJ LONG\n1H confirmed" : "GJ SHORT\n1H confirmed", xloc=xloc.bar_time, style=bullish ? label.style_label_up : label.style_label_down, color=#111827, textcolor=col, size=font, tooltip=details, force_overlay=true))
+            while array.size(view.notes) > retain
+                label.delete(array.shift(view.notes))
+                line.delete(array.shift(view.leaders))
+            gj_clear_guides(view)
+            if drawGuides
+                gj_guide(view, packet.closed, packet.entry, "GJ last entry ref", #60a5fa, font)
+                gj_guide(view, packet.closed, packet.stop, "GJ last SL", #ef4444, font)
+                gj_guide(view, packet.closed, packet.target, "GJ last target", #22c55e, font)
+    side
+
+gj_phase_text(int phase) =>
+    phase == 1 ? "Sweep found · waiting for next 1H close" : phase == 2 ? "1H reversal confirmed" : phase == 3 ? "Sweep expired · waiting for a new sweep" : phase == 4 ? "Confirmation crossed SL · skipped" : phase == 5 ? "Target already touched · skipped" : phase == 6 ? "Both daily extremes swept · skipped" : phase == 7 ? "Previous UTC day incomplete" : phase == 8 ? "Outside 12:30–21:30 IST" : "Waiting for a previous-day sweep"
+// GJ DRAW END
+
+// Local EMA9/15/21 arithmetic: first value is an SMA, subsequent values use alpha 2/(n+1).
+// Call each function on every bar. Pine rollback keeps forming-bar arithmetic provisional.
+f_seeded_ema(float src, simple int length) =>
+    var int count = 0
+    var float total = 0.0
+    var float value = na
+    if not na(src)
+        if na(value)
+            count += 1
+            total += src
+            if count == length
+                value := total / length
+        else
+            value += (2.0 / (length + 1)) * (src - value)
+    value
+
+// Matches three_ema.py: omit the first bar's span; seed from fourteen following TR spans.
+f_atr14() =>
+    var int count = 0
+    var float total = 0.0
+    var float value = na
+    float span = na(close[1]) ? na : math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+    if not na(span)
+        if na(value)
+            count += 1
+            total += span
+            if count == 14
+                value := total / 14
+        else
+            value := (value * 13 + span) / 14
+    value
+
+// Returns [one-bar side pulse, last confirmed strict order]. Chart form has no higher-timeframe gate.
+f_three_alignment(float e9, float e15, float e21, float atr, bool confirmed) =>
+    var int previousOrder = 0
+    var bool seenOrder = false
+    var bool eligible = false
+    var bool consumed = false
+    int side = 0
+    bool valid = not na(e9) and not na(e15) and not na(e21)
+    if confirmed and valid
+        int currentOrder = e9 > e15 and e15 > e21 ? 1 : e9 < e15 and e15 < e21 ? -1 : 0
+        if not seenOrder or currentOrder != previousOrder
+            eligible := seenOrder and currentOrder != 0
+            consumed := false
+        previousOrder := currentOrder
+        seenOrder := true
+        bool gaps = not na(atr) and atr > 0 and math.min(math.abs(e9 - e15), math.abs(e15 - e21)) >= atr * 0.1
+        bool slopes = not na(e9[3]) and not na(e15[3]) and not na(e21[3]) and (e9 - e9[3]) * currentOrder > 0 and (e15 - e15[3]) * currentOrder > 0 and (e21 - e21[3]) * currentOrder > 0
+        bool beyond = (close - e9) * currentOrder > 0 and (close - e15) * currentOrder > 0 and (close - e21) * currentOrder > 0
+        if currentOrder != 0 and eligible and not consumed and gaps and slopes and beyond
+            side := currentOrder
+            consumed := true
+    [side, previousOrder]
+
+// Port of chart-toolkit/model.ts advanceSetup: latest RSI exit chooses direction,
+// a matching recent MACD cross and growing signed histogram confirm it once.
+f_rsi_macd_setup(float rsi, float macd, float signal, float hist, bool confirmed, int window) =>
+    var int bullExit = na
+    var int bearExit = na
+    var int bullCross = na
+    var int bearCross = na
+    var int usedBull = na
+    var int usedBear = na
+    int side = 0
+    bool valid = not na(rsi) and not na(rsi[1]) and not na(macd) and not na(macd[1]) and not na(signal) and not na(signal[1]) and not na(hist) and not na(hist[1])
+    if confirmed and valid
+        if rsi > 30 and rsi[1] <= 30
+            bullExit := bar_index
+        if rsi < 70 and rsi[1] >= 70
+            bearExit := bar_index
+        if macd > signal and macd[1] <= signal[1]
+            bullCross := bar_index
+        if macd < signal and macd[1] >= signal[1]
+            bearCross := bar_index
+        bool bull = not na(bullExit) and (na(bearExit) or bullExit > bearExit)
+        int latestExit = bull ? bullExit : bearExit
+        int latestCross = bull ? bullCross : bearCross
+        int usedExit = bull ? usedBull : usedBear
+        bool fresh = not na(latestExit) and bar_index - latestExit <= window and rsi > 30 and rsi < 70
+        bool unused = na(usedExit) or latestExit > usedExit
+        bool matching = not na(latestCross) and bar_index - latestCross <= window and (bull ? na(bearCross) or bullCross >= bearCross : na(bullCross) or bearCross >= bullCross)
+        bool building = bull ? hist > 0 and hist > hist[1] : hist < 0 and hist < hist[1]
+        if fresh and unused and matching and building
+            side := bull ? 1 : -1
+            if bull
+                usedBull := latestExit
+            else
+                usedBear := latestExit
+    side
+
+// Candlestick port of candlePatterns.ts, pinterestCandlePatterns.ts and
+// extendedCandlePatterns.ts. Evaluate pc_core() on EVERY bar, then gate labels
+// and signals on barstate.isconfirmed in the caller. No future bars are used.
+pc_append(string names, string name) =>
+    name == "" or str.contains("\n" + str.lower(names) + "\n", "\n" + str.lower(name) + "\n") ? names : names == "" ? name : names + "\n" + name
+
+pc_o(int k, bool bull) =>
+    bull ? open[k] : -open[k]
+pc_c(int k, bool bull) =>
+    bull ? close[k] : -close[k]
+pc_h(int k, bool bull) =>
+    bull ? high[k] : -low[k]
+pc_l(int k, bool bull) =>
+    bull ? low[k] : -high[k]
+pc_body(int k) =>
+    math.abs(close[k] - open[k])
+pc_range(int k) =>
+    high[k] - low[k]
+pc_upper(int k, bool bull) =>
+    pc_h(k, bull) - math.max(pc_o(k, bull), pc_c(k, bull))
+pc_lower(int k, bool bull) =>
+    math.min(pc_o(k, bull), pc_c(k, bull)) - pc_l(k, bull)
+pc_up(int k, bool bull) =>
+    pc_c(k, bull) > pc_o(k, bull)
+pc_down(int k, bool bull) =>
+    pc_c(k, bull) < pc_o(k, bull)
+pc_doji(int k) =>
+    pc_body(k) <= pc_range(k) * 0.1
+pc_long(int k) =>
+    pc_body(k) >= pc_range(k) * 0.55
+pc_maru(int k, bool bull) =>
+    pc_body(k) >= pc_range(k) * 0.9 and pc_upper(k, bull) <= pc_range(k) * 0.05 and pc_lower(k, bull) <= pc_range(k) * 0.05
+pc_trend(int span, bool bull) =>
+    float change = pc_c(span, bull) - pc_c(span + 3, bull)
+    float average = (pc_range(span) + pc_range(span + 1) + pc_range(span + 2) + pc_range(span + 3)) / 4
+    bar_index >= span + 3 and math.abs(change) > average * 0.5 ? math.sign(change) : 0.0
+pc_soldiers(int x, int y, int third, bool bull) =>
+    pc_up(x, bull) and pc_up(y, bull) and pc_up(third, bull) and pc_long(x) and pc_long(y) and pc_long(third) and pc_upper(x, bull) <= pc_range(x) * 0.2 and pc_upper(y, bull) <= pc_range(y) * 0.2 and pc_upper(third, bull) <= pc_range(third) * 0.2 and pc_o(y, bull) > pc_o(x, bull) and pc_o(y, bull) < pc_c(x, bull) and pc_o(third, bull) > pc_o(y, bull) and pc_o(third, bull) < pc_c(y, bull) and pc_c(y, bull) > pc_c(x, bull) and pc_c(third, bull) > pc_c(y, bull)
+
+// The original base recognizer returns only its FIRST matching pattern.
+pc_base() =>
+    string name = ""
+    bool bull = false
+    float b = pc_body(0)
+    float pb = pc_body(1)
+    float ab = pc_body(2)
+    float r = pc_range(0)
+    if bar_index >= 2 and r > 0 and b > r * 0.05
+        if close[1] < open[1] and close > open and open <= close[1] and close >= open[1] and b > pb
+            name := "Bullish engulfing"
+            bull := true
+        else if close[1] > open[1] and close < open and open >= close[1] and close <= open[1] and b > pb
+            name := "Bearish engulfing"
+        else if pc_lower(0, true) >= 2 * b and pc_upper(0, true) <= b * 0.5 and close >= low + r * 0.65
+            name := "Lower-wick rejection"
+            bull := true
+        else if pc_upper(0, true) >= 2 * b and pc_lower(0, true) <= b * 0.5 and close <= low + r * 0.35
+            name := "Upper-wick rejection"
+        else if high[1] < high[2] and low[1] > low[2] and close > high[2] and close > open
+            name := "Bullish inside-bar break"
+            bull := true
+        else if high[1] < high[2] and low[1] > low[2] and close < low[2] and close < open
+            name := "Bearish inside-bar break"
+        else if ab > 0 and pb <= ab * 0.35 and b >= ab * 0.5 and close[2] < open[2] and math.max(open[1], close[1]) <= close[2] + ab * 0.25 and close > open and close > (open[2] + close[2]) / 2
+            name := "Morning star"
+            bull := true
+        else if ab > 0 and pb <= ab * 0.35 and b >= ab * 0.5 and close[2] > open[2] and math.min(open[1], close[1]) >= close[2] - ab * 0.25 and close < open and close < (open[2] + close[2]) / 2
+            name := "Evening star"
+        else if b >= r * 0.85
+            bull := close > open
+            name := bull ? "Bullish marubozu" : "Bearish marubozu"
+        else if ab >= pc_range(2) * 0.6 and pb >= pc_range(1) * 0.6 and b >= r * 0.6 and close[2] > open[2] and close[1] > open[1] and close > open and close[2] < close[1] and close[1] < close and open[1] >= open[2] and open[1] <= close[2] and open >= open[1] and open <= close[1]
+            name := "Three advancing candles"
+            bull := true
+        else if ab >= pc_range(2) * 0.6 and pb >= pc_range(1) * 0.6 and b >= r * 0.6 and close[2] < open[2] and close[1] < open[1] and close < open and close[2] > close[1] and close[1] > close and open[1] <= open[2] and open[1] >= close[2] and open <= open[1] and open >= close[1]
+            name := "Three declining candles"
+        else if close[1] < open[1] and close > open and open <= close[1] and close > (open[1] + close[1]) / 2 and close < open[1]
+            name := "Piercing pattern"
+            bull := true
+        else if close[1] > open[1] and close < open and open >= close[1] and close < (open[1] + close[1]) / 2 and close > open[1]
+            name := "Dark cloud cover"
+    [bull ? name : "", bull ? "" : name]
+
+// First match priority: stars, engulfing, harami, piercing, doji, hammers.
+pc_guide(bool valid) =>
+    string name = ""
+    bool bull = false
+    float b = pc_body(0)
+    float ab = pc_body(2)
+    float pb = pc_body(1)
+    float r = pc_range(0)
+    float t3 = pc_trend(3, true)
+    float t2 = pc_trend(2, true)
+    float t1 = pc_trend(1, true)
+    if valid
+        if bar_index >= 2 and ab > 0 and pb <= ab * 0.35 and b >= ab * 0.5 and t3 < 0 and close[2] < open[2] and close > open and math.max(open[1], close[1]) <= close[2] + ab * 0.25 and close > (open[2] + close[2]) / 2
+            name := "Morning Star"
+            bull := true
+        else if bar_index >= 2 and ab > 0 and pb <= ab * 0.35 and b >= ab * 0.5 and t3 > 0 and close[2] > open[2] and close < open and math.min(open[1], close[1]) >= close[2] - ab * 0.25 and close < (open[2] + close[2]) / 2
+            name := "Evening Star"
+        else if t2 < 0 and close[1] < open[1] and close > open and open <= close[1] and close >= open[1] and b > pb
+            name := "Bullish Engulfing"
+            bull := true
+        else if t2 > 0 and close[1] > open[1] and close < open and open >= close[1] and close <= open[1] and b > pb
+            name := "Bearish Engulfing"
+        else if t2 < 0 and close[1] < open[1] and close > open and open > close[1] and close < open[1] and b <= pb * 0.6
+            name := "Bullish Harami"
+            bull := true
+        else if t2 > 0 and close[1] > open[1] and close < open and open < close[1] and close > open[1] and b <= pb * 0.6
+            name := "Bearish Harami"
+        else if t2 < 0 and close[1] < open[1] and close > open and open <= close[1] and close > (open[1] + close[1]) / 2 and close < open[1]
+            name := "Piercing Pattern"
+            bull := true
+        else if t2 > 0 and close[1] > open[1] and close < open and open >= close[1] and close < (open[1] + close[1]) / 2 and close > open[1]
+            name := "Dark Cloud Cover"
+        else if b <= r * 0.1
+            if t1 < 0 and pc_lower(0, true) >= r * 0.7 and pc_upper(0, true) <= r * 0.1
+                name := "Dragonfly Doji"
+                bull := true
+            else if t1 > 0 and pc_upper(0, true) >= r * 0.7 and pc_lower(0, true) <= r * 0.1
+                name := "Gravestone Doji"
+        else if b <= r * 0.35 and pc_lower(0, true) >= 2 * b and pc_upper(0, true) <= b * 0.5 and t1 != 0
+            bull := t1 < 0
+            name := bull ? "Hammer" : "Hanging Man"
+        else if b <= r * 0.35 and pc_upper(0, true) >= 2 * b and pc_lower(0, true) <= b * 0.5 and t1 != 0
+            bull := t1 < 0
+            name := bull ? "Inverted Hammer" : "Shooting Star"
+    [bull ? name : "", bull ? "" : name]
+
+// Extended recognizer intentionally retains ALL matching predicates.
+pc_extended_side(bool bull, bool valid) =>
+    string names = ""
+    float t1 = pc_trend(1, bull)
+    float t2 = pc_trend(2, bull)
+    float t3 = pc_trend(3, bull)
+    float t4 = pc_trend(4, bull)
+    float co = pc_o(0, bull)
+    float cc = pc_c(0, bull)
+    float po = pc_o(1, bull)
+    float cp = pc_c(1, bull)
+    float ao = pc_o(2, bull)
+    float ac = pc_c(2, bull)
+    if valid
+        if pc_up(0, bull) and pc_maru(0, bull) and t1 != 0
+            names := pc_append(names, bull ? "Bullish Marubozu" : "Bearish Marubozu")
+        if bar_index >= 1 and t2 < 0 and pc_down(1, bull) and pc_up(0, bull)
+            if pc_long(1) and pc_long(0) and math.abs(pc_l(1, bull) - pc_l(0, bull)) <= math.max(pc_range(1), pc_range(0)) * 0.05 and cc > (po + cp) / 2
+                names := pc_append(names, bull ? "Tweezer Bottom" : "Tweezer Top")
+            if pc_maru(1, bull) and pc_maru(0, bull) and pc_l(0, bull) > pc_h(1, bull)
+                names := pc_append(names, bull ? "Bullish Kicker" : "Bearish Kicker")
+        if bar_index >= 2 and t3 < 0
+            if pc_soldiers(2, 1, 0, bull)
+                names := pc_append(names, bull ? "Three White Soldiers" : "Three Black Crows")
+            if pc_down(2, bull) and pc_long(2) and pc_up(1, bull) and pc_up(0, bull) and pc_long(0)
+                if po > ac and cp < ao and pc_body(1) <= pc_body(2) * 0.6 and cc > ao
+                    names := pc_append(names, bull ? "Three Inside Up" : "Three Inside Down")
+                if po <= ac and cp >= ao and pc_body(1) > pc_body(2) and cc > cp
+                    names := pc_append(names, bull ? "Three Outside Up" : "Three Outside Down")
+            if pc_down(2, bull) and pc_long(2) and pc_doji(1) and pc_up(0, bull) and pc_long(0) and cc > (ao + ac) / 2
+                if pc_h(1, bull) < pc_l(2, bull) and pc_l(0, bull) > pc_h(1, bull)
+                    names := pc_append(names, bull ? "Bullish Abandoned Baby" : "Bearish Abandoned Baby")
+                if math.max(po, cp) < ac and co > math.max(po, cp)
+                    names := pc_append(names, bull ? "Morning Doji Star" : "Evening Doji Star")
+        if bar_index >= 3 and t4 > 0 and pc_soldiers(3, 2, 1, bull) and pc_down(0, bull) and pc_long(0) and co > cp and cc < pc_o(3, bull)
+            names := pc_append(names, bull ? "Bullish Three-Line Strike" : "Bearish Three-Line Strike")
+    names
+
+pc_core() =>
+    // Chart adaptation: quarantine only the OHLC window actually used here.
+    // The furthest read is pc_trend(4): span + 3 = seven bars ago.
+    // Unlike source full-array validation, a flat/malformed bar can age out.
+    bool valid = true
+    for i = 0 to math.min(bar_index, 7)
+        valid := valid and not na(open[i]) and not na(high[i]) and not na(low[i]) and not na(close[i]) and high[i] >= math.max(open[i], close[i]) and low[i] <= math.min(open[i], close[i]) and high[i] > low[i]
+    [baseBull, baseBear] = pc_base()
+    [guideBull, guideBear] = pc_guide(valid)
+    string bullNames = pc_append(baseBull, guideBull)
+    string bearNames = pc_append(baseBear, guideBear)
+    string neutralNames = ""
+    string extendedBull = pc_extended_side(true, valid)
+    string extendedBear = pc_extended_side(false, valid)
+    // Append each name individually to preserve case-insensitive de-duplication.
+    array<string> bulls = str.split(extendedBull, "\n")
+    array<string> bears = str.split(extendedBear, "\n")
+    for name in bulls
+        bullNames := pc_append(bullNames, name)
+    for name in bears
+        bearNames := pc_append(bearNames, name)
+    if valid
+        if pc_doji(0)
+            neutralNames := "Doji"
+        else if pc_body(0) <= pc_range(0) * 0.35 and pc_upper(0, true) >= pc_body(0) and pc_lower(0, true) >= pc_body(0)
+            neutralNames := "Spinning Top"
+    [bullNames, bearNames, neutralNames]
+
+// Archive candle local definitions, faithfully ported from archiveCandlesA/B.ts.
+// Requires standard chronological positive OHLC. All matches belong to current bar.
+// Caller applies barstate.isconfirmed. No future bars, pivots, or offset labels.
+pa_o(int i, int d) => open[i] * d
+pa_c(int i, int d) => close[i] * d
+pa_h(int i, int d) => d == 1 ? high[i] : -low[i]
+pa_l(int i, int d) => d == 1 ? low[i] : -high[i]
+pa_body(int i) => math.abs(close[i] - open[i])
+pa_range(int i) => high[i] - low[i]
+pa_upper(int i, int d) => pa_h(i, d) - math.max(pa_o(i, d), pa_c(i, d))
+pa_lower(int i, int d) => math.min(pa_o(i, d), pa_c(i, d)) - pa_l(i, d)
+pa_up(int i, int d) => pa_c(i, d) > pa_o(i, d)
+pa_down(int i, int d) => pa_c(i, d) < pa_o(i, d)
+pa_long(int i) => pa_body(i) >= pa_range(i) * 0.55
+pa_doji(int i) => pa_body(i) <= pa_range(i) * 0.1
+pa_near(float a, float b, float scale) => math.abs(a - b) <= scale * 0.05
+pa_trend(int span, int d) =>
+    float move = (close[span] - close[span + 3]) * d
+    float threshold = (pa_range(span) + pa_range(span + 1) + pa_range(span + 2) + pa_range(span + 3)) / 8
+    bar_index >= span + 3 and math.abs(move) > threshold ? math.sign(move) : 0.0
+pa_add(string existing, string name) =>
+    str.contains("\n" + existing + "\n", "\n" + name + "\n") ? existing : existing == "" ? name : existing + "\n" + name
+pa_record(array<string> out, bool condition, int d, string bullName, string bearName, bool reverse = false) =>
+    if condition
+        int side = (reverse ? -d : d) > 0 ? 0 : 1
+        string name = d == 1 ? bullName : bearName
+        array.set(out, side, pa_add(array.get(out, side), name))
+pa_neutral(array<string> out, bool condition, string name) =>
+    if condition
+        array.set(out, 2, pa_add(array.get(out, 2), name))
+pa_archive() =>
+    array<string> out = array.from("", "", "")
+    // Chart adaptation: validate only the required rolling window. The longest
+    // exhaustion uses pa_trend(14), whose furthest read is 17 bars ago.
+    // Source full-array rejection would permanently disable chart recognition.
+    bool validHistory = true
+    int oldest = math.min(bar_index, 17)
+    for i = 0 to oldest
+        bool bad = na(open[i]) or na(high[i]) or na(low[i]) or na(close[i]) or low[i] <= 0 or high[i] <= low[i] or high[i] < math.max(open[i], close[i]) or low[i] > math.min(open[i], close[i])
+        bool badTime = i < oldest ? time[i] <= time[i + 1] : false
+        validHistory := validHistory and not bad and not badTime
+    if validHistory
+        pa_neutral(out, pa_body(0) <= pa_range(0) * 0.3 and pa_upper(0, 1) >= pa_range(0) * 0.3 and pa_lower(0, 1) >= pa_range(0) * 0.3, "High Wave")
+        bool legged = pa_doji(0) and pa_upper(0, 1) >= pa_range(0) * 0.35 and pa_lower(0, 1) >= pa_range(0) * 0.35
+        pa_neutral(out, legged, "Long Legged Doji")
+        pa_neutral(out, legged and math.abs((open + close - high - low) / 2) <= pa_range(0) * 0.1, "Rickshaw Man")
+        pa_neutral(out, pa_doji(0) and pa_trend(1, 1) > 0, "Northern Doji")
+        pa_neutral(out, pa_doji(0) and pa_trend(1, 1) < 0, "Southern Doji")
+        float priorBody = (pa_body(1) + pa_body(2) + pa_body(3) + pa_body(4)) / 4
+        bool lineShape = bar_index >= 4 and pa_long(0) and pa_upper(0, 1) <= pa_range(0) * 0.2 and pa_lower(0, 1) <= pa_range(0) * 0.2
+        pa_neutral(out, lineShape and pa_body(0) >= priorBody * 1.2, "Long Line")
+        pa_neutral(out, lineShape and pa_body(0) <= priorBody * 0.6, "Short Line")
+        pa_neutral(out, bar_index >= 1 and high < high[1] and low > low[1], "Inside Bar")
+        pa_neutral(out, bar_index >= 1 and high > high[1] and low < low[1], "Outside Bar")
+        for direction = 0 to 1
+            int d = direction == 0 ? 1 : -1
+            float t1 = pa_trend(1, d)
+            float t2 = pa_trend(2, d)
+            float t3 = pa_trend(3, d)
+            float t4 = pa_trend(4, d)
+            float t5 = pa_trend(5, d)
+            float tol = math.max(pa_range(0), pa_range(1)) * 0.05
+            pa_record(out, t1 < 0 and pa_up(0, d) and pa_body(0) >= pa_range(0)*0.7 and pa_lower(0, d) <= pa_range(0)*0.05, d, "Bullish Belt Hold", "Bearish Belt Hold", false)
+            pa_record(out, t1 < 0 and pa_body(0) <= pa_range(0)*0.3 and pa_lower(0, d) >= pa_range(0)*0.6 and pa_upper(0, d) <= pa_range(0)*0.15, d, "Bullish Pin Bar", "Bearish Pin Bar", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_doji(0) and math.min(pa_o(0, d),pa_c(0, d)) > pa_c(1, d) and math.max(pa_o(0, d),pa_c(0, d)) < pa_o(1, d), d, "Bullish Harami Cross", "Bearish Harami Cross", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_doji(0) and math.max(pa_o(0, d),pa_c(0, d)) < pa_c(1, d), d, "Bullish Doji Star", "Bearish Doji Star", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_down(0, d) and math.abs(pa_c(0, d)-pa_c(1, d)) <= tol, d, "Matching Low", "Matching High", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_down(0, d) and pa_o(0, d) < pa_o(1, d) and pa_c(0, d) > pa_c(1, d) and pa_body(0) < pa_body(1)*0.6, d, "Homing Pigeon", "Descending Hawk", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_up(0, d) and pa_long(0) and pa_o(0, d) < pa_c(1, d) and math.abs(pa_c(0, d)-pa_c(1, d)) <= tol, d, "Bullish Counterattack / Meeting Lines", "Bearish Counterattack / Meeting Lines", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_up(0, d) and pa_o(0, d) < pa_l(1, d) and math.abs(pa_c(0, d)-pa_l(1, d)) <= tol, d, "On Neck", "Mirrored On Neck", true)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_up(0, d) and pa_o(0, d) < pa_l(1, d) and pa_c(0, d) > pa_c(1, d) and pa_c(0, d) <= pa_c(1, d)+tol, d, "In Neck", "Mirrored In Neck", true)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_up(0, d) and pa_o(0, d) < pa_l(1, d) and pa_c(0, d) > pa_c(1, d)+tol and pa_c(0, d) < (pa_o(1, d)+pa_c(1, d))/2, d, "Thrusting", "Mirrored Thrusting", true)
+            pa_record(out, t2 > 0 and pa_down(1, d) and pa_up(0, d) and pa_long(0) and math.abs(pa_o(0, d)-pa_o(1, d)) <= tol and pa_lower(0, d) <= pa_range(0)*0.05, d, "Bullish Separating Lines", "Bearish Separating Lines", false)
+            pa_record(out, t2 > 0 and pa_l(0, d) > pa_h(1, d), d, "Rising Window", "Falling Window", false)
+            pa_record(out, t3 < 0 and pa_down(2, d) and pa_up(0, d) and pa_h(1, d) < pa_l(2, d) and pa_l(0, d) > pa_h(1, d), d, "Bullish Island Reversal", "Bearish Island Reversal", false)
+            pa_record(out, t5 > 0 and pa_up(4, d) and pa_long(4) and pa_up(0, d) and pa_long(0) and pa_down(3, d) and pa_down(2, d) and pa_down(1, d) and pa_body(3) <= pa_body(4)*0.6 and pa_body(2) <= pa_body(4)*0.6 and pa_body(1) <= pa_body(4)*0.6 and pa_c(3, d) > pa_c(2, d) and pa_c(2, d) > pa_c(1, d) and pa_o(0, d) > pa_c(1, d) and pa_h(3, d) < pa_h(4, d) and pa_h(2, d) < pa_h(4, d) and pa_h(1, d) < pa_h(4, d) and pa_l(3, d) > pa_l(4, d) and pa_l(2, d) > pa_l(4, d) and pa_l(1, d) > pa_l(4, d) and pa_c(0, d) > pa_c(4, d), d, "Rising Three Methods", "Falling Three Methods", false)
+            pa_record(out, t5 > 0 and pa_up(4, d) and pa_long(4) and pa_up(0, d) and pa_long(0) and pa_down(3, d) and pa_down(2, d) and pa_down(1, d) and pa_body(3) <= pa_body(4)*0.6 and pa_body(2) <= pa_body(4)*0.6 and pa_body(1) <= pa_body(4)*0.6 and pa_c(3, d) > pa_c(2, d) and pa_c(2, d) > pa_c(1, d) and pa_o(0, d) > pa_c(1, d) and pa_l(3, d) > pa_h(4, d) and math.min(pa_l(2, d),pa_l(1, d)) > (pa_o(4, d)+pa_c(4, d))/2 and pa_c(0, d) > math.max(pa_h(4, d),pa_h(3, d),pa_h(2, d),pa_h(1, d)), d, "Bullish Mat Hold", "Bearish Mat Hold", false)
+            pa_record(out, t5 < 0 and pa_down(4, d) and pa_long(4) and pa_down(3, d) and pa_h(3, d) < pa_l(4, d) and pa_down(1, d) and pa_l(2, d) < pa_l(3, d) and pa_l(1, d) < pa_l(2, d) and pa_up(0, d) and pa_long(0) and pa_c(0, d) > pa_h(3, d) and pa_c(0, d) < pa_l(4, d), d, "Bullish Breakaway", "Bearish Breakaway", false)
+            pa_record(out, t5 < 0 and pa_down(4, d) and pa_down(3, d) and pa_down(2, d) and pa_c(4, d) > pa_c(3, d) and pa_c(3, d) > pa_c(2, d) and pa_o(4, d) > pa_o(3, d) and pa_o(3, d) > pa_o(2, d) and pa_down(1, d) and pa_c(1, d) < pa_c(2, d) and pa_upper(1, d) > pa_body(1) and pa_up(0, d) and pa_long(0) and pa_o(0, d) > pa_h(1, d) and pa_c(0, d) > pa_h(1, d), d, "Ladder Bottom", "Ladder Top", false)
+            pa_record(out, t4 < 0 and pa_down(3, d) and pa_down(2, d) and pa_down(1, d) and pa_down(0, d) and pa_body(3) >= pa_range(3)*0.9 and pa_body(2) >= pa_range(2)*0.9 and pa_c(2, d) < pa_c(3, d) and pa_h(1, d) > pa_c(2, d) and pa_o(1, d) < pa_l(2, d) and pa_upper(1, d) > pa_body(1) and pa_o(0, d) > pa_h(1, d) and pa_c(0, d) < pa_l(1, d), d, "Concealing Baby Swallow", "Concealing Baby Swallow (Bearish Mirror)", false)
+            pa_record(out, t3 > 0 and pa_up(2, d) and pa_up(1, d) and pa_l(1, d) > pa_h(2, d) and pa_down(0, d) and pa_o(0, d) < pa_c(1, d) and pa_o(0, d) > pa_o(1, d) and pa_c(0, d) < pa_c(2, d) and pa_c(0, d) > pa_o(2, d), d, "Upside Gap Three Methods", "Downside Gap Three Methods", false)
+            pa_record(out, t3 > 0 and pa_up(2, d) and pa_up(1, d) and pa_l(1, d) > pa_h(2, d) and pa_down(0, d) and pa_o(0, d) < pa_c(1, d) and pa_o(0, d) > pa_o(1, d) and pa_c(0, d) > pa_h(2, d) and pa_c(0, d) < pa_l(1, d), d, "Upside Tasuki Gap", "Downside Tasuki Gap", false)
+            pa_record(out, t3 < 0 and pa_down(2, d) and pa_down(1, d) and pa_down(0, d) and pa_long(2) and pa_lower(2, d) > pa_body(2)*0.5 and pa_body(1) < pa_body(2) and pa_o(1, d) < pa_o(2, d) and pa_o(1, d) > pa_c(2, d) and pa_lower(1, d) > 0 and pa_c(1, d) < pa_c(2, d) and pa_l(1, d) > pa_l(2, d) and pa_h(0, d) < pa_h(1, d) and pa_l(0, d) > pa_l(1, d) and pa_body(0) < pa_body(1) and pa_upper(0, d) <= pa_range(0)*0.1 and pa_lower(0, d) <= pa_range(0)*0.1, d, "Three Stars in the South", "Three Stars in the North", false)
+            pa_record(out, t3 < 0 and pa_down(2, d) and pa_long(2) and pa_down(1, d) and pa_o(1, d) < pa_o(2, d) and pa_c(1, d) > pa_c(2, d) and pa_l(1, d) < pa_l(2, d) and pa_lower(1, d) > pa_body(1) and pa_up(0, d) and pa_body(0) < pa_body(2)*0.6 and pa_o(0, d) > pa_l(1, d) and pa_c(0, d) < pa_c(1, d), d, "Unique Three River Bottom", "Unique Three River Top", false)
+            pa_record(out, t3 < 0 and pa_down(2, d) and pa_up(1, d) and pa_down(0, d) and pa_l(1, d) > pa_c(2, d) and pa_near(pa_c(2, d),pa_c(0, d),math.max(pa_range(2),pa_range(0))), d, "Bullish Stick Sandwich", "Bearish Stick Sandwich", false)
+            pa_record(out, t3 < 0 and pa_up(2, d) and pa_long(2) and pa_upper(2, d) <= pa_range(2)*0.2 and pa_up(1, d) and pa_long(1) and pa_upper(1, d) <= pa_range(1)*0.2 and pa_up(0, d) and pa_long(0) and pa_upper(0, d) <= pa_range(0)*0.2 and pa_c(1, d) > pa_c(2, d) and pa_c(0, d) > pa_c(1, d) and pa_near(pa_o(1, d),pa_c(2, d),math.max(pa_range(2),pa_range(1))) and pa_near(pa_o(0, d),pa_c(1, d),math.max(pa_range(1),pa_range(0))), d, "Identical Three Soldiers", "Identical Three Crows", false)
+            pa_record(out, t3 < 0 and pa_doji(2) and pa_doji(1) and pa_doji(0) and pa_h(1, d) < pa_l(2, d) and pa_l(0, d) > pa_h(1, d), d, "Bullish TriStar", "Bearish TriStar", false)
+            pa_record(out, bar_index >= 2 and t2 > 0 and pa_up(1, d) and pa_long(1) and pa_up(0, d) and pa_long(0) and pa_l(1, d) > pa_h(2, d) and pa_h(0, d) > pa_h(1, d), d, "Two White Gapping Candles", "Two Black Gapping Candles", false)
+            pa_record(out, t2 > 0 and pa_doji(0) and pa_l(0, d) > pa_h(1, d), d, "Gapping Up Doji", "Gapping Down Doji", false)
+            pa_record(out, d == 1 and t2 > 0 and pa_up(1, d) and pa_long(1) and pa_body(0) > 0 and pa_body(0) <= pa_range(0)*0.3 and pa_upper(0, d) >= pa_body(0)*2.5 and pa_lower(0, d) <= pa_body(0) and pa_o(0, d) >= pa_c(1, d), d, "Two-Candle Shooting Star", "", true)
+            pa_record(out, d == 1 and t3 > 0 and pa_up(2, d) and pa_long(2) and pa_doji(1) and pa_h(1, d) < pa_l(2, d) and pa_down(0, d) and pa_long(0) and pa_h(0, d) < pa_l(1, d), d, "Collapsing Doji Star", "", true)
+            pa_record(out, t2 < 0 and pa_up(1, d) and pa_down(0, d) and pa_o(0, d) > pa_c(1, d) and pa_c(0, d) < pa_o(1, d), d, "Last Engulfing Bottom", "Last Engulfing Top", false)
+            pa_record(out, t2 < 0 and pa_down(1, d) and pa_long(1) and pa_up(0, d) and pa_o(0, d) >= (pa_o(1, d)+pa_c(1, d))/2, d, "Above the Stomach", "Below the Stomach", false)
+            pa_record(out, d == 1 and t3 > 0 and pa_up(2, d) and pa_long(2) and pa_up(1, d) and pa_up(0, d) and pa_o(1, d) > pa_o(2, d) and pa_o(1, d) < pa_c(2, d) and pa_o(0, d) > pa_o(1, d) and pa_o(0, d) <= pa_c(1, d) and pa_c(1, d) > pa_c(2, d) and pa_c(0, d) > pa_c(1, d) and pa_body(1) < pa_body(2) and pa_body(0) < pa_body(1) and pa_upper(1, d) > pa_upper(2, d) and pa_upper(0, d) > pa_upper(1, d), d, "Advance Block", "Advance Block", true)
+            pa_record(out, d == 1 and t3 > 0 and pa_up(2, d) and pa_long(2) and pa_up(1, d) and pa_up(0, d) and pa_o(1, d) > pa_o(2, d) and pa_o(1, d) < pa_c(2, d) and pa_o(0, d) > pa_o(1, d) and pa_o(0, d) <= pa_c(1, d) and pa_c(1, d) > pa_c(2, d) and pa_c(0, d) > pa_c(1, d) and pa_long(1) and pa_body(0) < pa_body(1)*0.5 and pa_o(0, d) >= pa_c(1, d)-pa_body(1)*0.1, d, "Deliberation / Stalled Pattern", "Deliberation / Stalled Pattern", true)
+            pa_record(out, d == 1 and t3 > 0 and pa_up(2, d) and pa_long(2) and pa_down(1, d) and pa_l(1, d) > pa_h(2, d) and pa_down(0, d) and pa_o(0, d) > pa_o(1, d) and pa_c(0, d) < pa_c(1, d) and pa_c(0, d) > pa_h(2, d), d, "Upside Gap Two Crows", "Upside Gap Two Crows", true)
+            pa_record(out, d == 1 and t3 > 0 and pa_up(2, d) and pa_long(2) and pa_down(1, d) and pa_l(1, d) > pa_h(2, d) and pa_down(0, d) and pa_o(0, d) < pa_o(1, d) and pa_o(0, d) > pa_c(1, d) and pa_c(0, d) < pa_c(2, d) and pa_c(0, d) > pa_o(2, d), d, "Two Crows", "Two Crows", true)
+            pa_record(out, d == 1 and pa_up(1, d) and pa_up(0, d) and pa_near(pa_o(0, d),pa_o(1, d),math.max(pa_range(1),pa_range(0))) and pa_near(pa_body(0),pa_body(1),math.max(pa_range(1),pa_range(0))) and t3 > 0 and pa_up(2, d) and math.min(pa_l(1, d),pa_l(0, d)) > pa_h(2, d), d, "Upside Gap Side-by-side White Lines", "", false)
+            pa_record(out, d == 1 and pa_up(1, d) and pa_up(0, d) and pa_near(pa_o(0, d),pa_o(1, d),math.max(pa_range(1),pa_range(0))) and pa_near(pa_body(0),pa_body(1),math.max(pa_range(1),pa_range(0))) and t3 < 0 and pa_down(2, d) and math.max(pa_h(1, d),pa_h(0, d)) < pa_l(2, d), d, "Downside Gap Side-by-side White Lines", "", true)
+            for slot = 0 to 3
+                int n = slot == 0 ? 8 : slot == 1 ? 10 : slot == 2 ? 12 : 13
+                bool run = bar_index >= n + 4 and pa_trend(n + 1, d) < 0 and pa_up(0, d) and pa_c(0, d) > pa_o(1, d)
+                for i = 1 to n
+                    run := run and pa_down(i, d) and (i == n or (pa_l(i, d) < pa_l(i + 1, d) and pa_c(i, d) < pa_c(i + 1, d)))
+                pa_record(out, run, d, str.tostring(n) + " New Price Lines Bottom", str.tostring(n) + " New Price Lines Top")
+    [array.get(out, 0), array.get(out, 1), array.get(out, 2)]
+
+f_merge_names(string left, string right) =>
+    string out = left
+    array<string> parts = str.split(right, "\n")
+    if array.size(parts) > 0
+        for i = 0 to array.size(parts) - 1
+            string name = str.trim(array.get(parts, i))
+            if str.length(name) > 0 and not str.contains("\n" + str.lower(out) + "\n", "\n" + str.lower(name) + "\n")
+                out := str.length(out) > 0 ? out + "\n" + name : name
+    out
+
+f_first_name(string names) =>
+    array<string> parts = str.split(names, "\n")
+    array.size(parts) > 0 ? array.get(parts, 0) : ""
+
+f_meaning(string name) =>
+    string n = str.lower(name)
+    str.contains(n, "engulf") ? "The current body overtakes the preceding body, showing a shift in buying/selling pressure." : str.contains(n, "harami") or str.contains(n, "inside") ? "The body or candle contracts inside the prior range; a directional follow-through confirms the shift where required by this pattern." : str.contains(n, "hammer") or str.contains(n, "pin bar") or str.contains(n, "shooting") ? "A long wick shows rejection of an extreme. The prior trend and the direction of that rejection determine the observation." : str.contains(n, "doji") or str.contains(n, "spinning") ? "A small body shows indecision; surrounding candles and trend context determine whether any directional pattern is confirmed." : str.contains(n, "star") ? "A multi-candle transition from prior momentum through hesitation into the opposite direction." : str.contains(n, "soldier") or str.contains(n, "crow") ? "A sequence of directional bodies and advancing closes shows sustained pressure; the exact body/shadow rules must also match." : str.contains(n, "marubozu") or str.contains(n, "belt") ? "A strong body with limited opposing shadow shows directional pressure at this candle close." : str.contains(n, "piercing") or str.contains(n, "cloud") ? "The second body closes through the midpoint of the prior body, opposing the preceding trend." : str.contains(n, "tweezer") or str.contains(n, "matching") ? "Nearby matching extremes indicate repeated defence of a price area." : str.contains(n, "gap") or str.contains(n, "kicker") ? "A gap or body displacement changes the balance of pressure; this rule uses only gaps already visible at candle close." : str.contains(n, "exhaust") ? "A prolonged sequence followed by the rule's confirmation candle suggests prior momentum may be tiring." : "A source-defined completed-candle pattern matched its body, wick, sequence and required trend-context rules."
+
+f_note(string caption, string details, bool bullish, float extreme, float room, color col, array<label> labels, array<line> leaders) =>
+    float y = extreme + (bullish ? -1.0 : 1.0) * room
+    // Move a nearby name outward instead of drawing on top of an earlier name.
+    // This only places annotations; recognition and confirmation stay unchanged.
+    float clearance = math.max(room / labelRoom * 0.9 * labelFont / 12.0, syminfo.mintick * 5)
+    int nearbyBars = int(math.ceil(labelFont / 2.0))
+    int count = array.size(labels)
+    if count > 0
+        for pass = 0 to 11
+            bool moved = false
+            for i = math.max(0, count - 24) to count - 1
+                label previous = array.get(labels, i)
+                if bar_index - label.get_x(previous) <= nearbyBars and math.abs(y - label.get_y(previous)) < clearance
+                    y := label.get_y(previous) + (bullish ? -clearance : clearance) * 1.05
+                    moved := true
+            if not moved
+                break
+    line guide = line.new(bar_index, extreme, bar_index, y, xloc=xloc.bar_index, extend=extend.none, color=col, style=line.style_dotted, width=1, force_overlay=true)
+    string readableCaption = str.replace_all(caption, " · ", "\n")
+    label note = label.new(bar_index, y, readableCaption, xloc=xloc.bar_index, yloc=yloc.price, color=#111827, style=bullish ? label.style_label_up : label.style_label_down, textcolor=col, size=labelFont, tooltip=details, force_overlay=true)
+    array.push(labels, note)
+    array.push(leaders, guide)
+    int retained = showGJ ? math.min(keepLabels, 470 - pivotHistory * 7 - gjHistory) : keepLabels
+    if array.size(labels) > retained
+        label.delete(array.shift(labels))
+        line.delete(array.shift(leaders))
+
+f_pivot_line(float level, string name, color col, int start, array<line> lines, array<label> labels) =>
+    line item = line.new(start, level, math.max(time, start + 1), level, xloc=xloc.bar_time, extend=extend.right, color=color.new(col, 25), style=line.style_dotted, width=1, force_overlay=true)
+    array.push(lines, item)
+    if showPivotLabels
+        label itemLabel = label.new(bar_index + 2, level, name + " " + str.tostring(level, format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=#111827, textcolor=col, size=labelFont, force_overlay=true)
+        array.push(labels, itemLabel)
+
+// Calculations are evaluated on every bar. Discrete observations are committed only at close.
+float ema9 = f_seeded_ema(close, 9)
+float ema15 = f_seeded_ema(close, 15)
+float ema21 = f_seeded_ema(close, 21)
+float atr14 = f_atr14()
+[tripleSide, tripleOrder] = f_three_alignment(ema9, ema15, ema21, atr14, barstate.isconfirmed)
+bool crossUp = ta.crossover(ema9, ema15)
+bool crossDown = ta.crossunder(ema9, ema15)
+float crossPrice = (ema9 + ema15) / 2
+float triplePrice = (ema9 + ema21) / 2
+plot(showEMAs ? ema9 : na, "EMA 9", color=#3b82f6, linewidth=2, force_overlay=true)
+plot(showEMAs ? ema15 : na, "EMA 15", color=#ef5350, linewidth=2, force_overlay=true)
+plot(showEMAs ? ema21 : na, "EMA 21", color=#a855f7, linewidth=2, force_overlay=true)
+plotshape(showPair and barstate.isconfirmed and crossUp ? crossPrice : na, title="EMA9/15 bullish cross · dot", style=shape.circle, location=location.absolute, color=bullColor, size=size.tiny, force_overlay=true)
+plotshape(showPair and barstate.isconfirmed and crossDown ? crossPrice : na, title="EMA9/15 bearish cross · dot", style=shape.circle, location=location.absolute, color=bearColor, size=size.tiny, force_overlay=true)
+plotshape(showTriple and tripleSide == 1 ? triplePrice : na, title="EMA9/15/21 Long alignment · X", style=shape.xcross, location=location.absolute, color=bullColor, size=size.large, force_overlay=true)
+plotshape(showTriple and tripleSide == -1 ? triplePrice : na, title="EMA9/15/21 Short alignment · X", style=shape.xcross, location=location.absolute, color=bearColor, size=size.large, force_overlay=true)
+
+float deltaClose = ta.change(close)
+float gain14 = ta.rma(math.max(deltaClose, 0), 14)
+float loss14 = ta.rma(math.max(-deltaClose, 0), 14)
+float rsi14 = na(gain14) or na(loss14) ? na : loss14 == 0 ? (gain14 == 0 ? 50.0 : 100.0) : 100.0 - 100.0 / (1.0 + gain14 / loss14)
+float macdLine = ta.ema(close, 12) - ta.ema(close, 26)
+float macdSignal = ta.ema(macdLine, 9)
+float macdHistogram = macdLine - macdSignal
+int trendSide = f_rsi_macd_setup(rsi14, macdLine, macdSignal, macdHistogram, barstate.isconfirmed and bar_index >= 34, setupWindow)
+[coreLong, coreShort, coreNeutral] = pc_core()
+[archiveLong, archiveShort, archiveNeutral] = pa_archive()
+string longNames = f_merge_names(coreLong, archiveLong)
+string shortNames = f_merge_names(coreShort, archiveShort)
+string neutralNames = f_merge_names(coreNeutral, archiveNeutral)
+var array<label> observationLabels = array.new_label()
+var array<line> observationLeaders = array.new_line()
+float room = math.max(nz(atr14, high - low), syminfo.mintick * 3) * labelRoom
+if barstate.isconfirmed and f_pattern_is_recent(bar_index, last_bar_index, showAllPatternHistory)
+    if showCandles and str.length(longNames) > 0
+        string primary = f_first_name(longNames)
+        f_note("LONG · " + primary, f_meaning(primary) + "\n\nAll Long matches:\n" + longNames + "\n\nPattern observation; it does not confirm a broker order or guaranteed move.", true, low, room, bullColor, observationLabels, observationLeaders)
+    if showCandles and str.length(shortNames) > 0
+        string primary = f_first_name(shortNames)
+        f_note("SHORT · " + primary, f_meaning(primary) + "\n\nAll Short matches:\n" + shortNames + "\n\nPattern observation; it does not confirm a broker order or guaranteed move.", false, high, room, bearColor, observationLabels, observationLeaders)
+    if showNeutral and str.length(neutralNames) > 0
+        string primary = f_first_name(neutralNames)
+        f_note(primary, f_meaning(primary) + "\n\nNeutral matches:\n" + neutralNames, false, high, room * 2.0, color.gray, observationLabels, observationLeaders)
+    if showTrend and trendSide != 0
+        bool bullish = trendSide == 1
+        f_note(bullish ? "LONG · RSI+MACD" : "SHORT · RSI+MACD", "Fresh RSI exit from 30/70 and matching MACD cross within " + str.tostring(setupWindow) + " bars, with a building histogram. One setup per RSI exit. This is separate from EMA and candlestick observations.", bullish, bullish ? low : high, room * 2.8, bullish ? bullColor : bearColor, observationLabels, observationLeaders)
+
+// The single lower pane uses RSI units and an explicitly normalized volume band.
+float volumeSMA = ta.sma(volume, 20)
+float relativeVolume = not na(volume) and volumeSMA > 0 ? volume / volumeSMA : na
+float volumeBand = math.min(relativeVolume, 3.0) / 3.0 * 20.0
+plot(showVolume ? volumeBand : na, "Relative volume · 0–20 band · 3x cap", color=color.new(close >= open ? bullColor : bearColor, 55), style=plot.style_columns, histbase=0)
+plot(showRSI ? rsi14 : na, "RSI 14", color=#b39ddb, linewidth=2)
+hline(100, "Pane upper bound", color=color.new(color.gray, 100))
+hline(70, "RSI overbought", color=color.new(color.gray, 50), linestyle=hline.style_dotted)
+hline(50, "RSI midpoint", color=color.new(color.gray, 75), linestyle=hline.style_dotted)
+hline(30, "RSI oversold", color=color.new(color.gray, 50), linestyle=hline.style_dotted)
+hline(0, "Pane lower bound", color=color.new(color.gray, 80))
+plot(volume, "Raw volume", display=display.data_window, format=format.volume)
+plot(relativeVolume, "Relative volume / SMA20", display=display.data_window)
+plot(macdLine, "MACD 12/26", display=display.data_window)
+plot(macdSignal, "MACD signal 9", display=display.data_window)
+plot(macdHistogram, "MACD histogram", display=display.data_window)
+
+// Confirmed higher-period values only: [1] with lookahead_on avoids future HLC leakage.
+string pivotTF = pivotChoice == "Auto" ? (timeframe.isintraday ? "D" : timeframe.isdaily ? "W" : "M") : pivotChoice
+bool pivotTFValid = timeframe.in_seconds(pivotTF) >= timeframe.in_seconds()
+[previousHigh, previousLow, previousClose] = request.security(syminfo.tickerid, pivotTF, [high[1], low[1], close[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float pivot = (previousHigh + previousLow + previousClose) / 3.0
+float pivotRange = previousHigh - previousLow
+bool pivotChange = timeframe.change(pivotTF)
+int pivotStart = time(pivotTF)
+var array<line> pivotLines = array.new_line()
+var array<label> pivotLabels = array.new_label()
+if showPivots and pivotTFValid and not na(pivot) and (barstate.isfirst or pivotChange)
+    if array.size(pivotLines) > 0
+        for i = math.max(0, array.size(pivotLines) - 7) to array.size(pivotLines) - 1
+            line prior = array.get(pivotLines, i)
+            line.set_extend(prior, extend.none)
+            line.set_x2(prior, pivotStart)
+    while array.size(pivotLabels) > 0
+        label.delete(array.shift(pivotLabels))
+    f_pivot_line(pivot, "Fib P", #dca94c, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot + pivotRange * 0.382, "Fib R1", bearColor, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot - pivotRange * 0.382, "Fib S1", bullColor, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot + pivotRange * 0.618, "Fib R2", bearColor, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot - pivotRange * 0.618, "Fib S2", bullColor, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot + pivotRange, "Fib R3", bearColor, pivotStart, pivotLines, pivotLabels)
+    f_pivot_line(pivot - pivotRange, "Fib S3", bullColor, pivotStart, pivotLines, pivotLabels)
+    while array.size(pivotLines) > pivotHistory * 7
+        line.delete(array.shift(pivotLines))
+if barstate.islast and array.size(pivotLabels) > 0
+    for i = 0 to array.size(pivotLabels) - 1
+        label.set_x(array.get(pivotLabels, i), bar_index + 2)
+
+// Source adapter: lower/equal chart intervals receive only the previous CLOSED
+// hourly packet. Higher chart intervals process EVERY available closed 1H intrabar.
+GJPacket gjClosed = request.security(syminfo.tickerid, "60", gj_closed_hour(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on, calc_bars_count=5000)
+array<GJPacket> gjHours = request.security_lower_tf(syminfo.tickerid, "60", gj_hour(), ignore_invalid_timeframe=true, calc_bars_count=5000)
+// These context values exclude the current UTC day's prices and are known at its start.
+[gjPDH, gjPDL, gjDay] = request.security(syminfo.tickerid, "60", gj_day_levels(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on, calc_bars_count=5000)
+var GJView gjView = gj_view()
+var int gjLatestPhase = 7
+bool gjLongEvent = false
+bool gjShortEvent = false
+bool gjStandard = chart.is_standard and not na(timeframe.in_seconds())
+if showGJ and gjStandard
+    if timeframe.in_seconds() <= 3600
+        if not na(gjClosed)
+            int side = gj_consume(gjView, gjClosed, timenow, gjShowPending, gjShowGuides, gjHistory, labelFont, room, bullColor, bearColor)
+            gjLongEvent := side == 1
+            gjShortEvent := side == -1
+            gjLatestPhase := gjClosed.phase
+    else if array.size(gjHours) > 0
+        for i = 0 to array.size(gjHours) - 1
+            GJPacket packet = array.get(gjHours, i)
+            if packet.closed <= timenow
+                int side = gj_consume(gjView, packet, timenow, gjShowPending, gjShowGuides, gjHistory, labelFont, room, bullColor, bearColor)
+                gjLongEvent := gjLongEvent or side == 1
+                gjShortEvent := gjShortEvent or side == -1
+                gjLatestPhase := packet.phase
+
+var array<line> gjReferenceLines = array.new_line()
+var array<label> gjReferenceLabels = array.new_label()
+var table gjStatus = table.new(position.top_right, 1, 1, bgcolor=#111827, force_overlay=true)
+if barstate.islast
+    if not showAllPatternHistory
+        f_prune_pattern_history(observationLabels, observationLeaders, bar_index - 9)
+        int oldestGJ = nz(time[9], 0)
+        f_prune_pattern_history(gjView.notes, gjView.leaders, oldestGJ)
+        if not na(gjView.pendingNote) and label.get_x(gjView.pendingNote) < oldestGJ
+            gj_clear_pending(gjView)
+    while array.size(gjReferenceLines) > 0
+        line.delete(array.shift(gjReferenceLines))
+    while array.size(gjReferenceLabels) > 0
+        label.delete(array.shift(gjReferenceLabels))
+    if showGJ and gjStandard and gjShowLevels and not na(gjPDH) and not na(gjPDL)
+        for i = 0 to 1
+            float level = i == 0 ? gjPDH : gjPDL
+            string caption = i == 0 ? "GJ PDH UTC " : "GJ PDL UTC "
+            array.push(gjReferenceLines, line.new(gjDay * 86400000, level, gjDay * 86400000 + 3600000, level, xloc=xloc.bar_time, extend=extend.right, color=#fbbf24, style=line.style_dotted, force_overlay=true))
+            bool sharedTarget = gj_share_target_caption(gjView, level, i == 0 ? "PDH UTC" : "PDL UTC", syminfo.mintick)
+            if not sharedTarget
+                array.push(gjReferenceLabels, label.new(bar_index + 3, level, caption + str.tostring(level, format.mintick), xloc=xloc.bar_index, style=label.style_label_left, color=#111827, textcolor=#fbbf24, size=labelFont, tooltip="Previous completed UTC day's extreme, assembled from a complete set of 24 one-hour candles. These levels do not use the forming day's high or low.", force_overlay=true))
+    if array.size(gjView.guideLabels) > 0
+        for i = 0 to array.size(gjView.guideLabels) - 1
+            label.set_x(array.get(gjView.guideLabels, i), bar_index + 3)
+    string status = not gjStandard ? "Use standard time-based candles" : na(gjPDH) or na(gjPDL) ? "Previous UTC day incomplete" : gj_phase_text(gjLatestPhase)
+    table.cell(gjStatus, 0, 0, showGJ and gjShowStatus ? "GJ 1H · " + status : "", text_color=#fbbf24, text_size=size.small)
+
+alertcondition(showGJ and gjLongEvent, "Gautam Jha 1H Long confirmed", "{{ticker}}: Gautam Jha 1H Long confirmed at the source candle close. Review entry reference, SL and target on chart.")
+alertcondition(showGJ and gjShortEvent, "Gautam Jha 1H Short confirmed", "{{ticker}}: Gautam Jha 1H Short confirmed at the source candle close. Review entry reference, SL and target on chart.")
+
+alertcondition(barstate.isconfirmed and tripleSide == 1, "EMA9/15/21 Long X", "{{ticker}} {{interval}}: confirmed EMA9/15/21 Long alignment")
+alertcondition(barstate.isconfirmed and tripleSide == -1, "EMA9/15/21 Short X", "{{ticker}} {{interval}}: confirmed EMA9/15/21 Short alignment")
+alertcondition(barstate.isconfirmed and crossUp, "EMA9/15 bullish crossover", "{{ticker}} {{interval}}: EMA9 crossed above EMA15")
+alertcondition(barstate.isconfirmed and crossDown, "EMA9/15 bearish crossover", "{{ticker}} {{interval}}: EMA9 crossed below EMA15")
+alertcondition(barstate.isconfirmed and str.length(longNames) > 0, "Long candle pattern", "{{ticker}} {{interval}}: Long candle observation confirmed")
+alertcondition(barstate.isconfirmed and str.length(shortNames) > 0, "Short candle pattern", "{{ticker}} {{interval}}: Short candle observation confirmed")
+alertcondition(barstate.isconfirmed and trendSide == 1, "RSI+MACD Long setup", "{{ticker}} {{interval}}: fresh RSI+MACD Long setup")
+alertcondition(barstate.isconfirmed and trendSide == -1, "RSI+MACD Short setup", "{{ticker}} {{interval}}: fresh RSI+MACD Short setup")
+
+// VIDEO GUIDE DRAW START
+vg_name(int kind) =>
+    array.get(array.from("Fair Value Gap","Order Block","Liquidity Sweep","Break of Structure","Change of Character","Inverse Fair Value Gap","Breaker Block","Optimal Trade Entry","KRM","Silver Bullet","Supply / Demand","Support / Resistance","Breakout","Candle Range Theory","Power of 3"),kind)
+vg_supported(int kind) =>
+    kind>=0 and kind<15 and kind!=8
+vg_missing(int kind) =>
+    kind==8 ? "Creator previews KRM; exact trigger is course-only, not published" : ""
+vg_matches(VGState s) =>
+    string matchesText = ""
+    int count = 0
+    for pass = 0 to 1
+        for kind = 0 to 14
+            VGEvent e = vg_latest(s,kind)
+            bool match = not na(e) and not na(e.confirmedAt) and (pass==0 ? e.status==2 and e.entryAt==s.closed : e.status==1)
+            if match and count<3
+                matchesText += "\n"+vg_name(kind)+(e.side>0 ? " · Long · " : " · Short · ")+(pass==0 ? "condition" : "wait retest")
+                count += 1
+    matchesText
+vg_status(int status) =>
+    array.get(array.from("Wait for confirmation","Wait for retest","Entry condition observed","Invalidated","Target touched","Expired","Ambiguous · wait","Target unavailable"),status)
+vg_reason(VGEvent e,int closed) =>
+    e.status==0 ? (e.kind==2 ? "Sweep warning; wait for structural close + new zone" : e.kind==4 ? "Structure changed; wait for new gap/block + retest" : e.kind==14 ? "Range swept; wait for opposite displacement within 3 candles" : "Geometry only; displacement + structure missing") : e.status==1 ? "Wait for watched pullback + later directional closing rejection" : e.status==2 ? (e.entryAt==closed ? (e.kind==11 or e.kind==13 ? "Completed closing confirmation; no fill is assumed" : "Later closing rejection observed; no fill is assumed") : "Earlier entry condition; history · wait for a new setup") : e.status==3 ? "Reference invalidated; wait for a new setup" : e.status==4 ? "Reference target already touched; history" : e.status==5 ? "Expired / source interrupted; wait for a new setup" : e.status==6 ? "OHLC order of entry / exits is unknown; wait" : "No untouched opposing target; wait for a new setup"
+vg_mixed(VGState s) =>
+    bool up = false
+    bool down = false
+    for k = 0 to 14
+        VGEvent e = vg_latest(s,k)
+        if not na(e) and e.status==2 and e.entryAt==s.closed
+            up := up or e.side>0
+            down := down or e.side<0
+    up and down
+vg_priority(VGEvent e) =>
+    e.status==1 ? 0 : e.status==7 ? 1 : e.status==0 ? 2 : 3
+vg_geometry_start(VGEvent e) =>
+    nz(e.confirmedBar,e.barTime)
+vg_pick(VGState s,int selected) =>
+    VGEvent picked = na
+    if s.available and not vg_mixed(s)
+        if vg_supported(selected)
+            picked := vg_latest(s,selected)
+        else if selected<0
+            VGEvent current = na
+            for k = 0 to 14
+                VGEvent e = vg_latest(s,k)
+                if not na(e)
+                    if e.status==2 and e.entryAt==s.closed and na(current)
+                        current := e
+                    if (e.status<=2 or e.status==7) and (na(picked) or vg_priority(e)<vg_priority(picked) or (vg_priority(e)==vg_priority(picked) and e.createdAt>picked.createdAt))
+                        picked := e
+            if not na(current)
+                picked := current
+    picked
+vg_price(float p) =>
+    na(p) ? "—" : str.tostring(p,format.mintick)
+// VIDEO GUIDE DRAW END
+
+var VGState vgState = vg_state()
+int vgSeconds = int(timeframe.in_seconds())
+bool vgStandard = chart.is_standard and timeframe.isintraday and not na(vgSeconds)
+bool vgSession = syminfo.prefix=="NSE" or syminfo.prefix=="BSE" or syminfo.prefix=="NFO" or syminfo.prefix=="BFO"
+int vgDay = int(math.floor((time/1000+(vgSession ? 19800 : 0))/86400))
+if showVideoGuide and vgStandard and bar_index>=last_bar_index-vgLookback+1
+    vg_step(vgState,open,high,low,close,int(time/1000),int(time_close/1000),bar_index,syminfo.mintick,vgSeconds,barstate.isconfirmed,vgSession,vgDay)
+var table vgTable = table.new(position.bottom_right,1,21,bgcolor=#111827,force_overlay=true)
+var array<line> vgLines = array.new_line()
+var array<label> vgLabels = array.new_label()
+var box vgBox = na
+if barstate.islast
+    while array.size(vgLines)>0
+        line.delete(array.shift(vgLines))
+    while array.size(vgLabels)>0
+        label.delete(array.shift(vgLabels))
+    box.delete(vgBox)
+    vgBox := na
+    table.clear(vgTable,0,0,0,20)
+    if showVideoGuide
+        int selected = -1
+        for k = 0 to 14
+            if vgChoice==vg_name(k)
+                selected := k
+        bool mixed = vg_mixed(vgState)
+        VGEvent picked = vg_pick(vgState,selected)
+        bool stale = na(vgState.closed) or timenow/1000-vgState.closed>vgSeconds*2+15
+        bool available = vgStandard and vgState.available and not na(vgState.closed)
+        string action = not available ? "Unavailable · verify candles" : selected==8 ? "Rules incomplete" : stale ? "History · check live data" : mixed ? "Wait · mixed evidence" : na(picked) ? "Wait · no matching sequence" : picked.status==2 and picked.entryAt==vgState.closed ? (picked.side>0 ? "Review Long" : syminfo.type=="option" ? "Premium bearish · avoid new buy" : "Review Short") : vg_terminal(picked) ? "History" : "Wait"
+        color guideColor = not na(picked) and not stale and picked.status==2 and picked.entryAt==vgState.closed ? (picked.side>0 ? bullColor : bearColor) : #fbbf24
+        table.cell(vgTable,0,0,"VIDEO STRATEGIES · "+action,text_color=guideColor,text_size=size.small,text_halign=text.align_left)
+        string title = selected>=0 ? vg_name(selected) : not na(picked) ? vg_name(picked.kind) : "All 15 methods · chart "+timeframe.period
+        title += not na(picked) ? (picked.side>0 ? " · Long" : " · Short")+(picked.kind>=9 ? " · local rules" : "") : ""
+        title += vg_matches(vgState)
+        table.cell(vgTable,0,1,title,text_color=color.white,text_size=size.small,text_halign=text.align_left)
+        string why = selected==8 ? vg_missing(selected) : mixed ? "Current Long and Short conditions disagree" : not available ? "Use standard intraday candles + valid tick size" : na(picked) ? "Wait for a matching confirmed sequence" : vg_reason(picked,vgState.closed)
+        table.cell(vgTable,0,2,why,text_color=#cbd5e1,text_size=size.small,text_halign=text.align_left)
+        if not na(picked)
+            string refs = "Watch "+vg_price(picked.watch)+" · close ref "+vg_price(picked.entry)+"\nSL "+vg_price(picked.stop)+" · target "+vg_price(picked.target)
+            table.cell(vgTable,0,3,refs,text_color=#e2e8f0,text_size=size.small,text_halign=text.align_left)
+            table.cell(vgTable,0,4,"Known "+str.format_time(nz(picked.confirmedAt,picked.createdAt)*1000,"dd MMM HH:mm","Asia/Kolkata")+" IST · "+vg_status(picked.status),text_color=#94a3b8,text_size=size.small,text_halign=text.align_left)
+            bool drawPlan = picked.status==1 or picked.status==2 or picked.status==7 or (vgShowPending and picked.status==0)
+            if drawPlan
+                color col = picked.side>0 ? bullColor : bearColor
+                if picked.high>picked.low
+                    vgBox := box.new(vg_geometry_start(picked)*1000,picked.high,time_close,picked.low,xloc=xloc.bar_time,border_color=color.new(col,30),bgcolor=color.new(col,90),force_overlay=true)
+                if picked.priced
+                    for j = 0 to 3
+                        float level = j==0 ? picked.watch : j==1 ? picked.entry : j==2 ? picked.stop : picked.target
+                        string caption = j==0 ? "Video watch " : j==1 ? "Video close ref " : j==2 ? "Video SL " : "Video target "
+                        color lc = j==0 ? #94a3b8 : j==1 ? #3b82f6 : j==2 ? bearColor : bullColor
+                        if not na(level)
+                            array.push(vgLines,line.new(vg_geometry_start(picked)*1000,level,time_close,level,xloc=xloc.bar_time,extend=extend.right,color=lc,style=line.style_dashed,force_overlay=true))
+                            array.push(vgLabels,label.new(bar_index+5,level,caption+vg_price(level),style=label.style_label_left,color=#111827,textcolor=lc,size=labelFont,force_overlay=true))
+            int drawn = 0
+            for e in vgState.events
+                int anchor = not na(e.entryBar) ? e.entryBar : not na(e.confirmedBar) ? e.confirmedBar : e.barTime
+                bool recent = showAllPatternHistory or anchor>=nz(time[9],0)/1000
+                if e.kind==picked.kind and recent and (vgShowPending or (e.status!=0 and not na(e.confirmedAt))) and drawn<40
+                    color col = e.side>0 ? bullColor : bearColor
+                    string note = vg_name(e.kind)+(not na(e.entryAt) ? " · condition" : " · observation")
+                    array.push(vgLabels,label.new(anchor*1000,e.side>0 ? e.low : e.high,note,xloc=xloc.bar_time,style=e.side>0 ? label.style_label_up : label.style_label_down,color=#111827,textcolor=col,size=labelFont,tooltip=vg_reason(e,vgState.closed),force_overlay=true))
+                    drawn += 1
+        table.cell(vgTable,0,5,"Automatic scan · 14 detectors · KRM unavailable\nSix local-rule recipes · 2L/2R pivots · ATR14 · pending 20 bars · latest "+str.tostring(vgLookback)+" candles",text_color=#94a3b8,text_size=size.small,text_halign=text.align_left)
+        if vgCatalogue
+            for k = 0 to 14
+                VGEvent e = vg_supported(k) ? vg_latest(vgState,k) : na
+                string status = k==8 ? "Rules incomplete" : na(e) ? "No matching sequence" : vg_status(e.status)
+                table.cell(vgTable,0,k+6,vg_name(k)+" · "+status,text_color=k==8 ? #fbbf24 : #cbd5e1,text_size=size.small,text_halign=text.align_left)
+
+// CLASSICAL PATTERN ENGINE START
+// Faithful restrictive OHLC port of chartShapePatterns.ts (last 180 observations).
+// Status: 0 confirmed reference, 1 structural invalidation, 2 target touched,
+// 3 both touched (OHLC order unknown), 4 source interrupted. No order/fill state.
+type CSBar
+    int t
+    float o
+    float h
+    float l
+    float c
+    float v
+    int idx
+type CSTurn
+    int i
+    float p
+    bool high
+type CSLine
+    float intercept
+    float slope
+type CSPoint
+    int t
+    float price
+    int segment
+type CSMatch
+    int kind
+    int side
+    float reference
+    float target
+    float extreme
+    int start
+    int known
+    int idx
+    float boundary0
+    float boundary1
+    array<CSPoint> points
+    int status
+type CSState
+    array<CSBar> bars
+    array<CSMatch> fresh
+    array<CSMatch> events
+    bool available
+    bool validHistory
+    int lastTime
+cs_state() =>
+    CSState.new(array.new<CSBar>(),array.new<CSMatch>(),array.new<CSMatch>(),true,true,na)
+cs_at(CSLine ln,int i) =>
+    ln.intercept+ln.slope*i
+cs_fit(array<CSTurn> pts) =>
+    float mx=0.0
+    float my=0.0
+    for p in pts
+        mx+=p.i
+        my+=p.p
+    mx/=array.size(pts)
+    my/=array.size(pts)
+    float numerator=0.0
+    float denominator=0.0
+    for p in pts
+        numerator+=(p.i-mx)*(p.p-my)
+        denominator+=math.pow(p.i-mx,2)
+    float slope=numerator/denominator
+    CSLine.new(my-slope*mx,slope)
+cs_turns(array<CSBar> bars) =>
+    array<CSTurn> turns=array.new<CSTurn>()
+    int n=array.size(bars)-1
+    if n>=5
+        for i=2 to n-3
+            CSBar b=array.get(bars,i)
+            bool hi=true
+            bool lo=true
+            for j=-2 to 2
+                if j!=0
+                    CSBar other=array.get(bars,i+j)
+                    hi:=hi and b.h>other.h
+                    lo:=lo and b.l<other.l
+            if hi!=lo
+                CSTurn t=CSTurn.new(i,hi?b.h:b.l,hi)
+                int size=array.size(turns)
+                if size>0
+                    CSTurn last=array.get(turns,size-1)
+                    if last.high==hi
+                        if hi?t.p>last.p:t.p<last.p
+                            array.set(turns,size-1,t)
+                    else if i-last.i>=3
+                        array.push(turns,t)
+                else
+                    array.push(turns,t)
+    turns
+cs_pick_turns(array<CSTurn> turns,bool high) =>
+    array<CSTurn> result=array.new<CSTurn>()
+    for t in turns
+        if t.high==high
+            array.push(result,t)
+    result
+cs_min_turn(array<CSTurn> pts) =>
+    float v=na
+    for p in pts
+        v:=na(v)?p.p:math.min(v,p.p)
+    v
+cs_max_turn(array<CSTurn> pts) =>
+    float v=na
+    for p in pts
+        v:=na(v)?p.p:math.max(v,p.p)
+    v
+cs_min_low(array<CSBar> bars,int start,int end) =>
+    float v=na
+    if end>=start
+        for i=start to end
+            float p=array.get(bars,i).l
+            v:=na(v)?p:math.min(v,p)
+    v
+cs_max_high(array<CSBar> bars,int start,int end) =>
+    float v=na
+    if end>=start
+        for i=start to end
+            float p=array.get(bars,i).h
+            v:=na(v)?p:math.max(v,p)
+    v
+cs_point(array<CSPoint> pts,array<CSBar> bars,int i,float p,int segment,int sign) =>
+    array.push(pts,CSPoint.new(array.get(bars,i).t,sign*p,segment))
+cs_turn_line(array<CSPoint> pts,array<CSBar> bars,array<CSTurn> turns,int segment,int sign) =>
+    if array.size(turns)>=2
+        for t in turns
+            cs_point(pts,bars,t.i,t.p,segment,sign)
+cs_outline(array<CSBar> bars,CSLine upper,CSLine lower,int start,int n,int sign) =>
+    array<CSPoint> pts=array.new<CSPoint>()
+    cs_point(pts,bars,start,cs_at(upper,start),0,sign)
+    cs_point(pts,bars,n,cs_at(upper,n),0,sign)
+    cs_point(pts,bars,start,cs_at(lower,start),1,sign)
+    cs_point(pts,bars,n,cs_at(lower,n),1,sign)
+    pts
+cs_add(array<CSMatch> matches,array<CSBar> bars,array<CSTurn> turns,int sign,int bull,int bear,CSLine boundary,int start,float measured,float projection,array<CSPoint> outline,bool includePending=false) =>
+    int n=array.size(bars)-1
+    float current=array.get(bars,n).c
+    float previous=array.get(bars,n-1).c
+    int kind=sign>0?bull:bear
+    bool crossed=previous<=cs_at(boundary,n-1) and current>cs_at(boundary,n)
+    bool ok=crossed or includePending
+    int lastTurn=array.size(turns)>0?array.get(turns,array.size(turns)-1).i:start
+    if ok and lastTurn+1<=n-1
+        for i=lastTurn+1 to n-1
+            if array.get(bars,i).c>cs_at(boundary,i)
+                ok:=false
+    for e in matches
+        if e.kind==kind and e.side==sign
+            ok:=false
+    if ok
+        float bottom=cs_min_low(bars,start,n-1)
+        float height=na(measured)?cs_max_high(bars,start,n-1)-bottom:measured
+        float target=sign*(na(projection)?cs_at(boundary,n)+height:projection)
+        float reference=sign*current
+        float extreme=sign*bottom
+        if not na(target-target) and target>0 and sign*(target-reference)>0 and sign*(reference-extreme)>0 and (crossed or array.get(bars,n).l>bottom)
+            array<CSPoint> pts=array.copy(outline)
+            if array.size(pts)==0
+                array<CSTurn> observed=array.new<CSTurn>()
+                for t in turns
+                    if t.i>=start
+                        array.push(observed,t)
+                cs_turn_line(pts,bars,observed,0,sign)
+                int segment=array.size(observed)>=2?1:0
+                cs_point(pts,bars,start,cs_at(boundary,start),segment,sign)
+                cs_point(pts,bars,n,cs_at(boundary,n),segment,sign)
+            CSBar b=array.get(bars,n)
+            array.push(matches,CSMatch.new(kind,sign,crossed?reference:float(na),target,extreme,array.get(bars,start).t,b.t,b.idx,sign*cs_at(boundary,start),sign*cs_at(boundary,n),pts,crossed?0:5))
+cs_recognize(array<CSBar> source,bool includePending=false) =>
+    array<CSMatch> matches=array.new<CSMatch>()
+    if array.size(source)>=12
+        for orientation=0 to 1
+            int sign=orientation==0?1:-1
+            array<CSBar> bars=array.new<CSBar>()
+            for b in source
+                array.push(bars,CSBar.new(b.t,sign*b.o,sign>0?b.h:-b.l,sign>0?b.l:-b.h,sign*b.c,b.v,b.idx))
+            int n=array.size(bars)-1
+            float current=array.get(bars,n).c
+            array<CSTurn> turns=cs_turns(bars)
+            array<CSPoint> empty=array.new<CSPoint>()
+            for pass=0 to 1
+                int count=pass==0?5:3
+                if array.size(turns)>=count
+                    array<CSTurn> p=array.slice(turns,array.size(turns)-count,array.size(turns))
+                    CSTurn first=array.get(p,0)
+                    CSTurn last=array.get(p,count-1)
+                    if not first.high and not last.high and n-last.i<=16
+                        array<CSTurn> lows=cs_pick_turns(p,false)
+                        array<CSTurn> highs=cs_pick_turns(p,true)
+                        float height=cs_max_turn(highs)-cs_min_turn(lows)
+                        if height>math.abs(current)*0.003 and last.i-first.i>=(count-1)*3
+                            bool equalLow=cs_max_turn(lows)-cs_min_turn(lows)<=height*0.08
+                            bool equalHigh=cs_max_turn(highs)-cs_min_turn(highs)<=height*0.08
+                            CSLine boundary=array.size(highs)==1?CSLine.new(array.get(highs,0).p,0):cs_fit(highs)
+                            if equalLow and equalHigh
+                                cs_add(matches,bars,turns,sign,count==3?0:2,count==3?1:3,boundary,first.i,na,na,empty,includePending)
+                            if count==5
+                                CSTurn l0=array.get(lows,0)
+                                CSTurn l1=array.get(lows,1)
+                                CSTurn l2=array.get(lows,2)
+                                CSTurn h0=array.get(highs,0)
+                                CSTurn h1=array.get(highs,1)
+                                if math.abs(l0.p-l2.p)<=height*0.08 and l1.p<math.min(l0.p,l2.p)-height*0.15 and equalHigh
+                                    cs_add(matches,bars,turns,sign,4,5,boundary,first.i,na,na,empty,includePending)
+                                if l1.p>l0.p+height*0.08 and l2.p>l1.p+height*0.08 and h1.p>h0.p+height*0.08
+                                    cs_add(matches,bars,turns,sign,6,7,CSLine.new(h1.p,0),first.i,height,na,empty,includePending)
+                            if count==3
+                                CSTurn l0=array.get(lows,0)
+                                CSTurn l1=array.get(lows,1)
+                                CSTurn h0=array.get(highs,0)
+                                float pole=h0.p-l0.p
+                                float retrace=(h0.p-l1.p)/pole
+                                int firstDuration=h0.i-l0.i
+                                int pullbackDuration=l1.i-h0.i
+                                if retrace>=0.25 and retrace<=0.65 and pullbackDuration>=firstDuration*0.5 and pullbackDuration<=firstDuration*2
+                                    cs_add(matches,bars,turns,sign,8,9,boundary,first.i,pole,l1.p+pole,empty,includePending)
+            // Smooth bowls: full pointwise quadratic residual, confirmed trough/handle.
+            array<CSTurn> rims=cs_pick_turns(turns,true)
+            int rimCount=array.size(rims)
+            if rimCount>0
+                for ri=math.max(0,rimCount-6) to rimCount-1
+                    CSTurn rim=array.get(rims,ri)
+                    if rim.i+24<=n-1
+                        for end=rim.i+24 to n-1
+                            int span=end-rim.i
+                            float bottom=cs_min_low(bars,rim.i,end)
+                            float depth=rim.p-bottom
+                            if depth>math.abs(current)*0.01 and math.abs(array.get(bars,end).h-rim.p)<=depth*0.08
+                                bool trough=false
+                                for t in turns
+                                    if not t.high and t.i>rim.i+span*0.4 and t.i<rim.i+span*0.6 and math.abs(t.p-bottom)<depth*0.03
+                                        trough:=true
+                                bool curve=trough
+                                if curve
+                                    for i=rim.i to end
+                                        if math.abs(array.get(bars,i).c-(bottom+depth*math.pow(2.0*(i-rim.i)/span-1,2)))>depth*0.08
+                                            curve:=false
+                                if curve
+                                    float boundary=math.max(rim.p,array.get(bars,end).h)
+                                    bool contained=true
+                                    for i=rim.i+1 to n-1
+                                        if array.get(bars,i).c>boundary
+                                            contained:=false
+                                    if contained
+                                        if end==n-1
+                                            cs_add(matches,bars,turns,sign,10,11,CSLine.new(boundary,0),rim.i,na,na,empty,includePending)
+                                        int duration=n-1-end
+                                        if duration>=4 and duration<=span/2.0
+                                            bool rightRim=false
+                                            CSTurn handleLow=na
+                                            for t in turns
+                                                if t.high and t.i==end
+                                                    rightRim:=true
+                                                if not t.high and t.i>end and t.i<=n-3 and na(handleLow)
+                                                    handleLow:=t
+                                            if rightRim and not na(handleLow)
+                                                float retrace=boundary-handleLow.p
+                                                bool handle=true
+                                                for i=end+1 to n-1
+                                                    if array.get(bars,i).l<handleLow.p
+                                                        handle:=false
+                                                if retrace>=depth*0.08 and retrace<=depth*0.35 and handle
+                                                    array<CSPoint> outline=array.new<CSPoint>()
+                                                    for i=rim.i to n-1
+                                                        cs_point(outline,bars,i,array.get(bars,i).c,0,sign)
+                                                    cs_point(outline,bars,rim.i,boundary,1,sign)
+                                                    cs_point(outline,bars,n,boundary,1,sign)
+                                                    cs_add(matches,bars,turns,sign,12,13,CSLine.new(boundary,0),rim.i,na,na,outline,includePending)
+                    // Detrend a materially rising bowl before fitting a scallop.
+                    int end=n-1
+                    int span=end-rim.i
+                    if span>=24 and span<=80
+                        float rise=array.get(bars,end).h-rim.p
+                        float bottom=na
+                        int troughIndex=0
+                        for i=rim.i to end
+                            float price=array.get(bars,i).c-rise*(i-rim.i)/span
+                            if na(bottom) or price<bottom
+                                bottom:=price
+                                troughIndex:=i-rim.i
+                        float depth=array.get(bars,rim.i).c-bottom
+                        if depth>math.abs(current)*0.01 and rise>=depth*0.15 and rise<=depth*0.65 and troughIndex>=span*0.4 and troughIndex<=span*0.6
+                            bool good=true
+                            float boundary=array.get(bars,end).h
+                            for i=rim.i to end
+                                float price=array.get(bars,i).c-rise*(i-rim.i)/span
+                                if math.abs(price-(bottom+depth*math.pow(2.0*(i-rim.i)/span-1,2)))>depth*0.08 or array.get(bars,i).c>boundary
+                                    good:=false
+                            if good
+                                cs_add(matches,bars,turns,sign,14,15,CSLine.new(boundary,0),rim.i,depth,na,empty,includePending)
+            // Diamond: independently expanding and contracting alternating boundaries.
+            if array.size(turns)>=8
+                array<CSTurn> diamond=array.slice(turns,array.size(turns)-8,array.size(turns))
+                if n-array.get(diamond,7).i<=12
+                    array<CSTurn> dh=cs_pick_turns(diamond,true)
+                    array<CSTurn> dl=cs_pick_turns(diamond,false)
+                    float height=cs_max_turn(dh)-cs_min_turn(dl)
+                    CSTurn h0=array.get(dh,0)
+                    CSTurn h1=array.get(dh,1)
+                    CSTurn h2=array.get(dh,2)
+                    CSTurn h3=array.get(dh,3)
+                    CSTurn l0=array.get(dl,0)
+                    CSTurn l1=array.get(dl,1)
+                    CSTurn l2=array.get(dl,2)
+                    CSTurn l3=array.get(dl,3)
+                    if array.get(diamond,7).i-array.get(diamond,0).i>=24 and h1.p>h0.p+height*0.1 and l1.p<l0.p-height*0.1 and h2.p<h1.p-height*0.08 and h3.p<h2.p-height*0.08 and l2.p>l1.p+height*0.08 and l3.p>l2.p+height*0.08
+                        CSLine upper=cs_fit(array.slice(dh,2,4))
+                        CSLine lower=cs_fit(array.slice(dl,2,4))
+                        int start=math.max(h1.i,l1.i)
+                        bool good=cs_at(upper,n)>cs_at(lower,n)
+                        for i=start to n-1
+                            CSBar b=array.get(bars,i)
+                            if b.c>cs_at(upper,i)+height*0.03 or b.c<cs_at(lower,i)-height*0.03
+                                good:=false
+                        if good
+                            array<CSPoint> outline=array.new<CSPoint>()
+                            cs_turn_line(outline,bars,array.slice(dh,0,2),0,sign)
+                            cs_turn_line(outline,bars,array.slice(dl,0,2),1,sign)
+                            cs_turn_line(outline,bars,array.slice(dh,1,4),2,sign)
+                            cs_turn_line(outline,bars,array.slice(dl,1,4),3,sign)
+                            cs_add(matches,bars,turns,sign,16,17,upper,array.get(diamond,0).i,height,na,outline,includePending)
+            // Three touches on EACH fitted boundary; contained closes, >=16 bars.
+            if array.size(turns)>=6
+                array<CSTurn> p=array.slice(turns,array.size(turns)-6,array.size(turns))
+                array<CSTurn> highs=cs_pick_turns(p,true)
+                array<CSTurn> lows=cs_pick_turns(p,false)
+                if n-array.get(p,5).i<=16
+                    CSLine upper=cs_fit(highs)
+                    CSLine lower=cs_fit(lows)
+                    int start=array.get(p,0).i
+                    int span=array.get(p,5).i-start
+                    float width=cs_at(upper,start)-cs_at(lower,start)
+                    float endWidth=cs_at(upper,n)-cs_at(lower,n)
+                    bool good=span>=16 and width>math.abs(current)*0.003 and endWidth>width*0.12
+                    for t in p
+                        if math.abs(t.p-cs_at(t.high?upper:lower,t.i))>width*0.08
+                            good:=false
+                    if good
+                        for i=start to n-1
+                            CSBar b=array.get(bars,i)
+                            if b.c>cs_at(upper,i)+width*0.03 or b.c<cs_at(lower,i)-width*0.03
+                                good:=false
+                    if good
+                        array<CSPoint> outline=cs_outline(bars,upper,lower,start,n,sign)
+                        float u=upper.slope*span/width
+                        float l=lower.slope*span/width
+                        bool flatU=math.abs(u)<=0.08
+                        bool flatL=math.abs(l)<=0.08
+                        bool parallel=math.abs(u-l)<=0.08
+                        bool converging=endWidth<width*0.8
+                        if flatU and flatL
+                            cs_add(matches,bars,turns,sign,18,18,upper,start,na,na,outline,includePending)
+                        else if parallel and math.abs(u)>0.08
+                            cs_add(matches,bars,turns,sign,19,19,upper,start,na,na,outline,includePending)
+                        if flatU and l>0.12 and converging
+                            cs_add(matches,bars,turns,sign,20,21,upper,start,na,na,outline,includePending)
+                        if flatL and u< -0.12 and converging
+                            cs_add(matches,bars,turns,sign,21,20,upper,start,width,na,outline,includePending)
+                        if u< -0.12 and l>0.12 and converging
+                            cs_add(matches,bars,turns,sign,22,22,upper,start,na,na,outline,includePending)
+                        if u< -0.12 and l< -0.04 and u<l-0.1 and converging
+                            cs_add(matches,bars,turns,sign,23,24,upper,start,na,na,outline,includePending)
+                        int firstHigh=array.get(highs,0).i
+                        int poleStart=math.max(0,firstHigh-math.max(5,int(math.ceil(span/2.0))))
+                        float poleLow=cs_min_low(bars,poleStart,firstHigh-1)
+                        float pole=array.get(highs,0).p-poleLow
+                        float retrace=array.get(highs,0).p-cs_min_turn(lows)
+                        int poleDuration=firstHigh-poleStart
+                        if array.get(p,0).high and pole>=width*1.5 and retrace<=pole*0.65 and span<=poleDuration*4
+                            int poleLowIndex=poleStart
+                            bool found=false
+                            for i=poleStart to firstHigh-1
+                                if not found and array.get(bars,i).l==poleLow
+                                    poleLowIndex:=i
+                                    found:=true
+                            array<CSPoint> flagOutline=array.copy(outline)
+                            cs_point(flagOutline,bars,poleLowIndex,poleLow,2,sign)
+                            cs_point(flagOutline,bars,firstHigh,array.get(highs,0).p,2,sign)
+                            if parallel and u< -0.08
+                                cs_add(matches,bars,turns,sign,25,26,upper,start,pole,na,flagOutline,includePending)
+                            if u< -0.12 and l>0.12 and converging
+                                cs_add(matches,bars,turns,sign,27,28,upper,start,pole,na,flagOutline,includePending)
+    matches
+// Fidelity short-term recipes: local OHLC tolerances, never a projected NR4 target.
+cs_short_add(array<CSMatch> out,array<CSBar> bars,int kind,int side,int first,float boundary,float extreme,float target) =>
+    int n=array.size(bars)-1
+    CSBar c=array.get(bars,n)
+    CSBar p=array.get(bars,n-1)
+    CSBar a=array.get(bars,first)
+    if side!=0 and (na(target) or (side>0?target>c.c:target<c.c))
+        float lo=math.min(a.l,p.l)
+        float hi=math.max(a.h,p.h)
+        array<CSPoint> outline=array.new<CSPoint>()
+        cs_point(outline,bars,first,lo,0,1)
+        cs_point(outline,bars,n,lo,0,1)
+        cs_point(outline,bars,first,hi,1,1)
+        cs_point(outline,bars,n,hi,1,1)
+        array.push(out,CSMatch.new(kind,side,c.c,target,extreme,a.t,c.t,c.idx,boundary,boundary,outline,0))
+cs_short_recognize(array<CSBar> bars) =>
+    array<CSMatch> out=array.new<CSMatch>()
+    int n=array.size(bars)-1
+    if n>=4
+        CSBar c=array.get(bars,n)
+        CSBar p=array.get(bars,n-1)
+        CSBar a=array.get(bars,n-2)
+        int side=c.c>p.h?1:c.c<p.l?-1:0
+        if side!=0
+            float width=p.h-p.l
+            float boundary=side>0?p.h:p.l
+            float extreme=side>0?p.l:p.h
+            bool narrow=true
+            for i=n-4 to n-2
+                CSBar prior=array.get(bars,i)
+                if prior.h-prior.l<=width
+                    narrow:=false
+            if narrow
+                cs_short_add(out,bars,29,side,n-1,boundary,extreme,na)
+            if p.h<a.h and p.l>a.l
+                cs_short_add(out,bars,30,side,n-1,boundary,extreme,na)
+        if n>=7
+            float maxRange=0.0
+            for i=n-5 to n-3
+                CSBar prior=array.get(bars,i)
+                maxRange:=math.max(maxRange,prior.h-prior.l)
+            float ar=a.h-a.l
+            float pr=p.h-p.l
+            for orientation=0 to 1
+                bool bull=orientation==0
+                bool trend=bull?array.get(bars,n-7).c>array.get(bars,n-3).c:array.get(bars,n-7).c<array.get(bars,n-3).c
+                bool first=bull?a.c<a.o and (a.c-a.l)/ar<=0.25:a.c>a.o and (a.h-a.c)/ar<=0.25
+                bool second=bull?p.c>p.o and (p.c-p.l)/pr>=0.5:p.c<p.o and (p.h-p.c)/pr>=0.5
+                float equal=bull?math.abs(a.l-p.l):math.abs(a.h-p.h)
+                if trend and first and second and ar>maxRange and pr>maxRange and equal<=math.max(ar,pr)*0.15 and (bull?side==1:side== -1)
+                    float lo=math.min(a.l,p.l)
+                    float hi=math.max(a.h,p.h)
+                    cs_short_add(out,bars,bull?31:32,side,n-2,bull?p.h:p.l,bull?lo:hi,bull?hi+(hi-lo):lo-(hi-lo))
+    out
+cs_boundary_at(CSMatch e,int opened) =>
+    e.boundary1+(e.boundary1-e.boundary0)*(opened-e.known)/(e.known-e.start)
+cs_ingest(CSState s,float o,float h,float l,float c,float v,int opened,int idx,int seconds,bool standard,bool confirmed,bool shortTerm) =>
+    if confirmed
+        array.clear(s.fresh)
+        bool pricesFinite=not na(o-o) and not na(h-h) and not na(l-l) and not na(c-c)
+        bool valid=pricesFinite and opened>0 and math.min(o,h,l,c)>0 and (shortTerm?h>l:not na(v-v) and v>=0) and h>=math.max(o,c,l) and l<=math.min(o,c) and (na(s.lastTime) or opened>s.lastTime)
+        s.validHistory:=s.validHistory and valid
+        bool continuous=na(s.lastTime) or opened-s.lastTime==seconds
+        s.available:=standard and seconds>0 and seconds<86400 and s.validHistory and continuous
+        if not s.available
+            array.clear(s.bars)
+            for e in s.events
+                if e.status==0
+                    e.status:=4
+        else
+            for e in s.events
+                if e.status==0 and opened>e.known
+                    bool failed=e.side>0?l<=e.extreme:h>=e.extreme
+                    bool target=not na(e.target) and (e.side>0?h>=e.target:l<=e.target)
+                    float boundary=cs_boundary_at(e,opened)
+                    bool backInside=e.side>0?c<=boundary:c>=boundary
+                    e.status:=failed and target?3:failed?1:target?2:backInside?1:0
+            array.push(s.bars,CSBar.new(opened,o,h,l,c,v,idx))
+            if array.size(s.bars)>180
+                array.shift(s.bars)
+            s.fresh:=shortTerm?cs_short_recognize(s.bars):cs_recognize(s.bars)
+            for e in s.fresh
+                // First known at this close: earlier source-candle wicks cannot retire it.
+                // Only the strictly later confirmed-bar loop above observes barrier touches.
+                array.push(s.events,e)
+            while array.size(s.events)>80
+                array.shift(s.events)
+        s.lastTime:=opened
+cs_step(CSState s,float o,float h,float l,float c,float v,int opened,int idx,int seconds,bool standard,bool confirmed) =>
+    cs_ingest(s,o,h,l,c,v,opened,idx,seconds,standard,confirmed,false)
+cs_step_short(CSState s,float o,float h,float l,float c,float v,int opened,int idx,int seconds,bool standard,bool confirmed) =>
+    cs_ingest(s,o,h,l,c,v,opened,idx,seconds,standard,confirmed,true)
+// Merge by knowledge time, keeping the same global retention cap for the guide.
+cs_merge(CSState a,CSState b) =>
+    CSState view=cs_state()
+    view.available:=a.available
+    view.lastTime:=a.lastTime
+    int ai=0
+    int bi=0
+    while ai<array.size(a.events) or bi<array.size(b.events)
+        bool takeA=bi>=array.size(b.events)
+        if ai<array.size(a.events) and bi<array.size(b.events)
+            takeA:=array.get(a.events,ai).known<=array.get(b.events,bi).known
+        if takeA and ai<array.size(a.events)
+            array.push(view.events,array.get(a.events,ai))
+            ai+=1
+        else
+            array.push(view.events,array.get(b.events,bi))
+            bi+=1
+    while array.size(view.events)>80
+        array.shift(view.events)
+    view
+// Native-feed boundary: a fresh segment may recover after a malformed receipt/gap.
+// The strict cs_step recognizer path still rejects malformed supplied histories.
+cs_reset_segment(CSState s) =>
+    array.clear(s.bars)
+    array.clear(s.fresh)
+    s.validHistory:=true
+    s.lastTime:=na
+    for e in s.events
+        if e.status==0
+            e.status:=4
+cs_live_step(CSState s,float o,float h,float l,float c,float v,int opened,int idx,int seconds,bool standard,bool confirmed,bool shortTerm) =>
+    if confirmed
+        bool newSegment=not s.validHistory or (not na(s.lastTime) and opened>s.lastTime and opened-s.lastTime!=seconds)
+        if newSegment
+            cs_reset_segment(s)
+        // Index feeds may omit volume; it is validated but never geometric proof.
+        float observedVolume=na(v)?0.0:v
+        cs_ingest(s,o,h,l,c,observedVolume,opened,idx,seconds,standard,true,shortTerm)
+// CLASSICAL PATTERN ENGINE END
+
+// CLASSICAL PATTERN DRAW START
+showClassical = input.bool(true, "Classical chart patterns + geometry", group="Classical chart patterns", tooltip="Restrictive confirmed OHLC geometry on standard intraday candles. Default: latest formation confirmed in the last ten chart candle slots, including the forming slot. All-history retains up to 80 confirmations with a bounded drawing budget.")
+csShowGuide = input.bool(true, "Classical expectation guide", group="Classical chart patterns")
+csShowPending = input.bool(false, "Show unconfirmed classical geometry", group="Classical chart patterns", tooltip="Opt-in only. Amber dashed candidates use completed candles, require a later closing boundary break, and never become confirmed guidance before that close.")
+cs_name(int kind) =>
+    array.get(array.from("double-bottom","double-top","triple-bottom","triple-top","inverse-head-and-shoulders","head-and-shoulders","three-rising-valleys","three-descending-peaks","measured-move-up","measured-move-down","rounding-bottom","rounding-top","cup-and-handle","inverse-cup-and-handle","ascending-scallop","descending-scallop","diamond-bottom","diamond-top","rectangle","channel","ascending-triangle","descending-triangle","symmetrical-triangle","falling-wedge","rising-wedge","bull-flag","bear-flag","bull-pennant","bear-pennant","nr4-breakout","inside-bar-breakout","pipe-bottom","pipe-top"),kind)
+cs_status(int status) =>
+    array.get(array.from("Confirmed reference","Invalidated · Wait for a new shape","Projected target touched · Wait for a new shape","Ambiguous target / invalidation · Wait","Source interrupted · Wait"),status)
+cs_pick(CSState s,int oldest) =>
+    CSMatch picked=na
+    for e in s.events
+        if e.idx>=oldest
+            picked:=e
+    picked
+cs_mixed(CSState s,int known) =>
+    bool up=false
+    bool down=false
+    for e in s.events
+        if e.known==known
+            up:=up or e.side>0
+            down:=down or e.side<0
+    up and down
+cs_price(float p) =>
+    na(p)?"Unavailable":str.tostring(p,format.mintick)
+// All drawing owners share native caps. Leave transient room for the earlier
+// candle/Fib/GJ owners before this last-bar layer gets its next cleanup turn.
+cs_outline_cost(CSMatch e) =>
+    int linesNeeded=0
+    int polylinesNeeded=0
+    int count=array.size(e.points)
+    if count>0
+        for i=0 to count-1
+            CSPoint p=array.get(e.points,i)
+            if i==0
+                polylinesNeeded+=1
+            else
+                CSPoint previous=array.get(e.points,i-1)
+                if p.segment==previous.segment
+                    linesNeeded+=1
+                else
+                    polylinesNeeded+=1
+    [linesNeeded,polylinesNeeded]
+cs_draw_outline(CSMatch e,color col,bool pending,int referenceSlots,array<line> ownedLines,array<polyline> ownedPolylines) =>
+    [linesNeeded,polylinesNeeded]=cs_outline_cost(e)
+    int lineRoom=math.min(200-array.size(ownedLines),math.max(0,500-array.size(line.all)-16-referenceSlots))
+    int polylineRoom=math.min(40-array.size(ownedPolylines),math.max(0,50-array.size(polyline.all)-4))
+    bool drawn=false
+    string style=pending?line.style_dashed:line.style_solid
+    int count=array.size(e.points)
+    // Reserve an entire formation before creating any object. Never join gaps.
+    if linesNeeded>0 and linesNeeded<=lineRoom
+        for i=1 to count-1
+            CSPoint a=array.get(e.points,i-1)
+            CSPoint b=array.get(e.points,i)
+            if a.segment==b.segment
+                array.push(ownedLines,line.new(a.t*1000,a.price,b.t*1000,b.price,xloc=xloc.bar_time,color=col,style=style,width=2,force_overlay=true))
+        drawn:=true
+    else if polylinesNeeded>0 and polylinesNeeded<=polylineRoom
+        array<chart.point> segment=array.new<chart.point>()
+        for i=0 to count-1
+            CSPoint p=array.get(e.points,i)
+            if i>0
+                CSPoint previous=array.get(e.points,i-1)
+                if p.segment!=previous.segment
+                    array.push(ownedPolylines,polyline.new(segment,curved=false,closed=false,xloc=xloc.bar_time,line_color=col,line_style=style,line_width=2,force_overlay=true))
+                    segment:=array.new<chart.point>()
+            array.push(segment,chart.point.from_time(p.t*1000,p.price))
+        array.push(ownedPolylines,polyline.new(segment,curved=false,closed=false,xloc=xloc.bar_time,line_color=col,line_style=style,line_width=2,force_overlay=true))
+        drawn:=true
+    drawn
+var CSState csState=cs_state()
+var CSState csShortState=cs_state()
+int csSeconds=int(timeframe.in_seconds())
+bool csStandard=chart.is_standard and timeframe.isintraday and not na(csSeconds)
+// A fixed 1500-bar calculation budget preserves native indicator runtime bounds.
+if showClassical and bar_index>=last_bar_index-1499
+    cs_live_step(csState,open,high,low,close,volume,int(time/1000),bar_index,csSeconds,csStandard,barstate.isconfirmed,false)
+    cs_live_step(csShortState,open,high,low,close,volume,int(time/1000),bar_index,csSeconds,csStandard,barstate.isconfirmed,true)
+var array<line> csLines=array.new_line()
+var array<label> csLabels=array.new_label()
+var array<polyline> csPolylines=array.new<polyline>()
+var table csTable=table.new(position.bottom_left,1,7,bgcolor=#111827,force_overlay=true)
+if barstate.islast
+    while array.size(csLines)>0
+        line.delete(array.shift(csLines))
+    while array.size(csLabels)>0
+        label.delete(array.shift(csLabels))
+    while array.size(csPolylines)>0
+        polyline.delete(array.shift(csPolylines))
+    table.clear(csTable,0,0,0,6)
+    int confirmedIndex=barstate.isconfirmed?bar_index:bar_index-1
+    int oldest=bar_index-9
+    CSState csView=cs_merge(csState,csShortState)
+    CSMatch picked=cs_pick(csView,oldest)
+    bool available=csStandard and csState.available
+    bool stale=not na(csState.lastTime) and timenow/1000-(csState.lastTime+csSeconds)>csSeconds*2+15
+    bool mixed=not na(picked) and cs_mixed(csView,picked.known)
+    bool active=available and not stale and not mixed and not na(picked) and picked.status==0
+    if showClassical and available
+        int referenceSlots=active?(na(picked.target)?2:3):0
+        // Pending candidates also precede older all-history geometry.
+        if csShowPending and na(picked)
+            array<CSMatch> candidates=cs_recognize(csState.bars,true)
+            CSMatch candidate=na
+            for e in candidates
+                if e.status==5 and (na(candidate) or e.start>candidate.start)
+                    candidate:=e
+            if not na(candidate)
+                bool rendered=cs_draw_outline(candidate,#fbbf24,true,referenceSlots,csLines,csPolylines)
+                if rendered and array.size(label.all)<500-16-referenceSlots
+                    array.push(csLabels,label.new(candidate.known*1000,candidate.extreme,"UNCONFIRMED · "+cs_name(candidate.kind)+" · Wait for closing boundary break",xloc=xloc.bar_time,style=label.style_label_left,color=#111827,textcolor=#fbbf24,size=size.small,tooltip="Candidate geometry only. Boundary "+cs_price(candidate.boundary1)+" · projected target "+cs_price(candidate.target)+" · structural invalidation "+cs_price(candidate.extreme)+". No confirmed direction or entry condition.",force_overlay=true))
+        int drawn=0
+        int total=array.size(csView.events)
+        if total>0
+            for back=0 to total-1
+                CSMatch e=array.get(csView.events,total-1-back)
+                bool visible=showAllPatternHistory or (not na(picked) and e.kind==picked.kind and e.side==picked.side and e.known==picked.known)
+                if visible and (showAllPatternHistory or e.idx>=oldest) and (showAllPatternHistory or drawn==0)
+                    color col=e.status==0?(e.side>0?#22c55e:#ef4444):#94a3b8
+                    bool rendered=cs_draw_outline(e,col,false,referenceSlots,csLines,csPolylines)
+                    if rendered
+                        // Geometry stays at observation time; only this caption is known here.
+                        if array.size(label.all)<500-16-referenceSlots
+                            array.push(csLabels,label.new(e.known*1000,e.extreme,cs_name(e.kind)+" · "+cs_status(e.status),xloc=xloc.bar_time,style=e.side>0?label.style_label_up:label.style_label_down,color=#111827,textcolor=col,size=size.small,tooltip="Confirmed close reference "+cs_price(e.reference)+" · projected target "+cs_price(e.target)+" · structural invalidation "+cs_price(e.extreme)+". Geometry was known at this closing candle; no order or fill is assumed.",force_overlay=true))
+                        drawn+=1
+        if active
+            for j=0 to 2
+                float level=j==0?picked.reference:j==1?picked.target:picked.extreme
+                string caption=j==0?"Reference ":j==1?"Projected target ":"Structural invalidation "
+                color col=j==0?#60a5fa:j==1?#22c55e:#ef4444
+                if not na(level)
+                    if array.size(line.all)<500-16
+                        array.push(csLines,line.new(picked.known*1000,level,time_close,level,xloc=xloc.bar_time,extend=extend.right,color=col,style=line.style_dotted,force_overlay=true))
+                    if array.size(label.all)<500-16
+                        array.push(csLabels,label.new(bar_index+7,level,caption+cs_price(level),style=label.style_label_left,color=#111827,textcolor=col,size=size.small,force_overlay=true))
+    if showClassical and csShowGuide
+        string action=not available?"Unavailable":stale?"History · Wait":mixed?"Mixed directions · Wait":na(picked)?"Wait":picked.status!=0?cs_status(picked.status):picked.idx==confirmedIndex?"Confirmed close reference":"Earlier reference · Wait for next condition"
+        color col=active?(picked.side>0?#22c55e:#ef4444):#fbbf24
+        table.cell(csTable,0,0,"CLASSICAL PATTERNS · "+action,text_color=col,text_size=size.small,text_halign=text.align_left)
+        string formation=not na(picked)?cs_name(picked.kind):"No current / recent completed formation"
+        string direction=active?"Expected "+(picked.side>0?"Up":"Down")+(na(picked.target)?" · target unavailable":" · measured scenario"):"Wait for aligned confirmed geometry"
+        table.cell(csTable,0,1,formation+"\n"+direction,text_color=color.white,text_size=size.small,text_halign=text.align_left)
+        string next=not available?"Use continuous standard intraday OHLC + volume":stale?"Check live candle continuity; historical reference only":na(picked)?"Wait for a completed close through a fitted boundary":mixed?"Opposing confirmed shapes; wait for a new aligned close":picked.status!=0?"Wait for a new completed formation":picked.idx==confirmedIndex?"Boundary crossed on completed close; observe continuation":"Observe continuation above / below reference; no fresh entry implied"
+        table.cell(csTable,0,2,next,text_color=#cbd5e1,text_size=size.small,text_halign=text.align_left)
+        if not na(picked)
+            table.cell(csTable,0,3,"Reference "+cs_price(picked.reference)+" · Projected target "+cs_price(picked.target)+"\nStructural invalidation "+cs_price(picked.extreme),text_color=#e2e8f0,text_size=size.small,text_halign=text.align_left)
+            table.cell(csTable,0,4,"Known at close "+str.format_time((picked.known+csSeconds)*1000,"dd MMM HH:mm","Asia/Kolkata")+" IST · "+cs_status(picked.status),text_color=#94a3b8,text_size=size.small,text_halign=text.align_left)
+        int remaining=math.max(0,int(math.ceil((time_close-timenow)/1000.0)))
+        string candle=close>open?"Up":close<open?"Down":"Doji"
+        float liveBoundary=not na(picked)?cs_boundary_at(picked,int(time/1000)):float(na)
+        string provisional=active?(picked.side*(close-liveBoundary)>0?"beyond boundary ":"at / behind boundary ")+cs_price(liveBoundary):"Wait · no active boundary"
+        table.cell(csTable,0,5,"Live candle "+candle+" · "+str.tostring(remaining)+"s to close\nProvisional · "+provisional+" · confirmation waits for close",text_color=#cbd5e1,text_size=size.small,text_halign=text.align_left)
+        table.cell(csTable,0,6,"Measured scenarios · no orders / fills assumed\n180-bar fit · latest 1500 source candles · retained 80 confirmations",text_color=#94a3b8,text_size=size.small,text_halign=text.align_left)
+// CLASSICAL PATTERN DRAW END

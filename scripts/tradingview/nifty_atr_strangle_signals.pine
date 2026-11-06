@@ -1,0 +1,216 @@
+//@version=6
+indicator("NIFTY ATR Strangle | Clear Signals", shorttitle="ATR STRANGLE", overlay=true, max_labels_count=100, dynamic_requests=true)
+// Rule source: https://www.quantsapp.com/backtesting/strategies/weekly-atr-multiple-short-strangle-premium-multiple-sl
+int entryAt = input.time(timestamp("28 Oct 2026 11:15 +0530"), "Entry: first session after expiry, 11:15 IST", group="Cycle", display=display.none)
+int atmAnchor = input.int(22600,"ATM anchor (+/- 50 scanned)",step=50,group="Strike banks",display=display.none)
+int putBank = input.int(21800,"PE delta / entry bank centre",step=50,group="Strike banks",display=display.none)
+int callBank = input.int(23350,"CE delta / entry bank centre",step=50,group="Strike banks",display=display.none)
+float weeklyOverride = input.float(632.78997083,"This cycle's NSE weekly ATR (0 = TV continuous)",minval=0,group="ATR source",display=display.none)
+string futuresSymbol = input.symbol("NSE:NIFTY1!","Continuous future (used if ATR is 0)",group="ATR source",display=display.none)
+
+// Prices are signal references, not fills. No broker orders and no strategy P&L.
+// Selected expiry only: update the schedule and strike banks for the next cycle.
+string tz = "Asia/Kolkata"
+int expiryAt = input.time(timestamp("03 Nov 2026 15:30 +0530"), "Expiry / cash settlement (IST)", group="Cycle", display=display.none)
+float filledCredit = input.float(0, "Actual filled net credit (0 = signal reference)", minval=0, group="Cycle", display=display.none)
+bool showLevels = input.bool(true, "Show selected strikes", group="Display", display=display.none)
+bool showPanel = input.bool(true, "Show status table", group="Display", display=display.none)
+bool correctChart = chart.is_standard and timeframe.isminutes and timeframe.multiplier == 1 and syminfo.tickerid == "NSE:NIFTY"
+string prefix = "NSE:NIFTY" + str.format_time(expiryAt, "yyMMdd", tz)
+int dayKey = year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
+int expiryDay = year(expiryAt, tz) * 10000 + month(expiryAt, tz) * 100 + dayofmonth(expiryAt, tz)
+int entryDay = year(entryAt, tz) * 10000 + month(entryAt, tz) * 100 + dayofmonth(entryAt, tz)
+int cm = hour(time_close, tz) * 60 + minute(time_close, tz)
+bool inSession = cm > 555 and cm <= 930
+bool due = time_close == entryAt
+bool expired = time_close >= expiryAt
+bool cycleOK = entryAt < expiryAt and hour(expiryAt,tz) == 15 and minute(expiryAt,tz) == 30
+bool scanWindow = time >= entryAt - 10 * 86400000 and time < expiryAt
+
+// MATH START
+f_nearest(float x) =>
+    int(math.floor(x / 50 + 0.5) * 50)
+f_cdf(float x) =>
+    float a = math.abs(x)
+    float t = 1 / (1 + 0.2316419 * a)
+    float p = 1 - 0.3989422804014327 * math.exp(-a*a/2) * (0.319381530*t - 0.356563782*t*t + 1.781477937*math.pow(t,3) - 1.821255978*math.pow(t,4) + 1.330274429*math.pow(t,5))
+    x >= 0 ? p : 1-p
+f_price(float f, float k, float years, float vol, bool callSide) =>
+    float z = vol * math.sqrt(years)
+    float d1 = (math.log(f/k) + z*z/2) / z
+    float d2 = d1-z
+    callSide ? f*f_cdf(d1)-k*f_cdf(d2) : k*f_cdf(-d2)-f*f_cdf(-d1)
+f_iv(float premium, float f, float k, float years, bool callSide) =>
+    float answer = na
+    float intrinsic = math.max(0,callSide ? f-k : k-f)
+    if not na(premium) and premium > intrinsic and premium < (callSide ? f : k) and f > 0 and k > 0 and years > 0
+        float lo = 0.00001
+        float hi = 5.0
+        if f_price(f,k,years,hi,callSide) >= premium
+            for j=0 to 39
+                float mid = (lo+hi)/2
+                if f_price(f,k,years,mid,callSide) > premium
+                    hi := mid
+                else
+                    lo := mid
+            answer := (lo+hi)/2
+    answer
+f_abs_delta(float f, float k, float years, float vol, bool callSide) =>
+    float d1 = (math.log(f/k) + vol*vol*years/2) / (vol*math.sqrt(years))
+    math.abs(f_cdf(d1) - (callSide ? 0 : 1))
+// MATH END
+
+// LIFECYCLE START
+f_cycle(bool entryDue, bool entryPast, bool expiryDue, bool stopDue, bool quoteValid, float newCredit, float debit, float stopMultiple, bool enabled, bool confirmed) =>
+    var int phase = 0
+    var float credit = na
+    int event = 0
+    if confirmed and enabled
+        if phase == 0
+            if entryDue and not expiryDue
+                if quoteValid and newCredit > 0
+                    phase := 1
+                    credit := newCredit
+                    event := 1
+                else
+                    phase := 4
+            else if entryPast
+                phase := 4
+        else if phase == 1 or phase == 5
+            if expiryDue
+                phase := 3
+                event := 3
+            else if phase == 1 and stopDue
+                if not quoteValid
+                    phase := 5
+                else if debit >= stopMultiple * credit
+                    phase := 2
+                    event := -1
+    [phase,event,credit]
+// LIFECYCLE END
+
+f_add(array<string> codes, array<int> strikes, array<bool> calls, int strike, bool callSide) =>
+    string key = (callSide ? "C" : "P") + str.tostring(strike)
+    if not array.includes(codes,key)
+        array.push(codes,key)
+        array.push(strikes,strike)
+        array.push(calls,callSide)
+f_value(array<string> codes, array<float> vals, int strike, bool callSide) =>
+    int i = array.indexof(codes,(callSide ? "C" : "P") + str.tostring(strike))
+    i >= 0 ? array.get(vals,i) : na
+f_num(float v) =>
+    na(v) ? "--" : str.tostring(v,"#.00")
+f_strike(int v) =>
+    na(v) ? "--" : str.tostring(v)
+f_cell(table t,int row,string name,string value,color ink) =>
+    table.cell(t,0,row,name,text_color=color.silver,bgcolor=color.rgb(18,24,33),text_size=size.normal)
+    table.cell(t,1,row,value,text_color=ink,bgcolor=color.rgb(18,24,33),text_size=size.normal)
+var array<string> codes = array.new_string()
+var array<int> strikes = array.new_int()
+var array<bool> calls = array.new_bool()
+
+float tvATR = request.security(futuresSymbol,"W",ta.atr(5)[1],gaps=barmerge.gaps_off,lookahead=barmerge.lookahead_on,ignore_invalid_symbol=true)
+float priorVIX = request.security("NSE:INDIAVIX","D",close[1],gaps=barmerge.gaps_off,lookahead=barmerge.lookahead_on,ignore_invalid_symbol=true)
+float weeklyATR = weeklyOverride>0 ? weeklyOverride : tvATR
+if barstate.isfirst
+    for j=-1 to 1
+        f_add(codes,strikes,calls,atmAnchor+j*50,true)
+        f_add(codes,strikes,calls,atmAnchor+j*50,false)
+    for j=-7 to 8
+        f_add(codes,strikes,calls,putBank+j*50,false)
+        f_add(codes,strikes,calls,callBank+j*50,true)
+
+array<float> prices = array.new_float(array.size(codes),na)
+array<float> volumes = array.new_float(array.size(codes),na)
+int loaded = 0
+if correctChart and scanWindow
+    for i=0 to array.size(codes)-1
+        [p,v,t] = request.security(prefix+array.get(codes,i),"1",[close,volume,time],gaps=barmerge.gaps_on,lookahead=barmerge.lookahead_off,ignore_invalid_symbol=true)
+        bool fresh = t == time and not na(p) and p >= 0
+        array.set(prices,i,fresh ? p : na)
+        array.set(volumes,i,fresh ? v : na)
+        loaded += fresh ? 1 : 0
+int atm = f_nearest(close)
+float ce = f_value(codes,prices,atm,true)
+float pe = f_value(codes,prices,atm,false)
+float fwd = atm + ce - pe
+float yearsLeft = (expiryAt-time_close)/(365.0*86400000)
+bool atmOK = ce > 0 and pe > 0 and f_value(codes,volumes,atm,true) > 0 and f_value(codes,volumes,atm,false) > 0
+var int sellPut = na
+var int sellCall = na
+var string why = "Waiting for scheduled entry"
+var int lastEventTime = na
+
+int planPut = na
+int planCall = na
+float putDelta = na
+float callDelta = na
+float bestP = 100.0
+float bestC = 100.0
+int floorPut = na
+int floorCall = na
+if correctChart and scanWindow and (due or barstate.islast) and atmOK and yearsLeft>0 and weeklyATR>0
+    for i=0 to array.size(codes)-1
+        int k = array.get(strikes,i)
+        bool cs = array.get(calls,i)
+        float prem = array.get(prices,i)
+        if array.get(volumes,i)>0 and (cs ? k>fwd : k<fwd)
+            float iv = f_iv(prem,fwd,k,yearsLeft,cs)
+            if not na(iv)
+                float dd = f_abs_delta(fwd,k,yearsLeft,iv,cs)
+                float err = math.abs(dd-0.05)
+                if cs and err<bestC
+                    bestC := err
+                    floorCall := k
+                    callDelta := dd
+                if not cs and err<bestP
+                    bestP := err
+                    floorPut := k
+                    putDelta := dd
+    if bestC<=0.02 and bestP<=0.02
+        planPut := math.min(int(math.floor((atm-1.25*weeklyATR)/50)*50),floorPut)
+        planCall := math.max(int(math.ceil((atm+1.25*weeklyATR)/50)*50),floorCall)
+bool edge = floorPut==putBank-350 or floorPut==putBank+400 or floorCall==callBank-350 or floorCall==callBank+400
+var float stopMultiple = 2.5
+var float entryVIX = na
+if due and barstate.isconfirmed and correctChart
+    sellPut := planPut
+    sellCall := planCall
+    entryVIX := priorVIX
+    stopMultiple := priorVIX>18 ? 3.0 : 2.5
+float sp = f_value(codes,prices,sellPut,false)
+float sc = f_value(codes,prices,sellCall,true)
+float debit = sp+sc
+bool quotesOK = not na(debit) and debit>=0
+bool entryVolume = f_value(codes,volumes,sellPut,false)>0 and f_value(codes,volumes,sellCall,true)>0
+bool entryOK = atmOK and quotesOK and entryVolume and not edge and priorVIX<=30 and weeklyATR>0 and debit>0
+bool indexGap = not na(time[1]) and dayKey==dayKey[1] and time-time[1]!=60000 and inSession
+bool priceOK = due ? entryOK : quotesOK and not indexGap
+[phase,event,credit] = f_cycle(due,time_close>entryAt,expired,inSession,priceOK,filledCredit>0 ? filledCredit : debit,debit,stopMultiple,correctChart and cycleOK,barstate.isconfirmed)
+if due and barstate.isconfirmed
+    why := priorVIX>30 ? "VIX FILTER >30" : na(priorVIX) ? "VIX data unavailable" : not atmOK ? "ATM quote unavailable / adjust anchor" : edge ? "Delta at bank edge - expand scan" : na(planPut) or na(planCall) ? "ATR / 0.05 delta unavailable" : not quotesOK ? "Required strike outside bank / quote missing" : not entryVolume ? "Entry leg did not trade" : not entryOK ? "Invalid credit / context" : "Entry reference captured"
+if event != 0
+    lastEventTime := time_close
+    string msg = event==1 ? "ENTER STRANGLE\nSELL " + f_strike(sellPut) + " PE + " + f_strike(sellCall) + " CE\nUNHEDGED" : event==-1 ? "EXIT STRANGLE\n" + str.tostring(stopMultiple) + "x CREDIT STOP" : "STRANGLE EXPIRY\nCASH SETTLEMENT"
+    label.new(bar_index,event==1 ? low : high,msg,style=event==1 ? label.style_label_up : label.style_label_down,color=event==1 ? color.rgb(0,125,65) : event==-1 ? color.rgb(185,35,45) : color.rgb(33,93,159),textcolor=color.white,size=size.normal)
+    alert("ATR STRANGLE | " + msg + " | " + str.format_time(time_close,"dd MMM HH:mm",tz) + " IST | signal only",alert.freq_once_per_bar_close)
+plot(showLevels and phase==1 ? sellPut : na,"SELL PE strike",color=color.orange,linewidth=2,style=plot.style_linebr)
+plot(showLevels and phase==1 ? sellCall : na,"SELL CE strike",color=color.orange,linewidth=2,style=plot.style_linebr)
+alertcondition(event==1,"ENTER STRANGLE","ATR strangle entry signal. Unhedged; read both legs and credit in the indicator.")
+alertcondition(event==-1,"EXIT STRANGLE - STOP","ATR strangle premium stop. Signal only; check execution.")
+alertcondition(event==3,"STRANGLE EXPIRY","Selected strangle cycle reached expiry; official cash settlement applies.")
+var table desk = table.new(position.bottom_right,2,10,border_width=1)
+if barstate.islast and showPanel
+    string state = not correctChart ? "USE NSE:NIFTY / 1 MIN" : not cycleOK ? "CHECK CYCLE DATES" : phase==1 ? "HOLD STRANGLE" : phase==2 ? "EXIT - STOP TRIGGERED" : phase==3 ? "EXPIRED - CASH SETTLEMENT" : phase==5 ? "REVIEW - DATA GAP" : phase==4 ? "NO ENTRY - " + why : "WAIT - " + str.format_time(entryAt,"dd MMM HH:mm",tz) + " IST"
+    color ink = phase==1 ? color.lime : phase==2 ? color.red : color.yellow
+    table.cell(desk,0,0,"ATR STRANGLE",text_color=color.white,bgcolor=color.rgb(106,62,24),text_size=size.large)
+    table.cell(desk,1,0,state,text_color=ink,bgcolor=color.rgb(18,24,33),text_size=size.normal)
+    f_cell(desk,1,"SELL PE / CE",f_strike(sellPut)+" / "+f_strike(sellCall),color.white)
+    f_cell(desk,2,"Protection","UNHEDGED - overnight exposure",color.orange)
+    f_cell(desk,3,filledCredit>0 ? "Filled credit" : "Signal credit ref.",f_num(credit),color.white)
+    f_cell(desk,4,"Debit / stop",f_num(debit)+" / "+f_num(credit*stopMultiple),phase==1 and debit>=credit*stopMultiple ? color.red : color.white)
+    f_cell(desk,5,"ATR / source",f_num(weeklyATR)+(weeklyOverride>0 ? " | pinned NSE cycle" : " | TV continuous"),color.white)
+    f_cell(desk,6,"Entry VIX / stop",f_num(entryVIX)+" / "+str.tostring(stopMultiple)+"x",color.white)
+    f_cell(desk,7,"Expiry",str.format_time(expiryAt,"dd MMM yyyy",tz),color.white)
+    f_cell(desk,8,"Last signal IST",na(lastEventTime) ? "--" : str.format_time(lastEventTime,"dd MMM HH:mm",tz),color.white)
+    f_cell(desk,9,"Cycle / quotes","Refresh weekly | "+str.tostring(loaded)+"/"+str.tostring(array.size(codes))+" fresh",color.silver)
