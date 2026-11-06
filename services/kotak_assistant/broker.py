@@ -116,11 +116,15 @@ class Gateway:
                 item = self._cache.get(key)
                 if item and time.time() - item[0] < ttl:
                     return item[1]
+            started = time.time()
             value = loader()
+            # These reads run on a start-to-start one-second account cadence.
+            # Stamping completion would skip the next tick after any network delay.
+            captured = started if key in ("readonly_monitor_books", "funds") else time.time()
             with self._lock:
                 if len(self._cache) > 256:
                     self._cache = {k: v for k, v in self._cache.items() if time.time() - v[0] < 120}
-                self._cache[key] = (time.time(), value)
+                self._cache[key] = (captured, value)
                 if len(self._flights) > 512:
                     for old, gate in list(self._flights.items()):
                         if old not in self._cache and gate.acquire(blocking=False):
@@ -364,6 +368,17 @@ class Gateway:
             if value > 0
         }
 
+    def funds(self):
+        """Read cash only; account monitoring must not refetch three report books."""
+        if self.mode == "analyze":
+            return {"cash": self.books()["cash"]}
+        from services.funds_service import get_funds_with_auth
+        _, token = self.credentials()
+        funds = self.cached("funds", 1, lambda: unwrap(get_funds_with_auth(token, "kotak")))
+        if not isinstance(funds, dict) or funds.get("availablecash") is None:
+            raise ValueError("Available funds unavailable")
+        return {"cash": number(funds["availablecash"])}
+
     def books(self, include_cash=True):
         key, token = self.credentials()
         if self.mode == "analyze":
@@ -417,7 +432,10 @@ class Gateway:
                 return raw
 
             raw_orders = checked(api.get_order_book(token))
-            raw_positions = checked(api.get_positions(token))
+            # Account P&L obtains fresh quotes separately for open inventory only.
+            # The general positions endpoint also hydrates LTP for old/closed
+            # instruments; those unrelated quote timeouts must not block books.
+            raw_positions = checked(api.get_api_response("/quick/user/positions", token))
             raw_fills = checked(api.get_trade_book(token))
             mapped = mapping.map_order_data(raw_orders)
             orders = mapping.transform_order_data(mapped)
@@ -427,14 +445,14 @@ class Gateway:
                     o["filled_quantity"] = int(raw["fldQty"])
                 o["message"] = raw.get("rejRsn", raw.get("rmk", ""))
             positions = mapping.transform_positions_data(mapping.map_position_data(raw_positions))
+            for position in positions:
+                if position.get("quantity"):
+                    # No quote was requested in this book read; do not present
+                    # the mapper's zero placeholder as a verified market mark.
+                    position.update(ltp=None, pnl=None)
             fills = mapping.transform_tradebook_data(mapping.map_trade_data(raw_fills))
 
-            def read_cash():
-                from services.funds_service import get_funds_with_auth
-
-                return unwrap(get_funds_with_auth(token, "kotak"))
-
-            cash = self.cached("funds", 5, read_cash) if include_cash else None
+            cash = {"availablecash": self.funds()["cash"]} if include_cash else None
         if not all(isinstance(v, list) for v in (orders, positions, fills)) or (
             include_cash and (not isinstance(cash, dict) or cash.get("availablecash") is None)
         ):

@@ -38,6 +38,7 @@ const TradeBook = lazy(() => import('@/pages/TradeBook'))
 const Holdings = lazy(() => import('@/pages/Holdings'))
 const Token = lazy(() => import('@/pages/Token'))
 const Search = lazy(() => import('@/pages/Search'))
+const Screener = lazy(() => import('@/pages/Screener'))
 const ApiKey = lazy(() => import('@/pages/ApiKey'))
 const AgentIndex = lazy(() => import('@/pages/agent/AgentIndex'))
 const AgentConfig = lazy(() => import('@/pages/agent/AgentConfig'))
@@ -59,7 +60,13 @@ const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const WebSocketOrder = lazy(() => import('@/pages/WebSocketOrder'))
 const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
-const Trading = lazy(() => import('@/pages/Trading'))
+// Choose the workspace before loading its code. The Neo chart does not use
+// the other terminal's chart engine, drawing tools or order dock.
+const Trading = lazy(() =>
+  import.meta.env.VITE_NEO_DESK_ENABLED === 'true'
+    ? import('@/pages/NeoTrading')
+    : import('@/pages/Trading')
+)
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
@@ -194,6 +201,7 @@ function App() {
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
                 <Route path="/search" element={<Search />} />
+                <Route path="/screener" element={<Screener />} />
                 {/* API Key management */}
                 <Route path="/apikey" element={<ApiKey />} />
                 {/* Phase 4: Charts & Webhook Configuration */}

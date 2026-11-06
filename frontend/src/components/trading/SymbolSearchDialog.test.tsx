@@ -153,7 +153,7 @@ describe('SymbolSearchDialog', () => {
 
   it('warns that a computed chart cannot be traded', async () => {
     renderDialog()
-    await userEvent.type(screen.getByLabelText('Search symbol'), 'NIFTY100EW/NIFTY100QUALTY30')
+    await userEvent.type(await focusedBox(), 'NIFTY100EW/NIFTY100QUALTY30')
     await waitFor(() => expect(screen.getByText(/cannot be traded/)).toBeInTheDocument())
   })
 

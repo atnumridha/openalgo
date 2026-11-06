@@ -63,6 +63,7 @@ from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.core import core_bp
 from blueprints.custom_indicators import custom_indicators_bp  # User chart indicators
 from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
+from blueprints.delta_chart import delta_chart_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
 from blueprints.gamma_density import gamma_density_bp  # Import the Gamma Density blueprint
@@ -98,6 +99,7 @@ from blueprints.react_app import (  # Import React frontend blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.kotak_assistant import kotak_assistant_bp
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
+from blueprints.screener import screener_bp
 from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
@@ -131,6 +133,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
+from database.screener_db import init_db as ensure_screener_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
@@ -302,7 +305,12 @@ def create_app():
     app.register_blueprint(neo_login_bp)
     from blueprints.neo_desk import neo_desk_bp
     app.register_blueprint(neo_desk_bp)
+    app.register_blueprint(delta_chart_bp)
     app.register_blueprint(dashboard_bp)
+    from blueprints.combined_terminal import create_combined_terminal_blueprint
+    app.register_blueprint(create_combined_terminal_blueprint())
+    from services.combined_terminal.host import install_worker
+    install_worker(app, csrf)
     app.register_blueprint(orders_bp)
     app.register_blueprint(search_bp)
     app.register_blueprint(api_key_bp)
@@ -339,6 +347,7 @@ def create_app():
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(kotak_assistant_bp)
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
+    app.register_blueprint(screener_bp)
     app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(alerts_bp)  # Register chart alert log blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
@@ -770,6 +779,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Scalping DB", ensure_scalping_tables_exists),
+                ("Screener DB", ensure_screener_tables_exists),
                 ("Watchlist DB", ensure_watchlist_tables_exists),
                 ("Alert Log DB", ensure_alert_log_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),

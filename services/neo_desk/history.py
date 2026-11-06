@@ -12,7 +12,14 @@ from utils.keyed_locks import KeyedLocks
 from .fees import FeePlan, estimate_charges, fill_key
 
 _import_locks = KeyedLocks(name="neo-history-import")
-from .history_accounting import IMMUTABLE, MAX_BYTES, MAX_ROWS, TradeArchive, _normalized
+from .history_accounting import (
+    IMMUTABLE,
+    MAX_BYTES,
+    MAX_ROWS,
+    TradeArchive,
+    _date_bounds,
+    _normalized,
+)
 
 
 def ingest_fills(owner, rows, source="broker_report"):
@@ -117,12 +124,12 @@ class PaperAccounting(TradeArchive):
 
 
 def history_page(
-    owner_id, symbol="", start=None, end=None, cursor=0, cost_plan="trade_free", mode="live"
+    owner_id, symbol="", start=None, end=None, cursor=0, cost_plan="account", mode="live"
 ):
     if mode not in ("live", "sandbox"):
         raise ValueError("Choose Live or Sandbox history.")
-    if cost_plan not in ("free_offer", "trade_free"):
-        raise ValueError("Choose the free-offer or Trade Free fee plan estimate.")
+    if cost_plan not in ("account", "free_offer", "trade_free"):
+        raise ValueError("Choose the account, free-offer or Trade Free fee plan estimate.")
     account = NativeAccounting(owner_id) if mode == "live" else PaperAccounting(owner_id)
     result = account.page(offset=int(cursor), symbol=symbol, start=start, end=end)
     summary = result["summary"]
@@ -137,14 +144,28 @@ def history_page(
         and (not start or f["trade_date"] >= start)
         and (not end or f["trade_date"] <= end)
     ]
-    plan = FeePlan(brokerage=D(0) if cost_plan == "free_offer" else D(10))
-    # Pairing retains the full archive even when the exit-date filter excludes entry fills.
+    from .fee_history import saved_charge_estimate
+
+    plan = FeePlan(
+        brokerage=None if cost_plan == "account" else D(0) if cost_plan == "free_offer" else D(10)
+    )
+    # Allocate against the entire account so symbol/date filters never charge split orders twice.
     all_fills = account.fills()
+    all_estimate = saved_charge_estimate(owner_id, mode, all_fills, plan, cost_plan)
     estimate = estimate_charges(fills, None, plan)
-    all_estimate = estimate_charges(all_fills, None, plan)
+    estimate.update({k: all_estimate[k] for k in ("storage", "calculated_at", "input_hash")})
     by_id = {fill_key(f): f for f in all_fills}
     allocated = all_estimate.get("per_fill", {})
-    for row in result["rows"]:
+    all_matches, _ = account._match(all_fills)
+    lower, upper = _date_bounds(start, end)
+    matches = [
+        row
+        for row in all_matches
+        if (not symbol or row["symbol"] == symbol)
+        and (not lower or row["exit_time"] >= lower)
+        and (not upper or row["exit_time"] <= upper)
+    ]
+    for row in matches:
         portions = []
         for side in ("entry", "exit"):
             key = "|".join(
@@ -160,6 +181,15 @@ def history_page(
             if row["gross_pnl"] is not None and charge is not None
             else None
         )
+    known = [row for row in matches if row["estimated_net_pnl"] is not None]
+    summary["estimated_net_pnl"] = (
+        str(sum((D(r["estimated_net_pnl"]) for r in known), D(0))) if known else None
+    )
+    summary["estimated_net_known_count"] = len(known)
+    summary["estimated_closed_fees"] = (
+        str(sum((D(r["estimated_fees"]) for r in known), D(0))) if known else None
+    )
+    result["rows"] = matches[result["offset"] : result["offset"] + result["limit"]]
     estimate["cost_plan"] = cost_plan
     summary["estimated_fees"] = estimate["total"] if n else None
     result["fee_estimate"] = estimate
@@ -210,7 +240,13 @@ def refresh_history(owner):
     records = [] if empty else raw.get("data")
     if not isinstance(records, list):
         raise ValueError("Broker execution envelope is unavailable.")
-    return ingest_fills(owner, broker_rows(records), source="kotak_daily_api")
+    result = ingest_fills(owner, broker_rows(records), source="kotak_daily_api")
+    from .fee_history import saved_charge_estimate
+
+    saved_charge_estimate(
+        owner, "live", NativeAccounting(owner).fills(), FeePlan(brokerage=None), "account"
+    )
+    return result
 
 
 def broker_rows(records):

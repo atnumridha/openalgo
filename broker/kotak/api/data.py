@@ -8,7 +8,7 @@ import httpx
 import pandas as pd
 
 from database.token_db import get_br_symbol, get_brexchange, get_token
-from utils.httpx_client import get_httpx_client
+from broker.kotak.api.market_data_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -311,7 +311,10 @@ class BrokerData:
             # quarter of the budget for the length of the wait.
             for attempt in range(QUOTES_MAX_RETRIES + 1):
                 with _quotes_gate:
-                    response = client.get(url, headers=headers, timeout=QUOTES_TIMEOUT)
+                    response = client.get(
+                        url, headers=headers,
+                        timeout=httpx.Timeout(QUOTES_TIMEOUT, connect=5.0, pool=5.0),
+                    )
                 if response.status_code != 429:
                     break
                 if attempt == QUOTES_MAX_RETRIES:
@@ -991,9 +994,23 @@ class BrokerData:
         # A 429 retries this same request. Letting it fall through to the next
         # neosymbol candidate would spend another slot on the very quota that is
         # already exhausted, and would blame the symbol for a pacing problem.
+        transport_retries = 0
         for attempt in range(HISTORY_MAX_RETRIES + 1):
-            _history_pace()
-            response = client.get(url, headers=headers, timeout=60)
+            while True:
+                _history_pace()
+                try:
+                    response = client.get(
+                        url, headers=headers,
+                        timeout=httpx.Timeout(20.0, connect=5.0, pool=5.0),
+                    )
+                    break
+                except (httpx.RemoteProtocolError, httpx.ReadError):
+                    # A dropped pooled connection is transient. Retry this GET
+                    # once; do not repeat slow timeouts or rejected requests.
+                    if transport_retries >= 1:
+                        raise
+                    transport_retries += 1
+                    logger.warning(f"HISTORY API - Connection dropped for {neosymbol}; retrying once")
             if response.status_code != 429:
                 break
             if attempt == HISTORY_MAX_RETRIES:
@@ -1068,10 +1085,10 @@ class BrokerData:
         """
         ohlc = ["open", "high", "low", "close"]
 
-        usable = df[ohlc].notna().all(axis=1)
+        usable = (df[ohlc].notna() & df[ohlc].gt(0) & df[ohlc].lt(float("inf"))).all(axis=1)
         if not usable.all():
             logger.warning(
-                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing "
+                f"HISTORY API - Dropping {int((~usable).sum())} candle(s) with missing/nonpositive/nonfinite "
                 f"OHLC for {exchange}:{symbol} {interval}"
             )
             df = df[usable].reset_index(drop=True)
@@ -1089,6 +1106,8 @@ class BrokerData:
             df = df.copy()
             df["high"] = high
             df["low"] = low
+            # Derived candles and setup engines must retain this provenance.
+            df["repaired"] = broken
 
         negative = df["volume"] < 0
         if negative.any():
@@ -1098,6 +1117,7 @@ class BrokerData:
             )
             df = df.copy()
             df.loc[negative, "volume"] = 0
+            df["repaired"] = df.get("repaired", False) | negative
         return df
 
     @staticmethod
@@ -1250,7 +1270,8 @@ class BrokerData:
                 .reset_index(drop=True)
             )
 
-            return final_df[HISTORY_COLUMNS]
+            columns = HISTORY_COLUMNS + (["repaired"] if "repaired" in final_df else [])
+            return final_df[columns]
 
         except Exception as e:
             logger.exception(f"Error fetching historical data for {exchange}:{symbol}: {e}")

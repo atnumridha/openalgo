@@ -195,3 +195,100 @@ def test_concurrent_duplicate_capture_is_idempotent():
         results = list(pool.map(capture, range(2)))
     assert sum(r["inserted"] for r in results) == 1
     assert history_page(OWNER)["coverage"]["fill_count"] == 1
+
+
+def test_mixed_exchange_estimates_and_net_are_persisted_without_inventing_paid_fees():
+    rows = [
+        fill("nse-buy", fees=None),
+        fill("nse-sell", "SELL", price="60", fees=None, time="2026-10-09T11:00:00+05:30"),
+    ]
+    rows += [
+        {
+            **r,
+            "fill_id": "bse-" + r["fill_id"],
+            "order_id": "bse-" + r["order_id"],
+            "symbol": "SENSEX22OCT2674000CE",
+            "exchange": "bse_fo",
+        }
+        for r in rows
+    ]
+    ingest_fills(OWNER, rows)
+    result = history_page(OWNER, cost_plan="trade_free")
+    assert result["summary"]["estimated_net_pnl"] is not None
+    assert all(r["estimated_fees"] is not None for r in result["rows"])
+    assert result["summary"]["actual_fees"] is None
+    assert result["summary"]["net_pnl"] is None
+    assert result["fee_estimate"]["storage"] == "SQL saved estimate"
+    saved_at = result["fee_estimate"]["calculated_at"]
+    # A new DB session must load the saved estimate, rather than losing it on restart.
+    db.db_session.remove()
+    assert history_page(OWNER, cost_plan="trade_free")["fee_estimate"]["calculated_at"] == saved_at
+    assert history_page("another-owner")["summary"]["fill_count"] == 0
+
+
+def test_net_estimate_summary_includes_all_pages_and_excludes_unresolved_matches():
+    rows = []
+    for i in range(55):
+        rows += [
+            fill(f"b-{i}", fees=None, time=f"2026-10-09T10:{i:02}:00+05:30"),
+            fill(f"s-{i}", "SELL", price="60", fees=None, time=f"2026-10-09T10:{i:02}:30+05:30"),
+        ]
+    rows += [
+        {
+            **fill("unresolved-sell", "SELL", fees=None, time="2026-10-09T11:00:00+05:30"),
+            "symbol": "NIFTY13OCT2622550PE",
+        },
+        {
+            **fill("unresolved-buy", fees=None, time="2026-10-09T11:01:00+05:30"),
+            "symbol": "NIFTY13OCT2622550PE",
+        },
+        fill("ambiguous-a", qty=20, fees=None, time="2026-10-09T12:00:00+05:30"),
+        fill("ambiguous-b", qty=45, price="51", fees=None, time="2026-10-09T12:00:00+05:30"),
+        fill("ambiguous-exit", "SELL", price="60", fees=None, time="2026-10-09T12:01:00+05:30"),
+    ]
+    ingest_fills(OWNER, rows)
+    result = history_page(OWNER)
+    remaining = history_page(OWNER, cursor=50)["rows"]
+    unresolved = [r for r in remaining if r["gross_pnl"] is None]
+    assert len(unresolved) == 3 and all(r["estimated_net_pnl"] is None for r in unresolved)
+    assert len(result["rows"]) == 50 and result["summary"]["estimated_net_known_count"] == 55
+    assert D(result["summary"]["estimated_net_pnl"]) == sum(
+        D(r["estimated_net_pnl"]) for r in result["rows"]
+    ) + sum(D(r["estimated_net_pnl"]) for r in remaining if r["estimated_net_pnl"] is not None)
+
+
+def test_default_report_uses_account_notice_and_retains_snapshot_after_new_fills():
+    ingest_fills(
+        OWNER,
+        [
+            fill("before", fees=None, time="2026-10-21T10:00:00+05:30"),
+            fill("after", fees=None, time="2026-10-22T10:00:00+05:30"),
+        ],
+    )
+    first = history_page(OWNER)
+    assert first["fee_estimate"]["cost_plan"] == "account"
+    assert D(first["fee_estimate"]["breakdown"]["brokerage"]) == 10
+    ingest_fills(OWNER, [fill("later", fees=None, time="2026-10-22T11:00:00+05:30")])
+    second = history_page(OWNER)
+    assert D(second["fee_estimate"]["breakdown"]["brokerage"]) == 20
+    assert second["fee_estimate"]["input_hash"] != first["fee_estimate"]["input_hash"]
+
+
+def test_saved_fee_estimates_are_separate_for_owner_mode_and_plan():
+    from services.neo_desk.fee_history import saved_charge_estimate
+    from services.neo_desk.fees import FeePlan
+    from services.neo_desk.history import NativeAccounting
+
+    ingest_fills(OWNER, [fill("one", fees=None)])
+    fills = NativeAccounting(OWNER).fills()
+    paid = saved_charge_estimate(OWNER, "live", fills, FeePlan(brokerage=D(10)), "trade_free")
+    free = saved_charge_estimate(OWNER, "live", fills, FeePlan(brokerage=D(0)), "free_offer")
+    sandbox = saved_charge_estimate(OWNER, "sandbox", [], FeePlan(brokerage=D(10)), "trade_free")
+    assert paid["breakdown"]["brokerage"] == "10.00"
+    assert free["breakdown"]["brokerage"] == "0.00"
+    assert sandbox["fill_count"] == 0
+    assert db.db_session.query(db.NeoFeeEstimate).filter_by(owner=OWNER).count() == 3
+    db.db_session.remove()
+    assert (
+        saved_charge_estimate(OWNER, "live", fills, FeePlan(brokerage=D(10)), "trade_free") == paid
+    )

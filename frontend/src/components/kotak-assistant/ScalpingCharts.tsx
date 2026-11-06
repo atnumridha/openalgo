@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { DeskMode, Leg, Trade } from '@/api/kotakAssistant'
+import type { DeskMode, Leg, Trade, PivotOverlay } from '@/api/kotakAssistant'
 import { Button } from '@/components/ui/button'
 import { KotakAssistantChart } from './KotakAssistantChart'
 import { LEVEL_COLORS } from './PriceLevels'
@@ -7,10 +7,11 @@ import { money } from './model'
 import type { ChartPosition } from './chartPosition'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { candleKey } from './chartCandleStore'
+import { candleKey, useChartCandles } from './chartCandleStore'
 import { ChartReplayControls } from './ChartReplayControls'
 import type { ChartReplay, ReplayFrame } from './chartReplay'
 import { useDashboardReplay } from './useDashboardReplay'
+import { pivotChartLevels } from './pivotChart'
 
 type Level = { price: number; title: string; color: string }
 type Fill = { symbol: string; epoch: number; action: string; average_price: number }
@@ -86,6 +87,7 @@ export function ScalpingCharts({
   mode,
   trades,
   indexLevels,
+  pivotOverlay,
   indexMarkers,
   onReplayTimeChange,
   activeLevels,
@@ -109,6 +111,7 @@ export function ScalpingCharts({
   select: (symbol: string) => void
   mode: DeskMode
   trades: Trade[]
+  pivotOverlay?: PivotOverlay | null
   indexLevels: Level[]
   indexMarkers?: Array<{
     time: number
@@ -135,6 +138,7 @@ export function ScalpingCharts({
   const ceKey = candleKey(username, appMode, ce?.symbol || '', exchange, interval)
   const peKey = candleKey(username, appMode, pe?.symbol || '', exchange, interval)
   const indexKey = candleKey(username, appMode, underlying, indexExchange, interval)
+  const actualIndexBars = useChartCandles(indexKey)
   const keys = useMemo(
     () => (layout === 'three' ? [ceKey, indexKey, peKey] : [ceKey, peKey]),
     [layout, ceKey, peKey, indexKey]
@@ -331,7 +335,7 @@ export function ScalpingCharts({
                 exchange={indexExchange}
                 interval={interval}
                 title={`${underlying} · spot index`}
-                levels={indexLevels}
+                levels={[...indexLevels, ...pivotChartLevels(pivotOverlay, underlying, fromDate, toDate, !!activeFrame, actualIndexBars[actualIndexBars.length - 1]?.time)]}
                 markers={indexMarkers}
                 replay={replayByKey[indexKey]}
                 showFvg={showFvg}

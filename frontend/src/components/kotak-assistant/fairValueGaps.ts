@@ -44,7 +44,8 @@ function validCandle(bar: FvgCandle): boolean {
 export function fairValueGaps(
   input: readonly FvgCandle[],
   intervalSeconds: number,
-  nowUtc: number
+  nowUtc: number,
+  continuous = false
 ): FairValueGap[] {
   if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0 || !Number.isFinite(nowUtc))
     return []
@@ -58,6 +59,8 @@ export function fairValueGaps(
   let gaps: FairValueGap[] = []
   for (let index = 0; index < observed.length; index++) {
     const third = observed[index]
+    if (continuous && index > 0 && third.time - observed[index - 1].time !== intervalSeconds)
+      gaps = []
     gaps = gaps.filter((gap) => {
       const filled = gap.direction === 'bullish' ? third.low <= gap.lower : third.high >= gap.upper
       if (filled) return false
@@ -73,7 +76,8 @@ export function fairValueGaps(
     if (
       middle.time - first.time !== intervalSeconds ||
       third.time - middle.time !== intervalSeconds ||
-      Math.floor(first.time / SECONDS_PER_DAY) !== Math.floor(third.time / SECONDS_PER_DAY)
+      (!continuous &&
+        Math.floor(first.time / SECONDS_PER_DAY) !== Math.floor(third.time / SECONDS_PER_DAY))
     ) {
       continue
     }

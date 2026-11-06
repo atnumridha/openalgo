@@ -84,6 +84,19 @@ def public_state(c):
     return result
 
 
+@kotak_assistant_bp.get("/entry-decisions")
+@guarded
+def entry_decisions():
+    from services.kotak_assistant.entry_advisory import read
+    response = jsonify(status="success", data=read(
+        desk(), request.args.get("underlying", "NIFTY"),
+        request.args.get("symbol", ""), int(request.args.get("lots", "1")),
+        float(request.args.get("ratio", "2")),
+    ))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @kotak_assistant_bp.get("/broker-monitor")
 @guarded
 def broker_monitor():
@@ -515,6 +528,9 @@ def setup_replay():
 @kotak_assistant_bp.post("/entry")
 @guarded
 def entry():
+    import os
+    if os.getenv('COMBINED_TERMINAL_ENABLED', '').lower() == 'true':
+        return jsonify(status='error', message='Use the combined terminal ticket for shared broker limits'), 409
     c, data = action_data(True)
     result = c.enter(data.get("ticket"))
     runtime.start()

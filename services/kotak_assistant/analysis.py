@@ -12,7 +12,7 @@ DEFAULTS = {
     "premium": None,
     "spread": 2.0,
     "slippage": 0.1,
-    "brokerage": 0.0,
+    "brokerage": 10.0,
     "cooldown": 300,
     "cutoff": "15:15",
 }
@@ -30,10 +30,12 @@ def number(value):
     return result
 
 
-def validate_settings(values):
+def validate_settings(values, day=None):
     if not isinstance(values, dict) or set(values) - set(DEFAULTS):
         raise ValueError("Unknown risk setting")
     s = {**DEFAULTS, **values}
+    if day is not None and "brokerage" not in values:
+        s["brokerage"] = account_brokerage(day)
     for key in (
         "risk",
         "daily_loss",
@@ -62,10 +64,19 @@ def validate_settings(values):
     return s
 
 
-def fees(buy, sell, exchange, brokerage=0, day="2026-10-14"):
+BROKERAGE_EFFECTIVE = "2026-10-22"
+
+
+def account_brokerage(day):
+    """Self-directed F&O order rate from the supplied account notice, not a tax rate."""
+    return 10.0 if day >= BROKERAGE_EFFECTIVE else 0.0
+
+
+def fees(buy, sell, exchange, brokerage=None, day="2026-10-14"):
     """Estimated non-exercise option charges. Brokerage is per order, two orders here."""
     if exchange not in ("NFO", "BFO") or not "2026-04-01" <= day <= "2026-12-31":
         raise ValueError("Verified option fee schedule unavailable for this exchange/date")
+    brokerage = account_brokerage(day) if brokerage is None else brokerage
     buy, sell, brokerage = number(buy), number(sell), number(brokerage)
     if min(buy, sell, brokerage) < 0:
         raise ValueError("Negative turnover or brokerage")
@@ -109,7 +120,7 @@ def plan(entry, sl, target, qty, exchange, settings, tick, lot, day="2026-10-14"
     for price in (entry, sl, target):
         if abs(price - snap(price, tick)) > 1e-7:
             raise ValueError("Prices must align with contract tick size")
-    s = validate_settings(settings)
+    s = validate_settings(settings, day)
     loss_price = max(0, sl - s["slippage"])
     profit_price = max(0, target - s["slippage"])
     stop_fees = fees(entry * qty, loss_price * qty, exchange, s["brokerage"], day)
@@ -391,7 +402,8 @@ def fill_time(value):
         raise ValueError("Unrecognized fill timestamp") from None
 
 
-def journal(fills, positions, day, brokerage=0):
+def journal(fills, positions, day, brokerage=None):
+    brokerage = account_brokerage(day) if brokerage is None else number(brokerage)
     result = {
         "complete": True,
         "gross_realised": 0.0,

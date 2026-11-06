@@ -1,6 +1,7 @@
 """Read-only replay of owner-bound executed fills and their recorded protection."""
 
 import json
+import re
 from datetime import datetime, timedelta
 from hashlib import sha256
 
@@ -21,7 +22,24 @@ def chart_identity(symbol, exchange):
     if native:
         from database.token_db import get_oa_symbol
 
-        return get_oa_symbol(symbol, native) or symbol, native
+        canonical = get_oa_symbol(symbol, native)
+        if not canonical and native in ("NFO", "BFO"):
+            # Weekly broker symbols retain their exact YY/M/DD expiry after the
+            # current master has dropped the contract. Decode the identity only;
+            # candles must still come from observed history or the SQL archive.
+            weekly = re.fullmatch(
+                r"(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|SENSEX|BANKEX)(\d{2})([1-9OND])(\d{2})(\d+(?:\.\d+)?)(CE|PE)",
+                symbol,
+            )
+            if weekly:
+                root, year, month, day, strike, side = weekly.groups()
+                month = {"O": "10", "N": "11", "D": "12"}.get(month, month)
+                try:
+                    expiry = datetime(2000 + int(year), int(month), int(day))
+                    canonical = f"{root}{expiry.strftime('%d%b%y').upper()}{strike}{side}"
+                except ValueError:
+                    pass
+        return canonical or symbol, native
     return symbol, exchange
 
 
@@ -32,14 +50,37 @@ def _table():
             saved_at TEXT NOT NULL, PRIMARY KEY(owner,identity))""")
 
 
-def _bars(owner, symbol, exchange, start, end, fetch=True):
+def _bars(owner, symbol, exchange, start, end, fetch=True, *, required=(), saved=()):
+    recorded_symbol, recorded_exchange = symbol, exchange
     symbol, exchange = chart_identity(symbol, exchange)
     archive = get_archive()
-    rows = archive.read(symbol, exchange, "1m", start, end)
-    # Existing SQL observations remain usable when the broker session or contract expires.
+    bars = {b["time"]: b for b in saved}
+    # Older captures used the broker symbol with the normalized exchange. Both
+    # archive keys refer to the exact same instrument; prefer the canonical key.
+    identities = list(
+        dict.fromkeys(
+            [
+                (recorded_symbol, recorded_exchange),
+                (recorded_symbol, exchange),
+                (symbol, exchange),
+            ]
+        )
+    )
+
+    def read_saved():
+        for saved_symbol, saved_exchange in identities:
+            for row in archive.read(saved_symbol, saved_exchange, "1m", start, end):
+                bars[row["timestamp"]] = {
+                    "time": row["timestamp"],
+                    **{k: row[k] for k in ("open", "high", "low", "close", "volume")},
+                }
+
+    read_saved()
+    # An incomplete snapshot is still an observed source. Enrich missing minutes
+    # without discarding saved bars if the broker or candle archive is unavailable.
     if (
         fetch
-        and not rows
+        and (not bars or set(required).difference(bars))
         and (datetime.fromisoformat(end) - datetime.fromisoformat(start)).days <= 29
     ):
         from database.auth_db import get_auth_token
@@ -60,14 +101,11 @@ def _bars(owner, symbol, exchange, start, end, fetch=True):
                 )
                 if ok:
                     archive.save(symbol, exchange, "1m", result.get("data", []))
-                    rows = archive.read(symbol, exchange, "1m", start, end)
+                    read_saved()
             except Exception:
                 # No raw broker response or credential is returned to the UI.
                 pass
-    return [
-        {"time": r["timestamp"], **{k: r[k] for k in ("open", "high", "low", "close", "volume")}}
-        for r in rows
-    ]
+    return [bars[stamp] for stamp in sorted(bars)]
 
 
 def _protection(owner, mode, row, fills):
@@ -156,9 +194,27 @@ def trade_replay(owner, trade_id, mode="live", fetch=True):
             {"owner": owner, "id": identity},
         ).scalar()
     saved = json.loads(old) if old else None
-    if saved and saved["coverage"]["complete"]:
-        return saved
-    option = _bars(owner, row["symbol"], row["exchange"], start, end, fetch)
+    first = int(datetime.fromisoformat(row["entry_time"]).timestamp()) // 60 * 60
+    last = int(datetime.fromisoformat(row["exit_time"]).timestamp()) // 60 * 60
+    required = [
+        t
+        for t in range(first, last + 1, 60)
+        if 555
+        <= (datetime.fromtimestamp(t, IST).hour * 60 + datetime.fromtimestamp(t, IST).minute)
+        < 930
+        and datetime.fromtimestamp(t, IST).weekday() < 5
+    ]
+    prior_trade = saved["trade"] if saved else {}
+    option = _bars(
+        owner,
+        row["symbol"],
+        row["exchange"],
+        start,
+        end,
+        fetch,
+        required=required,
+        saved=prior_trade.get("option_bars", ()),
+    )
     underlying = (
         "SENSEX"
         if row["symbol"].startswith("SENSEX")
@@ -174,23 +230,19 @@ def trade_replay(owner, trade_id, mode="live", fetch=True):
             start,
             end,
             fetch,
+            required=required,
+            saved=prior_trade.get("index_bars", ()),
         )
         if underlying
         else []
     )
     trail, profile = _protection(owner, mode, row, fills)
+    recorded_trail = {point["time"]: point for point in prior_trade.get("trail", ())}
+    recorded_trail.update((point["time"], point) for point in trail)
+    trail = [recorded_trail[stamp] for stamp in sorted(recorded_trail)]
+    profile = profile or prior_trade.get("profile")
     stamps = {b["time"] for b in option}
-    first = int(datetime.fromisoformat(row["entry_time"]).timestamp()) // 60 * 60
-    last = int(datetime.fromisoformat(row["exit_time"]).timestamp()) // 60 * 60
-    missing = [
-        t
-        for t in range(first, last + 1, 60)
-        if t not in stamps
-        and 555
-        <= (datetime.fromtimestamp(t, IST).hour * 60 + datetime.fromtimestamp(t, IST).minute)
-        < 930
-        and datetime.fromtimestamp(t, IST).weekday() < 5
-    ]
+    missing = [t for t in required if t not in stamps]
     notes = []
     if not option:
         notes.append(
@@ -245,9 +297,14 @@ def trade_replay(owner, trade_id, mode="live", fetch=True):
             "recorded": True,
         },
     }
-    # Closed replay snapshots survive contract expiry and application restart. A later
-    # successful capture may enrich a previously incomplete snapshot.
-    if option:
+    # Complete option coverage does not imply complete index/protection history.
+    # Reconcile each recorded source while retaining the original timestamp when
+    # no observations changed, including during an offline application restart.
+    if saved and {k: v for k, v in result.items() if k != "saved_at"} == {
+        k: v for k, v in saved.items() if k != "saved_at"
+    }:
+        return saved
+    if option or index or trail:
         with db.engine.begin() as c:
             c.execute(
                 text(

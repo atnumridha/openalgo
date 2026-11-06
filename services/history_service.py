@@ -150,8 +150,11 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
-        # Call the broker's get_history method
-        df = data_handler.get_history(symbol, exchange, interval, start_date, end_date)
+        # Native Neo 5m/15m rows can repeat the session close/extremes in every
+        # candle. Build both charts and signal context from observed minute OHLC.
+        minute_source = broker == "kotak" and interval in ("5m", "15m")
+        provider_interval = "1m" if minute_source else interval
+        df = data_handler.get_history(symbol, exchange, provider_interval, start_date, end_date)
 
         if not isinstance(df, pd.DataFrame):
             raise ValueError("Invalid data format returned from broker")
@@ -161,11 +164,28 @@ def get_history_with_auth(
             df["oi"] = 0
 
         records = df.to_dict(orient="records")
+        source_records = records
+        if minute_source:
+            from database.market_calendar_db import get_market_timing
+            from services.history_resample import aggregate_history_minutes
+
+            timing_exchange = {"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}.get(
+                exchange.upper(), exchange.upper()
+            )
+            timing = get_market_timing(timing_exchange)
+            end_offset = timing.get("end_offset") if timing else None
+            session_end = end_offset / 60000 if isinstance(end_offset, (int, float)) else None
+            records = aggregate_history_minutes(records, interval, session_end=session_end)
         import os
         if broker == "kotak" and os.getenv("NEO_SAVED_LOGIN", "false").lower() == "true":
             from services.neo_desk.chart_archive import save_observations
+            if minute_source:
+                save_observations(symbol, exchange, "1m", source_records)
             save_observations(symbol, exchange, interval, records)
-        return True, {"status": "success", "data": records}, 200
+        response = {"status": "success", "data": records}
+        if minute_source:
+            response["aggregation_source"] = "1m"
+        return True, response, 200
     except BrokerBusyError as e:
         return broker_busy_result(e, f"History request for {exchange}:{symbol}")
     except Exception as e:

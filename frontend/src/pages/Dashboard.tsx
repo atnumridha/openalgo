@@ -1,4 +1,7 @@
 import { KotakAssistant } from '@/components/kotak-assistant/KotakAssistant'
+import { CombinedTerminal } from '@/components/combined-terminal/CombinedTerminal'
+import { DashboardIndicatorSignals } from '@/components/chart-toolkit/DashboardIndicatorSignals'
+import { DashboardMarketStrip } from '@/components/chart-toolkit/DashboardMarketStrip'
 import { MarketOverview } from '@/components/neo-desk/MarketOverview'
 import { ExecutionFeedback } from '@/components/neo-desk/ExecutionFeedback'
 import { BarChart3, BookOpen, FileText, GraduationCap, Search, Zap } from 'lucide-react'
@@ -65,6 +68,7 @@ function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' |
 
 export default function Dashboard() {
   const isKotak = useAuthStore(s => s.user?.broker === 'kotak')
+  const [signalIndex, setSignalIndex] = useState('NIFTY')
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -461,8 +465,10 @@ export default function Dashboard() {
 
   </>)
   return (
-    <div className="space-y-5">
-      <KotakAssistant />
+    <div className="space-y-4">
+      <DashboardMarketStrip symbol={signalIndex} />
+      <DashboardIndicatorSignals symbol={signalIndex} onSymbolChange={setSignalIndex} />
+      <CombinedTerminal fallback={<KotakAssistant />} />
       {isKotak ? <details className="rounded-xl border bg-card p-4">
         <summary className="cursor-pointer text-sm font-medium">Account balance & market overview</summary>
         <div className="mt-4 space-y-4">{accountOverview}</div>

@@ -5,6 +5,7 @@ import math
 from datetime import datetime
 
 from utils.keyed_locks import KeyedLocks
+from services.history_resample import HISTORY_CONTEXT_VERSION
 
 from . import setups
 from .analysis import IST
@@ -160,6 +161,7 @@ def refresh(c, underlying, one, five, quote, strategy="trend", mode="confirmed",
             state = setups.advance_opening(state, one, None, now, session_id, start)
             trends = body.get("trends", {}) if old_session == session_id else {}
             signature = [
+                HISTORY_CONTEXT_VERSION,
                 one[-1]["time"] if one else None,
                 five[-1]["time"] if five else None,
                 int(now // 60),
@@ -168,7 +170,12 @@ def refresh(c, underlying, one, five, quote, strategy="trend", mode="confirmed",
                 trends = {
                     m: setups.trend_setup(one, five, now, m, start) for m in ("confirmed", "early")
                 }
-            terminals = body.get("trend_terminals", {}) if old_session == session_id else {}
+            terminals = (
+                body.get("trend_terminals", {})
+                if old_session == session_id
+                and body.get("history_version") == HISTORY_CONTEXT_VERSION
+                else {}
+            )
             terminals = {
                 key: value for key, value in terminals.items() if value.get("expires", 0) > now
             }
@@ -215,6 +222,7 @@ def refresh(c, underlying, one, five, quote, strategy="trend", mode="confirmed",
                 result["eligible"] = False
             new_body = {
                 **body,
+                "history_version": HISTORY_CONTEXT_VERSION,
                 "user": c.g.user,
                 "account_scope": c.scope,
                 "mode": c.g.mode,

@@ -67,10 +67,17 @@ export const scalpingApi = {
     underlying: string,
     exchange: string,
     expiry: string,
-    strikeCount = 10
+    strikeCount = 10,
+    options: { quotes?: boolean } = {}
   ): Promise<OptionChainResponse> => {
     const response = await webClient.get<OptionChainResponse>('/scalping/api/strikes', {
-      params: { underlying, exchange, expiry, strike_count: strikeCount },
+      params: {
+        underlying,
+        exchange,
+        expiry,
+        strike_count: strikeCount,
+        ...(options.quotes ? { quotes: true } : {}),
+      },
     })
     return response.data
   },
@@ -82,7 +89,8 @@ export const scalpingApi = {
     symbol: string,
     exchange: string,
     interval: string,
-    date?: string
+    date?: string,
+    request?: { signal?: AbortSignal; timeoutMs?: number }
   ): Promise<{
     status: string
     symbol: string
@@ -101,7 +109,11 @@ export const scalpingApi = {
   }> => {
     const params: Record<string, string> = { symbol, exchange, interval }
     if (date) params.date = date
-    const response = await webClient.get('/scalping/api/history', { params })
+    const response = await webClient.get('/scalping/api/history', {
+      params,
+      signal: request?.signal,
+      timeout: request?.timeoutMs,
+    })
     return response.data
   },
 

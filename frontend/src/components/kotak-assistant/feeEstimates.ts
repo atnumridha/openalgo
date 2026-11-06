@@ -4,6 +4,10 @@ import { executableQuote } from './model'
 // Same premium-turnover schedule as services/kotak_assistant/analysis.py.
 // NSE/FA/73061 (1 Mar 2026), STT from 1 Apr 2026; BSE Sensex ₹3,250/crore.
 export const FEE_VERIFIED = '2026-10-15'
+export const BROKERAGE_EFFECTIVE = '2026-10-22'
+export function accountBrokerage(day = feeDay()) {
+  return day >= BROKERAGE_EFFECTIVE ? 10 : 0
+}
 export function feeDay(now = Date.now()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata',
@@ -25,9 +29,10 @@ export function optionFees(
   buy: number,
   sell: number,
   exchange: string,
-  brokerage = 0,
+  brokerage: number | undefined = undefined,
   day = feeDay()
 ) {
+  brokerage ??= accountBrokerage(day)
   const parsed = new Date(`${day}T00:00:00Z`)
   if (
     !['NFO', 'BFO'].includes(exchange) ||
@@ -60,7 +65,7 @@ export function optionFees(
 export function ticketCosts(
   order: Pick<OrderTicket, 'entry' | 'sl' | 'target' | 'quantity'> | null,
   exchange: string,
-  brokerage = 0,
+  brokerage: number | undefined = undefined,
   slippage = 0,
   day = feeDay()
 ) {
@@ -95,7 +100,7 @@ export function ticketCosts(
     slippage,
   }
 }
-export function openTradeCosts(trade: Trade, quote?: Quote, brokerage = 0, day = feeDay()) {
+export function openTradeCosts(trade: Trade, quote?: Quote, brokerage: number | undefined = undefined, day = feeDay()) {
   if (
     !executableQuote(quote) ||
     trade.average_entry_verified === false ||

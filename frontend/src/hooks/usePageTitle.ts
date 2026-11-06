@@ -15,6 +15,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/tradebook': 'Trade Book',
   '/holdings': 'Holdings',
   '/search': 'Search',
+  '/screener': 'Screener',
   '/search/token': 'Token Search',
   '/apikey': 'API Key',
   '/platforms': 'Platforms',

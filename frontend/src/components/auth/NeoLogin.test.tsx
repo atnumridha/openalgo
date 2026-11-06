@@ -30,6 +30,8 @@ it('submits only TOTP using the native CSRF-protected login route', async () => 
       <NeoLogin />
     </MemoryRouter>
   )
+  expect(screen.queryByText('Flattrade')).not.toBeInTheDocument()
+  expect(screen.queryByText('Separate broker connection')).not.toBeInTheDocument()
   expect(screen.queryByLabelText(/mobile|mpin|password|secret/i)).not.toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('Authenticator TOTP'), { target: { value: '654321' } })
   fireEvent.click(screen.getByRole('button', { name: 'Connect Kotak' }))

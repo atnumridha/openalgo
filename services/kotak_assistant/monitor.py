@@ -71,7 +71,7 @@ class BrokerMonitor:
             return prior
         try:
             books = self.g.cached(
-                "readonly_monitor_books", 2, lambda: self.g.books(include_cash=False)
+                "readonly_monitor_books", 1, lambda: self.g.books(include_cash=False)
             )
             if not all(isinstance(books.get(k), list) for k in ("positions", "orders", "fills")):
                 raise ValueError("Incomplete broker books; last saved state retained")

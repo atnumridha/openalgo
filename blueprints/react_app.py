@@ -237,6 +237,11 @@ def react_playground():
 
 
 # Charting terminal (line-based chart trading, powered by openalgo-charts)
+@react_bp.route("/screener", strict_slashes=False)
+def react_screener():
+    return serve_react_app()
+
+
 @react_bp.route("/trading", strict_slashes=False)
 def react_trading():
     return serve_react_app()

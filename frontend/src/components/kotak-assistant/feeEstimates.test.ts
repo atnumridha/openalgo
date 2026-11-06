@@ -66,3 +66,10 @@ describe('Kotak zero API brokerage estimates', () => {
     expect(openTradeCosts({ ...trade, remaining: 0 }, quote, 0, '2026-10-15')).toBeNull()
   })
 })
+
+ it('applies the account notice from 22 October and preserves explicit overrides', () => {
+   expect(optionFees(10000, 11000, 'NFO', undefined, '2026-10-21')?.brokerage).toBe(0)
+   expect(optionFees(10000, 11000, 'NFO', undefined, '2026-10-22')?.brokerage).toBe(20)
+   expect(optionFees(10000, 11000, 'BFO', 49, '2026-10-22')?.brokerage).toBe(98)
+   expect(optionFees(10000, 11000, 'NFO', 0, '2026-10-22')?.brokerage).toBe(0)
+ })

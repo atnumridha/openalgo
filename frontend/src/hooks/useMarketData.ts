@@ -62,10 +62,12 @@ export function useMarketData({
   // Stable symbol key for dependency tracking
   const symbolsKey = useMemo(
     () =>
-      symbols
-        .map((s) => `${s.exchange}:${s.symbol}`)
-        .sort()
-        .join(','),
+      JSON.stringify(
+        [...new Map(symbols.map((s) => {
+          const item = { symbol: s.symbol.toUpperCase(), exchange: s.exchange.toUpperCase() }
+          return [`${item.exchange}:${item.symbol}`, item] as const
+        })).values()].sort((a, b) => `${a.exchange}:${a.symbol}`.localeCompare(`${b.exchange}:${b.symbol}`))
+      ),
     [symbols]
   )
 
@@ -114,7 +116,7 @@ export function useMarketData({
     // Subscribe to each symbol
     const unsubscribes: Array<() => void> = []
 
-    for (const { symbol, exchange } of symbols) {
+    for (const { symbol, exchange } of JSON.parse(symbolsKey) as Array<{ symbol: string; exchange: string }>) {
       const unsubscribe = manager.subscribe(symbol, exchange, mode, (data: SymbolData) => {
         setMarketData((prev) => {
           const key = `${data.exchange}:${data.symbol}`

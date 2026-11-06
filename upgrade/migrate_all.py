@@ -56,6 +56,7 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 #   cd upgrade && uv run migrate_drop_legacy_strategy.py --status
 #   cd upgrade && uv run migrate_drop_legacy_strategy.py
 MIGRATIONS = [
+    ("migrate_combined_terminal.py", "Combined Terminal Account Ledger"),
     ("migrate_neo_desk.py", "Neo Desk native preset provider"),
     # Legacy migrations (for users upgrading from older versions)
     ("add_feed_token.py", "Feed Token Support"),
@@ -100,7 +101,7 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset({"migrate_combined_terminal.py", "migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
 
 
 def run_migration(script_name, description):

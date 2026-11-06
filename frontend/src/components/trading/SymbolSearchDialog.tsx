@@ -101,6 +101,7 @@ const EXCHANGE_CATEGORY: Record<string, Category> = {
   NCDEX: 'Commodity',
   NCO: 'Commodity',
   CRYPTO: 'Crypto',
+  DELTA: 'Crypto',
 }
 
 const CHIP_ORDER: Category[] = ['Index', 'Cash', 'F&O', 'Currency', 'Commodity', 'Crypto']

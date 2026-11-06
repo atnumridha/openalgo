@@ -200,6 +200,8 @@ class BrokerData:
                 "volume": int(float(response.get("v", 0))),
                 "oi": int(response.get("oi", 0)),
                 "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
+                "lower_circuit": float(response["lc"]) if response.get("lc") else None,
+                "upper_circuit": float(response["uc"]) if response.get("uc") else None,
             }
 
         except BrokerBusyError:
@@ -318,6 +320,8 @@ class BrokerData:
                     "volume": int(float(response.get("v", 0))),
                     "oi": int(response.get("oi", 0)),
                     "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
+                "lower_circuit": float(response["lc"]) if response.get("lc") else None,
+                "upper_circuit": float(response["uc"]) if response.get("uc") else None,
                 },
             }
 
@@ -386,6 +390,8 @@ class BrokerData:
                     "volume": int(float(response.get("v", 0))),
                     "oi": int(response.get("oi", 0)),
                     "tick_size": float(response.get("ti", 0)) if response.get("ti") else None,
+                "lower_circuit": float(response["lc"]) if response.get("lc") else None,
+                "upper_circuit": float(response["uc"]) if response.get("uc") else None,
                 },
             }
 

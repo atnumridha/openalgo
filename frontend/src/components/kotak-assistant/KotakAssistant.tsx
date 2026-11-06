@@ -11,6 +11,7 @@ import {
   type SetupStrategy,
   type SetupMode,
   type SetupResult,
+  type PivotOverlay,
 } from '@/api/kotakAssistant'
 import { scalpingApi } from '@/api/scalping'
 import { ScalpingCharts } from './ScalpingCharts'
@@ -27,6 +28,7 @@ import { BrokerPositions, unownedBrokerPositions } from './BrokerPositions'
 import { feeDay, ticketCosts } from './feeEstimates'
 import { DailyDiscipline } from './DailyDiscipline'
 import { SetupAssistant } from './SetupAssistant'
+import { EntryDecisionAssistant } from './EntryDecisionAssistant'
 import { setupChartAnnotations, setupForSelectedSide } from './setupChart'
 import { ManagedTrades } from './ManagedTrades'
 import { TradeTracking } from './TradeTracking'
@@ -44,7 +46,7 @@ const INITIAL: RiskSettings = {
   premium: null,
   spread: 2,
   slippage: 0.1,
-  brokerage: 0,
+  brokerage: 10,
   cooldown: 300,
   cutoff: '15:15',
 }
@@ -70,6 +72,7 @@ function Desk() {
   const username = useAuthStore((s) => s.user?.username),
     appMode = useThemeStore((s) => s.appMode)
   const mode: DeskMode = appMode === 'live' ? 'live' : 'analyze'
+  const [pivotOverlay, setPivotOverlay] = useState<PivotOverlay | null>(null)
   const manualTracking = useManualTracking(`${username}:kotak`)
   const [underlying, setUnderlying] = useState('NIFTY'),
     [expiry, setExpiry] = useState(''),
@@ -192,6 +195,7 @@ function Desk() {
   }, [qc, username])
   useOrderEventRefresh(refresh, {
     events: ['order_event', 'analyzer_update', 'close_position_event'],
+    delay: 0,
   })
   const trades = useMemo(
     () =>
@@ -370,7 +374,7 @@ function Desk() {
       ? ticketCosts(
           { ...activeTicket.order!, ...indicativePlan },
           exchange,
-          d?.settings.brokerage ?? 0,
+          d?.settings.brokerage ?? 10,
           d?.settings.slippage ?? 0,
           feeDay(now * 1000)
         )
@@ -731,6 +735,7 @@ function Desk() {
         mode={mode}
         trades={trades}
         indexLevels={[...levels, ...setupAnnotations.levels]}
+        pivotOverlay={pivotOverlay}
         indexMarkers={setupAnnotations.markers}
         onReplayTimeChange={setReplayUntil}
         ceLevels={ceLevels}
@@ -751,7 +756,28 @@ function Desk() {
         }
         fills={d?.day?.journal?.fills || NO_FILLS}
       >
-        <div className="border-b p-3">
+        <div className="space-y-3 border-b p-3">
+          <EntryDecisionAssistant
+            onPivotOverlay={setPivotOverlay}
+            scope={`${username}:${mode}`}
+            underlying={underlying}
+            symbol={selected}
+            side={selectedLeg ? selected.endsWith('PE') ? 'PE' : 'CE' : undefined}
+            lots={activeTicket.lots}
+            onLotsChange={activeTicket.setLots}
+            now={now}
+            replay={replayUntil != null}
+            onUse={(plan) => {
+              activeTicket.useManualRisk()
+              activeTicket.changeEntry(String(plan.entry))
+              activeTicket.setSL(String(plan.sl))
+              activeTicket.setTarget(String(plan.target))
+              activeTicket.setAutoInvalidation(false)
+              setNotice('Decision levels loaded into the selected ticket. Review before buying.')
+            }}
+          />
+          <details open={replayUntil != null}>
+          <summary className="min-h-11 cursor-pointer content-center text-sm font-medium">Other strategy tools and replay</summary>
           <SetupAssistant
             setup={displayedSetup}
             selectedContract={
@@ -779,6 +805,7 @@ function Desk() {
             replay={replayUntil != null}
             executionReadiness={d?.execution_readiness}
           />
+          </details>
           {replayUntil != null && replaySetup.error && (
             <p role="alert" className="mt-2 text-xs text-destructive">
               {errorMessage(replaySetup.error)}
@@ -895,7 +922,7 @@ function Desk() {
         trades={trades}
         interval={interval}
         trackingCount={manualTracking.rows.filter((r) => !r.closed).length + brokerPositions.length}
-        brokerage={d?.settings.brokerage ?? 0}
+        brokerage={d?.settings.brokerage ?? 10}
         refresh={refresh}
         quote={(t) => quote(t.symbol, t.exchange, t.quote)}
       >
@@ -905,7 +932,7 @@ function Desk() {
           trades={trades}
           interval={interval}
           now={now}
-          brokerage={d?.settings.brokerage ?? 0}
+          brokerage={d?.settings.brokerage ?? 10}
           quote={(p) =>
             quote(p.symbol, p.exchange, {
               ltp: Number(p.ltp) || undefined,
@@ -917,7 +944,7 @@ function Desk() {
         <ManualTrackedTrades
           controller={manualTracking}
           interval={interval}
-          brokerage={d?.settings.brokerage ?? 0}
+          brokerage={d?.settings.brokerage ?? 10}
         />
       </ManagedTrades>
       {d && <OtherPositions desk={d} refresh={refresh} />}

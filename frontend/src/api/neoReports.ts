@@ -26,6 +26,9 @@ export interface HistoryView {
     closed_count?: number
     actual_fees: string | null
     estimated_fees: string | null
+    estimated_net_pnl?: string | null
+    estimated_net_known_count?: number
+    estimated_closed_fees?: string | null
     net_pnl: string | null
     fill_count: number
     fees_known_fill_count: number
@@ -39,6 +42,11 @@ export interface HistoryView {
     fill_count?: number
     executed_order_count?: number
     recorded_dates?: string[]
+    storage?: string
+    calculated_at?: string
+    estimated_fill_count?: number
+    unsupported_fill_count?: number
+    complete?: boolean
   }
 }
 export interface ChartCoverage {
@@ -84,7 +92,7 @@ export const neoReportsApi = {
     start = '',
     end = '',
     cursor = 0,
-    cost_plan = 'trade_free',
+    cost_plan = 'account',
     mode = 'live'
   ): Promise<HistoryView> =>
     (

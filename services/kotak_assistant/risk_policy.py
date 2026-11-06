@@ -98,8 +98,8 @@ def _cash_plan(
     filled_order_count=1,
     future_order_count=1,
 ):
-    settings = validate_settings(settings)
     day = day or "2026-10-14"
+    settings = validate_settings(settings, day)
     estimator = _cost_estimator(
         entry,
         quantity,

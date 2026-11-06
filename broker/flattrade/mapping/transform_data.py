@@ -165,6 +165,13 @@ def transform_data(data, token, auth_token=None):
         "ordersource": "API",
     }
 
+    if data.get('_combined_terminal_tag'):
+        import re
+        tag = data['_combined_terminal_tag']
+        if not isinstance(tag, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,32}', tag):
+            raise ValueError('Invalid combined terminal order tag')
+        transformed['remarks'] = tag
+
     # Log order data without sensitive fields (uid, actid contain API keys)
     safe_log = {k: v for k, v in transformed.items() if k not in ("uid", "actid")}
     logger.info(f"Transformed order data: {safe_log}")

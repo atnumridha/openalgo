@@ -120,3 +120,30 @@ it('plays only when requested and can pause the timeline', async () => {
     vi.useRealTimers()
   }
 })
+
+it('explains unavailable option data, disables playback and retains the saved index view', () => {
+  render(<ReplayChart trade={{ ...trade, recorded: true, option_bars: [] }} />)
+  expect(screen.getByRole('status')).toHaveTextContent('No saved option candles cover this trade')
+  expect(screen.getByRole('status')).toHaveTextContent('NIFTY index')
+  for (const name of [
+    'Replay from start',
+    'Play replay',
+    'Previous candle',
+    'Next candle',
+    'Show full trade',
+  ])
+    expect(screen.getByRole('button', { name })).toBeDisabled()
+  expect(screen.getByRole('slider', { name: 'Replay candle' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'NIFTY index' }))
+  expect(screen.getByLabelText('Replay position')).toHaveTextContent('1 / 1')
+  expect(screen.getByRole('button', { name: 'Replay from start' })).toBeEnabled()
+  expect(screen.getByLabelText('Replay position')).not.toHaveTextContent('No saved')
+})
+
+it('keeps unavailable option and index candles explicit without inventing playback', () => {
+  render(<ReplayChart trade={{ ...trade, recorded: true, option_bars: [], index_bars: [] }} />)
+  expect(screen.getByRole('status')).toHaveTextContent('No saved option candles cover this trade')
+  expect(screen.getByRole('button', { name: 'Play replay' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'NIFTY index' })).toBeDisabled()
+  expect(m.series[0].setData.mock.calls.at(-1)?.[0]).toEqual([])
+})

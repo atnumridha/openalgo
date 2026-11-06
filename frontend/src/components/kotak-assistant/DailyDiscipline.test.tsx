@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { DailyDiscipline } from './DailyDiscipline'
-const now = Date.now() / 1000
+const now = Date.parse('2026-10-20T04:30:00Z') / 1000
 const date = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata',
   year: 'numeric',
@@ -237,4 +237,51 @@ it('preserves warning control focus when changing the interval or repeating the 
     />
   )
   expect(screen.getByRole('button', { name: 'Close warning' })).toHaveFocus()
+})
+
+it('uses the combined server reminder interval and reports changes for persistence', () => {
+  const change = vi.fn()
+  render(<DailyDiscipline {...props} repeatInterval={600} onIntervalChange={change} />)
+  const select = screen.getByRole('combobox')
+  expect(select).toHaveValue('600')
+  fireEvent.change(select, { target: { value: '300' } })
+  expect(change).toHaveBeenCalledWith(300)
+})
+
+
+it('hides warnings for the rest of the IST day across reloads and changed warning reasons', () => {
+  const d = {...discipline,entries:3}
+  let view=render(<DailyDiscipline {...props} discipline={d}/>)
+  fireEvent.click(screen.getByRole('button',{name:'Hide for today'}))
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByText('Warning hidden until midnight IST.')).toBeInTheDocument()
+  expect(screen.getByLabelText('Daily entry count')).toHaveTextContent('3 / 3')
+  view.unmount()
+  const later=now+3600
+  view=render(<DailyDiscipline {...props} now={later} bookTime={later} discipline={{...d,entries:15,loss_reached:true,updated_at:later}}/>)
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Daily entry count')).toHaveTextContent('15 / 3')
+  fireEvent.change(screen.getByLabelText('Warning repeat interval'),{target:{value:'30'}})
+  view.rerender(<DailyDiscipline {...props} now={later+31} bookTime={later+31} discipline={{...d,entries:15,updated_at:later+31}}/>)
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+it('resumes warnings at midnight IST rather than waiting 24 hours',()=>{
+  const before=Date.parse('2026-10-20T18:29:59Z')/1000
+  const d={...discipline,entries:3,updated_at:before}
+  const view=render(<DailyDiscipline {...props} now={before} bookTime={before} discipline={d}/>)
+  fireEvent.click(screen.getByRole('button',{name:'Hide for today'}))
+  view.rerender(<DailyDiscipline {...props} now={before+1} bookTime={before+1} discipline={{...d,date:'2026-10-21',updated_at:before+1}}/>)
+  expect(screen.getByRole('alert')).toBeInTheDocument()
+  expect(screen.queryByText('Warning hidden until midnight IST.')).not.toBeInTheDocument()
+})
+it('can restore the warning early and keeps day hiding scoped to the selected account and mode',()=>{
+ const d={...discipline,entries:3}
+ const view=render(<DailyDiscipline {...props} discipline={d}/>)
+ fireEvent.click(screen.getByRole('button',{name:'Hide for today'}))
+ view.rerender(<DailyDiscipline {...props} scope="another-account:live" discipline={d}/>)
+ expect(screen.getByRole('alert')).toBeInTheDocument()
+ view.rerender(<DailyDiscipline {...props} discipline={d}/>)
+ expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button',{name:'Show warning again'}))
+ expect(screen.getByRole('alert')).toBeInTheDocument()
 })

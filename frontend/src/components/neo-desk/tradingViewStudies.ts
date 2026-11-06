@@ -1,3 +1,6 @@
+const secondsFor = (interval: string) =>
+  Number(interval.slice(0, -1)) *
+  (({ m: 60, h: 3600, d: 86400 } as Record<string, number>)[interval.at(-1)!] ?? 1)
 import type { UTCTimestamp } from 'lightweight-charts'
 import { fairValueGaps, nearbyFairValueGaps } from '../kotak-assistant/fairValueGaps'
 
@@ -42,7 +45,12 @@ export function formatIST(t: number, withDate = false) {
     ...(withDate ? ({ day: '2-digit', month: 'short' } as const) : {}),
   }).format(new Date(t * 1000))
 }
-export function computeStudies(bars: PriceBar[], interval = '5m', nowUtc = Date.now() / 1000) {
+export function computeStudies(
+  bars: PriceBar[],
+  interval = '5m',
+  nowUtc = Date.now() / 1000,
+  context: { continuous?: boolean } = {}
+) {
   const upper: Array<{ time: UTCTimestamp; value: number }> = [],
     lower: typeof upper = [],
     ema: typeof upper = [],
@@ -83,6 +91,11 @@ export function computeStudies(bars: PriceBar[], interval = '5m', nowUtc = Date.
   for (let i = Math.max(3, bars.length - 120); i + 3 < last; i++) {
     const window = bars.slice(i - 3, i + 4),
       b = bars[i]
+    if (
+      context.continuous &&
+      window.some((p, j) => j > 0 && p.time - window[j - 1].time !== secondsFor(interval))
+    )
+      continue
     if (window.every((p, j) => j === 3 || p.high < b.high) && b.high >= close)
       resistances.push(b.high)
     if (window.every((p, j) => j === 3 || p.low > b.low) && b.low <= close) supports.push(b.low)
@@ -97,7 +110,8 @@ export function computeStudies(bars: PriceBar[], interval = '5m', nowUtc = Date.
     fairValueGaps(
       bars.map((b) => ({ ...b, time: b.time + 19800 })),
       seconds,
-      nowUtc
+      nowUtc,
+      context.continuous
     ),
     close
   ).map((gap) => ({

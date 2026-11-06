@@ -150,3 +150,26 @@ def test_completed_five_minute_bar_remains_usable_until_next_bar_is_due():
     five = [dict(time=now - 540 - (59-i)*300, open=100, high=102, low=98, close=100) for i in range(60)]
     assert analyse(one, five, now)['reason'] != 'History is stale'
     assert analyse(one, five, now+126)['reason'] == 'History is stale'
+
+
+def test_account_notice_brokerage_effective_date_and_overrides():
+    assert fees(10000, 11000, "NFO", day="2026-10-21")["brokerage"] == 0
+    current = fees(10000, 11000, "NFO", day="2026-10-22")
+    previous = fees(10000, 11000, "NFO", 0, "2026-10-22")
+    assert current["brokerage"] == 20
+    assert current["total"] - previous["total"] == pytest.approx(23.60)
+    assert fees(10000, 11000, "BFO", 49, "2026-10-22")["brokerage"] == 98
+    assert validate_settings({})["brokerage"] == 10
+
+
+def test_notice_brokerage_charged_once_per_order_with_split_fills():
+    base = {"symbol": "NIFTYCE", "exchange": "NFO", "product": "MIS", "average_price": 100}
+    fills = [
+        {**base, "tradeid": "a", "orderid": "buy", "action": "BUY", "quantity": 65, "timestamp": "22-Oct-2026 10:00:00"},
+        {**base, "tradeid": "b", "orderid": "buy", "action": "BUY", "quantity": 65, "timestamp": "22-Oct-2026 10:00:01"},
+        {**base, "tradeid": "c", "orderid": "sell", "action": "SELL", "quantity": 130, "average_price": 110, "timestamp": "22-Oct-2026 10:01:00"},
+    ]
+    charged = journal(fills, [], "2026-10-22")
+    zero = journal(fills, [], "2026-10-22", 0)
+    assert charged["complete"]
+    assert charged["charges"] - zero["charges"] == pytest.approx(23.60)

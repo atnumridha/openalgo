@@ -1,9 +1,9 @@
 import { money } from './model'
-import { FEE_VERIFIED, type ticketCosts } from './feeEstimates'
+import { FEE_VERIFIED, BROKERAGE_EFFECTIVE, accountBrokerage, type ticketCosts } from './feeEstimates'
 
 export function TicketCosts({
   estimate,
-  brokerage = 0,
+  brokerage = accountBrokerage(),
 }: {
   estimate: ReturnType<typeof ticketCosts>
   brokerage?: number
@@ -20,7 +20,11 @@ export function TicketCosts({
         </span>
       </div>
       <p className="text-muted-foreground">
-        API brokerage {money(brokerage)}/order · taxes included
+        Brokerage {money(brokerage)}/executed order · taxes included
+      </p>
+      <p className="text-muted-foreground">
+        Account notice from {BROKERAGE_EFFECTIVE}: self-directed F&amp;O ₹10/order; dealer-assisted
+        ₹49/order. Brokerage is charged per executed order, with 18% GST added.
       </p>
       <table className="w-full table-fixed text-right">
         <caption className="sr-only">
@@ -100,6 +104,13 @@ export function TicketCosts({
                 ))}
               </tbody>
             </table>
+            <p className="mt-2">
+              Account notice effective {BROKERAGE_EFFECTIVE}: self-directed futures/options ₹10 per
+              executed order; dealer-assisted ₹49 per order. Not per lot or partial fill. Current
+              estimate uses the configured rate above; GST is 18% on brokerage and taxable charges.
+              STT, exchange/IPFT, SEBI and stamp duty remain additional. The notice’s 1-paisa
+              exception applies only if a zero-brokerage plan is separately confirmed.
+            </p>
             <p className="mt-1">
               Estimated entry + exit charges · verified {FEE_VERIFIED}. Final contract-note rounding
               can differ.

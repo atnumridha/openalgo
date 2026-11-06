@@ -1,0 +1,359 @@
+[
+  {
+    "version": 1,
+    "symbol": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "seconds": 60,
+    "indian": true,
+    "trainedThrough": 1784628000,
+    "source": "Audited Kotak index history · 371 sessions · 01 Oct 2024–21 Jul 2026 + subsequent loaded candles",
+    "counts": {
+      "rejection:CALL:opposing": {
+        "targets": 201,
+        "stops": 443,
+        "timeouts": 80,
+        "ambiguous": 1
+      },
+      "engulfing:PUT:opposing": {
+        "targets": 420,
+        "stops": 1022,
+        "timeouts": 518,
+        "ambiguous": 4
+      },
+      "engulfing:PUT:aligned": {
+        "targets": 298,
+        "stops": 698,
+        "timeouts": 282,
+        "ambiguous": 1
+      },
+      "engulfing:CALL:aligned": {
+        "targets": 315,
+        "stops": 724,
+        "timeouts": 288,
+        "ambiguous": 0
+      },
+      "inside-break:CALL:opposing": {
+        "targets": 107,
+        "stops": 266,
+        "timeouts": 210,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:opposing": {
+        "targets": 394,
+        "stops": 924,
+        "timeouts": 547,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:flat": {
+        "targets": 179,
+        "stops": 380,
+        "timeouts": 194,
+        "ambiguous": 0
+      },
+      "rejection:CALL:flat": {
+        "targets": 68,
+        "stops": 176,
+        "timeouts": 30,
+        "ambiguous": 1
+      },
+      "inside-break:CALL:aligned": {
+        "targets": 104,
+        "stops": 303,
+        "timeouts": 208,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:opposing": {
+        "targets": 97,
+        "stops": 217,
+        "timeouts": 196,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:flat": {
+        "targets": 198,
+        "stops": 381,
+        "timeouts": 192,
+        "ambiguous": 1
+      },
+      "inside-break:CALL:flat": {
+        "targets": 44,
+        "stops": 126,
+        "timeouts": 125,
+        "ambiguous": 0
+      },
+      "rejection:PUT:aligned": {
+        "targets": 206,
+        "stops": 342,
+        "timeouts": 41,
+        "ambiguous": 1
+      },
+      "rejection:CALL:aligned": {
+        "targets": 191,
+        "stops": 407,
+        "timeouts": 63,
+        "ambiguous": 3
+      },
+      "rejection:PUT:opposing": {
+        "targets": 221,
+        "stops": 381,
+        "timeouts": 65,
+        "ambiguous": 0
+      },
+      "rejection:PUT:flat": {
+        "targets": 77,
+        "stops": 163,
+        "timeouts": 25,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:aligned": {
+        "targets": 123,
+        "stops": 313,
+        "timeouts": 199,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:flat": {
+        "targets": 51,
+        "stops": 139,
+        "timeouts": 100,
+        "ambiguous": 0
+      }
+    }
+  },
+  {
+    "version": 1,
+    "symbol": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "seconds": 300,
+    "indian": true,
+    "trainedThrough": 1784628000,
+    "source": "Audited Kotak index history · 371 sessions · 01 Oct 2024–21 Jul 2026 + subsequent loaded candles",
+    "counts": {
+      "inside-break:PUT:aligned": {
+        "targets": 23,
+        "stops": 31,
+        "timeouts": 28,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:aligned": {
+        "targets": 39,
+        "stops": 119,
+        "timeouts": 67,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:opposing": {
+        "targets": 68,
+        "stops": 176,
+        "timeouts": 85,
+        "ambiguous": 0
+      },
+      "rejection:CALL:flat": {
+        "targets": 15,
+        "stops": 23,
+        "timeouts": 10,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:flat": {
+        "targets": 29,
+        "stops": 66,
+        "timeouts": 31,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:aligned": {
+        "targets": 45,
+        "stops": 126,
+        "timeouts": 54,
+        "ambiguous": 0
+      },
+      "rejection:CALL:opposing": {
+        "targets": 29,
+        "stops": 70,
+        "timeouts": 19,
+        "ambiguous": 1
+      },
+      "engulfing:CALL:flat": {
+        "targets": 22,
+        "stops": 77,
+        "timeouts": 43,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:flat": {
+        "targets": 7,
+        "stops": 22,
+        "timeouts": 23,
+        "ambiguous": 0
+      },
+      "rejection:PUT:aligned": {
+        "targets": 33,
+        "stops": 51,
+        "timeouts": 5,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:opposing": {
+        "targets": 19,
+        "stops": 34,
+        "timeouts": 32,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:opposing": {
+        "targets": 69,
+        "stops": 153,
+        "timeouts": 85,
+        "ambiguous": 1
+      },
+      "inside-break:CALL:aligned": {
+        "targets": 13,
+        "stops": 44,
+        "timeouts": 23,
+        "ambiguous": 0
+      },
+      "rejection:PUT:flat": {
+        "targets": 12,
+        "stops": 26,
+        "timeouts": 4,
+        "ambiguous": 0
+      },
+      "rejection:PUT:opposing": {
+        "targets": 21,
+        "stops": 55,
+        "timeouts": 8,
+        "ambiguous": 0
+      },
+      "inside-break:CALL:opposing": {
+        "targets": 9,
+        "stops": 32,
+        "timeouts": 31,
+        "ambiguous": 0
+      },
+      "rejection:CALL:aligned": {
+        "targets": 26,
+        "stops": 52,
+        "timeouts": 17,
+        "ambiguous": 1
+      },
+      "inside-break:CALL:flat": {
+        "targets": 10,
+        "stops": 28,
+        "timeouts": 16,
+        "ambiguous": 0
+      }
+    }
+  },
+  {
+    "version": 1,
+    "symbol": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "seconds": 900,
+    "indian": true,
+    "trainedThrough": 1784628000,
+    "source": "Audited Kotak index history · 371 sessions · 01 Oct 2024–21 Jul 2026 + subsequent loaded candles",
+    "counts": {
+      "engulfing:CALL:opposing": {
+        "targets": 7,
+        "stops": 27,
+        "timeouts": 10,
+        "ambiguous": 0
+      },
+      "rejection:CALL:aligned": {
+        "targets": 7,
+        "stops": 13,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:flat": {
+        "targets": 3,
+        "stops": 11,
+        "timeouts": 8,
+        "ambiguous": 0
+      },
+      "inside-break:CALL:opposing": {
+        "targets": 4,
+        "stops": 2,
+        "timeouts": 4,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:opposing": {
+        "targets": 8,
+        "stops": 18,
+        "timeouts": 10,
+        "ambiguous": 0
+      },
+      "rejection:PUT:aligned": {
+        "targets": 2,
+        "stops": 8,
+        "timeouts": 4,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:opposing": {
+        "targets": 0,
+        "stops": 5,
+        "timeouts": 6,
+        "ambiguous": 0
+      },
+      "engulfing:CALL:aligned": {
+        "targets": 10,
+        "stops": 16,
+        "timeouts": 7,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:aligned": {
+        "targets": 11,
+        "stops": 13,
+        "timeouts": 2,
+        "ambiguous": 0
+      },
+      "inside-break:CALL:aligned": {
+        "targets": 1,
+        "stops": 5,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "inside-break:CALL:flat": {
+        "targets": 1,
+        "stops": 0,
+        "timeouts": 4,
+        "ambiguous": 0
+      },
+      "rejection:PUT:opposing": {
+        "targets": 0,
+        "stops": 12,
+        "timeouts": 0,
+        "ambiguous": 0
+      },
+      "rejection:CALL:opposing": {
+        "targets": 1,
+        "stops": 5,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "rejection:CALL:flat": {
+        "targets": 2,
+        "stops": 4,
+        "timeouts": 0,
+        "ambiguous": 0
+      },
+      "rejection:PUT:flat": {
+        "targets": 2,
+        "stops": 5,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:flat": {
+        "targets": 0,
+        "stops": 1,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "engulfing:PUT:flat": {
+        "targets": 6,
+        "stops": 7,
+        "timeouts": 1,
+        "ambiguous": 0
+      },
+      "inside-break:PUT:aligned": {
+        "targets": 3,
+        "stops": 12,
+        "timeouts": 1,
+        "ambiguous": 0
+      }
+    }
+  }
+]

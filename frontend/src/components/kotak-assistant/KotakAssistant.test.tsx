@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { KotakAssistant } from './KotakAssistant'
@@ -37,7 +37,11 @@ function mount() {
   )
 }
 describe('Kotak home desk', () => {
+  afterEach(() => vi.useRealTimers())
   beforeEach(() => {
+    // Contract fixtures describe the 15 October session; query timers stay real.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-15T04:30:00Z'))
     indexFeed.clear()
     optionFeed.clear()
     vi.mocked(scalpingApi.getExpiry).mockResolvedValue({

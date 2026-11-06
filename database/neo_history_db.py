@@ -18,6 +18,18 @@ class NeoFill(Base):
     payload = Column(JSON, nullable=False)
 
 
+class NeoFeeEstimate(Base):
+    """Versioned local estimate snapshots; never presented as broker-paid fees."""
+
+    __tablename__ = "neo_fee_estimate"
+    owner = Column(String(100), primary_key=True)
+    mode = Column(String(20), primary_key=True)
+    cost_plan = Column(String(30), primary_key=True)
+    input_hash = Column(String(64), nullable=False)
+    version = Column(String(100), nullable=False)
+    payload = Column(JSON, nullable=False)
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

@@ -98,14 +98,27 @@ it('does not treat missing candles or overnight price jumps as FVGs', () => {
   expect(computeStudies(bars, '5m').zones).toEqual([])
 })
 
-it('shows the opening range as soon as the 09:15 replay candle closes at 09:30',()=>{
-  const first=bar(0,100)
-  expect(openingRange([first],first.time+899)).toBeNull()
-  expect(openingRange([first],first.time+900)).toEqual({high:101,low:99})
+it('shows the opening range as soon as the 09:15 replay candle closes at 09:30', () => {
+  const first = bar(0, 100)
+  expect(openingRange([first], first.time + 899)).toBeNull()
+  expect(openingRange([first], first.time + 900)).toEqual({ high: 101, low: 99 })
 })
 
 it('corrects the candle open and missing extremes from history while retaining the latest quote close', () => {
   const original = { time: 1791863100, open: 100, high: 120, low: 90, close: 110, volume: 300 }
   const live = { ...original, open: 109, high: 115, low: 95, close: 115, volume: 0 }
   expect(reconcileHistory([original], live)).toEqual([{ ...original, close: 115 }])
+})
+
+it('keeps crypto FVG confirmation continuous across the display-date boundary', () => {
+  const start = Date.parse('2026-10-30T23:59:00+05:30') / 1000
+  const source = [
+    { time: start, open: 99, high: 100, low: 98, close: 99, volume: 100 },
+    { time: start + 60, open: 101, high: 110, low: 100, close: 108, volume: 100 },
+    { time: start + 120, open: 108, high: 112, low: 105, close: 110, volume: 100 },
+  ]
+  expect(computeStudies(source, '1m', start + 180, { continuous: true }).zones).toHaveLength(1)
+  expect(computeStudies(source, '1m', start + 179, { continuous: true }).zones).toHaveLength(0)
+  const gap = [...source, { ...source[2], time: start + 3600 }]
+  expect(computeStudies(gap, '1m', start + 3660, { continuous: true }).zones).toHaveLength(0)
 })

@@ -100,8 +100,12 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
   markers,
   replay,
   showFvg = true,
+  externalSource,
+  externalQuote,
   protectionLabel = 'saved server protection',
 }: {
+  externalSource?: { id: string; getHistory: typeof scalpingApi.getHistory }
+  externalQuote?: { ltp?: number; time: number; source?: string; volume?: number }
   symbol: string
   exchange: string
   interval: string
@@ -116,7 +120,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
   const { mode, appMode } = useThemeStore()
   const username = useAuthStore((s) => s.user?.username)
   const candleScope = useRef('')
-  candleScope.current = candleKey(username, appMode, symbol, exchange, interval)
+  candleScope.current = candleKey(externalSource ? `${username || 'anonymous'}:${externalSource.id}` : username, appMode, symbol, exchange, interval)
   const isDark = appMode !== 'live' || mode === 'dark'
 
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -262,6 +266,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
         }))
     return values.filter((l) => Number.isFinite(l.price) && l.price > 0)
   }, [positionStatus, entry, quantity, sl, target, allLevels, structureLines])
+  const [labelAxisWidth, setLabelAxisWidth] = useState(72)
   const [labelPositions, setLabelPositions] = useState<ReturnType<typeof layoutChartLabels>>([])
   useEffect(() => {
     const update = () => {
@@ -277,6 +282,8 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
               Math.max(0, container.clientHeight - 28)
             )
           : []
+      const width = Math.ceil(chartRef.current?.priceScale('right').width?.() || 72)
+      setLabelAxisWidth(previous => previous === width ? previous : width)
       setLabelPositions((previous) =>
         JSON.stringify(previous) === JSON.stringify(positions) ? previous : positions
       )
@@ -325,7 +332,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
   const { data } = useMarketData({
     symbols: enabled ? [{ symbol, exchange }] : [],
     mode: 'Quote',
-    enabled,
+    enabled: enabled && !externalSource,
     autoReconnect: true,
   })
 
@@ -505,7 +512,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
       const { title: titleColor, muted } = colorsRef.current
       const indicators = indicatorValuesRef.current[idx]
       const indicatorLegend = INDICATORS.filter(({ key }) =>
-        visibleIndicator(key, intervalRef.current)
+        key !== 'rsi14' && visibleIndicator(key, intervalRef.current)
       )
         .map(
           ({ key, title, color }) =>
@@ -773,7 +780,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
       if (disposed || inflight) return
       inflight = true
       try {
-        const d = await scalpingApi.getHistory(
+        const d = await (externalSource?.getHistory || scalpingApi.getHistory)(
           symbol,
           exchange,
           interval,
@@ -824,8 +831,8 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
       }, delay)
     }
 
-    scalpingApi
-      .getHistory(symbol, exchange, interval)
+    const historyLoader = externalSource?.getHistory || scalpingApi.getHistory
+    historyLoader(symbol, exchange, interval)
       .then((d) => {
         if (disposed) return
         if (d.status !== 'success') {
@@ -864,7 +871,7 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
       readyRef.current = false
       if (timer) clearTimeout(timer)
     }
-  }, [symbol, exchange, interval, enabled, username, appMode])
+  }, [symbol, exchange, interval, enabled, username, appMode, externalSource])
 
   // Re-theme the chart and legend without recreating it.
   useEffect(() => {
@@ -887,7 +894,11 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
   }, [isDark])
 
   // Update the forming candle (and its volume) from each live tick.
-  const tickData = data.get(`${exchange}:${symbol}`)
+  const tickData = externalSource
+    ? externalQuote
+      ? { data: { ltp: externalQuote.ltp, timestamp: String(externalQuote.time * 1000), volume: externalQuote.volume }, updateSource: externalQuote.source === 'Live feed' ? 'websocket' as const : 'rest' as const }
+      : undefined
+    : data.get(`${exchange}:${symbol}`)
   const tick = tickData?.data
   const tickSource = tickData?.updateSource
   const ltp = tick?.ltp
@@ -1065,9 +1076,9 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
             {labelPositions.map((l) => (
               <path
                 key={`${l.title}:${l.price}`}
-                d={`M 0 ${l.y} L 12 ${l.top + 11}`}
+                d={`M ${Math.max(0, (containerRef.current?.clientWidth || 0) - labelAxisWidth)} ${l.y} L ${Math.max(0, (containerRef.current?.clientWidth || 0) - labelAxisWidth - 6)} ${l.top + 11}`}
                 stroke={l.color}
-                strokeWidth="2"
+                strokeWidth="1"
                 fill="none"
               />
             ))}
@@ -1075,15 +1086,17 @@ export const KotakAssistantChart = memo(function KotakAssistantChart({
           {labelPositions.map((l) => (
             <span
               key={`${l.title}:${l.price}`}
-              className="absolute left-3 flex h-[22px] items-center rounded-r border border-l-[3px] px-1.5 text-[11px] font-semibold tabular-nums shadow-sm"
+              className="absolute flex h-[22px] max-w-[55%] items-center truncate rounded border px-1.5 text-[10px] font-medium"
+              aria-label={`${l.title} · ${fmtPrice(l.price, priceDecimals(exchange))}`}
               style={{
                 top: l.top,
+                right: labelAxisWidth + 6,
                 borderColor: l.color,
                 backgroundColor: isDark ? '#111827' : '#ffffff',
                 color: isDark ? '#f9fafb' : '#111827',
               }}
             >
-              {l.title} · {fmtPrice(l.price, priceDecimals(exchange))}
+              {l.title}
             </span>
           ))}
         </div>

@@ -341,11 +341,15 @@ export function ReplayChart({
       <output className="block font-mono text-xs" aria-label="Replay position">
         {bars.length
           ? `${cursor + 1} / ${bars.length} · ${formatIST(frame.visible.at(-1)!.time, true)} IST · close ₹${frame.visible.at(-1)!.close.toFixed(2)}`
-          : 'No saved candles for this instrument.'}
+          : `No saved ${show} candles cover this trade’s time window. ${
+              show === 'option' && trade.index_bars.length
+                ? `${trade.underlying || 'NIFTY'} index candles are available in the index view.`
+                : 'Candle playback is unavailable for this instrument.'
+            }`}
       </output>
       <div
         ref={host}
-        className="h-[420px] w-full"
+        className={bars.length ? 'h-[420px] w-full' : 'hidden'}
         role="img"
         aria-label={`Historical ${show} candles with recorded entry, exit and available protection`}
       />

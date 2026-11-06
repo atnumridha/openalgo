@@ -1,13 +1,14 @@
 """gunicorn hooks for OpenAlgo's launcher (``install/openalgo-gunicorn.sh -c``).
 
 Passing this file with ``-c`` also means gunicorn never auto-loads a stray
-``gunicorn.conf.py`` from the working folder. It defines no settings: the
-launcher passes every option on the command line.
+``gunicorn.conf.py`` from the working folder. The launcher passes its worker
+options on the command line; this config also disables the optional control
+socket on macOS so replacement workers are not forked from a threaded arbiter.
 
 **Imports.** gunicorn executes this file in the arbiter before it loads the
 worker class, and loading the eventlet worker monkey-patches the process. So
-this file imports nothing at module scope, and each hook imports what it
-needs when it runs, inside the worker, after the app loaded.
+the only module-scope import is the built-in ``sys`` platform flag. Each hook
+imports its application dependencies inside the worker, after the app loaded.
 
 **What the hooks do.**
 
@@ -37,6 +38,15 @@ worker), the drain never runs and the stop is what it was before.
 unexpected is logged through gunicorn's own logger and ignored.
 """
 
+import sys
+
+# Gunicorn 25 starts the optional control listener after its initial workers.
+# On macOS that background thread makes later worker forks unsafe for native
+# HTTP libraries (Objective-C initialization); the initial worker can work
+# while every replacement crashes. Signal-based supervision remains available.
+# This setting is ignored by older Gunicorn versions without the feature.
+control_socket_disable = sys.platform == "darwin"
+
 
 def _log(owner, level, message):
     """Log through gunicorn's logger, never raising."""
@@ -60,6 +70,16 @@ def post_worker_init(worker):
         _log(worker, "warning", f"OpenAlgo could not add the stop drain: {error}")
 
 
+    # Startup is independent of browser traffic; only persisted explicit Auto On
+    # configurations can create entries after verified account reconciliation.
+    try:
+        from blueprints.delta_chart import start_background
+        with worker.wsgi.app_context():
+            start_background()
+    except Exception as error:
+        _log(worker, "warning", "Delta background service startup was unavailable; it will retry on authenticated use.")
+
+
 def worker_int(worker):
     """SIGINT or SIGQUIT reached the worker: stop OpenAlgo's background work."""
     _shutdown_runtime(worker)
@@ -74,6 +94,12 @@ def _shutdown_runtime(worker):
     """Run utils.shutdown.shutdown_runtime() once the app has been loaded."""
     if getattr(worker, "wsgi", None) is None:
         return
+    try:
+        trading = (getattr(worker.wsgi, "extensions", None) or {}).get("delta_chart_service")
+        if trading:
+            trading.automation_worker.stopped.set()
+    except Exception:
+        pass
     try:
         from utils.shutdown import shutdown_runtime
 
@@ -174,6 +200,12 @@ def _begin_early_shutdown(worker):
     after a slow request could be nothing. gthread only; ``worker_exit`` still
     waits for them.
     """
+    try:
+        trading = (getattr(worker.wsgi, "extensions", None) or {}).get("delta_chart_service")
+        if trading and hasattr(trading, "automation_worker"):
+            trading.automation_worker.stopped.set()
+    except Exception:
+        pass
     try:
         from utils import runtime
         from utils.shutdown import begin_early_shutdown

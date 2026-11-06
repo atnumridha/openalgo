@@ -9,6 +9,8 @@ import { KotakAssistantChart } from './KotakAssistantChart'
 
 const io = vi.hoisted(() => ({
   candles: vi.fn(),
+  historyRequests: vi.fn(),
+  subscriptions: vi.fn(),
   ticks: vi.fn(),
   lines: vi.fn(() => ({})),
   markers: vi.fn(() => ({ detach: vi.fn() })),
@@ -38,9 +40,9 @@ vi.mock('@/api/admin', () => ({
   },
 }))
 vi.mock('@/api/scalping', () => ({
-  scalpingApi: { getHistory: async () => ({ status: 'success', candles: io.history }) },
+  scalpingApi: { getHistory: async () => { io.historyRequests(); return { status: 'success', candles: io.history } } },
 }))
-vi.mock('@/hooks/useMarketData', () => ({ useMarketData: () => ({ data: io.quote }) }))
+vi.mock('@/hooks/useMarketData', () => ({ useMarketData: (options: unknown) => { io.subscriptions(options); return { data: io.quote } } }))
 vi.mock('lightweight-charts', async (load) => ({
   ...(await load<typeof import('lightweight-charts')>()),
   createSeriesMarkers: io.markers,
@@ -284,4 +286,19 @@ describe('Chart replay data isolation', () => {
     expect(io.candles.mock.lastCall?.[0]).toHaveLength(1)
     expect(screen.getByText(/Calendar unavailable · historical candles/)).toBeInTheDocument()
   })
+  it('uses an explicitly selected broker source without local history or subscriptions', async () => {
+    const own = vi.fn(async () => ({ status: 'success', symbol, exchange: 'NFO', interval: '5m', date: null,
+      candles: [{ time: 1792116000, open: 100, high: 102, low: 99, close: 101, volume: 10 }] }))
+    io.history = [{ time: 1792116000, open: 9990, high: 9999, low: 9980, close: 9998, volume: 10 }]
+    renderView(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <KotakAssistantChart symbol={symbol} exchange="NFO" interval="5m" externalSource={{ id: 'flat-account-live', getHistory: own }} />
+    </QueryClientProvider>)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(own).toHaveBeenCalled()
+    expect(io.historyRequests).not.toHaveBeenCalled()
+    expect(io.subscriptions).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }))
+    expect(io.candles.mock.calls.flatMap(call => call[0]).some((bar: { close: number }) => bar.close === 101)).toBe(true)
+    expect(io.candles.mock.calls.flatMap(call => call[0]).some((bar: { close: number }) => bar.close === 9998)).toBe(false)
+  })
+
 })

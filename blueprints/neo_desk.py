@@ -122,7 +122,7 @@ def history():
             request.args.get("start"),
             request.args.get("end"),
             request.args.get("cursor", 0),
-            request.args.get("cost_plan", "trade_free"),
+            request.args.get("cost_plan", "account"),
             request.args.get("mode", "live"),
         )
     )
@@ -188,6 +188,65 @@ def chart():
             session["user"], request.args.get("instrument", ""), request.args.get("interval", "15m")
         )
     )
+
+
+@neo_desk_bp.get("/chart/search")
+@authenticated
+def chart_search():
+    from database.symbol import enhanced_search_symbols
+
+    query = request.args.get("query", "").strip()[:100]
+    exchange = request.args.get("exchange", "").strip()[:20] or None
+    if len(query) < 2:
+        return jsonify(data=[])
+    rows = enhanced_search_symbols(query, exchange, limit=60)
+    data = [dict(symbol=r.symbol, exchange=r.exchange, name=r.name) for r in rows]
+    if exchange in (None, "DELTA", "CRYPTO"):
+        data += [dict(symbol=s, exchange="DELTA", name="Crypto perpetual")
+                 for s in ("BTCUSD", "ETHUSD") if query.upper() in s]
+    return jsonify(data=data[:60])
+
+
+@neo_desk_bp.get("/chart/contract")
+@authenticated
+def chart_contract():
+    """Read canonical metadata for chart calculations; never broker writes."""
+    from decimal import Decimal, InvalidOperation
+    from database.token_db import get_symbol_info
+
+    symbol, exchange = request.args.get("symbol", ""), request.args.get("exchange", "")
+    if not symbol or len(symbol) > 100 or not exchange or len(exchange) > 20:
+        return jsonify(message="Select a listed symbol and exchange."), 400
+    row = get_symbol_info(symbol, exchange)
+    reference = exchange in ("NSE_INDEX", "BSE_INDEX")
+    try:
+        tick = Decimal(str(row.tick_size)) if row else Decimal("0.01") if reference else Decimal(0)
+        if not tick.is_finite() or tick <= 0:
+            raise ValueError()
+    except (InvalidOperation, ValueError, TypeError):
+        return jsonify(message="Verified contract price increment unavailable."), 404
+    from database.market_calendar_db import get_market_timing
+    timing = get_market_timing({"NSE_INDEX": "NSE", "BSE_INDEX": "BSE"}.get(exchange, exchange))
+    window = dict(start=int(timing["start_offset"]) // 60000,
+                  end=int(timing["end_offset"]) // 60000, offset=19800) if timing else None
+    return jsonify(symbol=symbol, exchange=exchange, tick_size=str(tick),
+                   lotsize=getattr(row, "lotsize", None), session=window)
+
+
+@neo_desk_bp.route("/chart/risk-preview", methods=["GET", "POST"])
+@authenticated
+def chart_risk_preview():
+    from database.token_db import get_symbol_info
+    from services.neo_desk.option_risk_preview import option_risk_preview
+
+    body = request.args.to_dict() if request.method == "GET" else request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise ValueError("Enter chart preview levels.")
+    symbol, exchange = body.get("symbol"), body.get("exchange")
+    if (not isinstance(symbol, str) or len(symbol) > 100
+        or not symbol.endswith(("CE", "PE")) or exchange not in ("NFO", "BFO")):
+        raise ValueError("Select an exact listed CE or PE contract.")
+    return jsonify(option_risk_preview(body, get_symbol_info(symbol, exchange)))
 
 
 @neo_desk_bp.get("/datasets")

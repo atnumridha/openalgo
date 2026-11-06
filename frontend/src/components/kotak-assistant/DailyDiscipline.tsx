@@ -4,6 +4,15 @@ import { Button } from '@/components/ui/button'
 import { money } from './model'
 import { feeDay } from './feeEstimates'
 
+const HIDDEN_DAY_CHANGED = 'kotak-daily-warning-hidden-change'
+function savedHiddenDay(key: string) {
+  try {
+    return localStorage.getItem(key) || ''
+  } catch {
+    return ''
+  }
+}
+
 const REPEAT_OPTIONS = [30, 60, 120, 300, 600]
 const intervalLabel = (seconds: number) =>
   seconds < 60 ? `${seconds} seconds` : `${seconds / 60} ${seconds === 60 ? 'minute' : 'minutes'}`
@@ -22,17 +31,54 @@ export function DailyDiscipline({
   bookTime,
   now,
   error,
+  repeatInterval,
+  onIntervalChange,
+  brokerLabel = 'Kotak Neo',
 }: {
+  brokerLabel?: string
   scope: string
   discipline?: DailyDisciplineState
   bookTime?: number
   now: number
   error?: string | null
+  repeatInterval?: number
+  onIntervalChange?: (seconds: number) => void
 }) {
   const [mountedAt] = useState(now)
   const storageKey = `kotak-daily-warning:${scope}`
   const preferenceKey = `kotak-warning-preferences:${scope}`
-  const [repeatSeconds, setRepeatSeconds] = useState(() => savedInterval(preferenceKey))
+  const hiddenDayKey = `kotak-warning-hidden-day:${scope}`
+  const today = feeDay(now * 1000)
+  const [dismissedDay, setDismissedDay] = useState(() => ({
+    key: hiddenDayKey,
+    day: savedHiddenDay(hiddenDayKey),
+  }))
+  const hiddenForToday =
+    (dismissedDay.key === hiddenDayKey ? dismissedDay.day : savedHiddenDay(hiddenDayKey)) === today
+  useEffect(() => {
+    const sync = () => setDismissedDay({ key: hiddenDayKey, day: savedHiddenDay(hiddenDayKey) })
+    window.addEventListener('storage', sync)
+    window.addEventListener(HIDDEN_DAY_CHANGED, sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      window.removeEventListener(HIDDEN_DAY_CHANGED, sync)
+    }
+  }, [hiddenDayKey])
+  const setHiddenDay = (day: string) => {
+    setDismissedDay({ key: hiddenDayKey, day })
+    try {
+      if (day) localStorage.setItem(hiddenDayKey, day)
+      else localStorage.removeItem(hiddenDayKey)
+      window.dispatchEvent(new Event(HIDDEN_DAY_CHANGED))
+    } catch {
+      /* Keep this view's dismissal when browser storage is unavailable. */
+    }
+  }
+
+  const [repeatSeconds, setRepeatSeconds] = useState(() => repeatInterval ?? savedInterval(preferenceKey))
+  useEffect(() => {
+    if (repeatInterval != null && Number.isInteger(repeatInterval) && repeatInterval >= 30 && repeatInterval <= 3600) setRepeatSeconds(repeatInterval)
+  }, [repeatInterval])
   const [snooze, setSnooze] = useState<{ token: string; until: number }>(() => {
     try {
       const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null')
@@ -43,7 +89,7 @@ export function DailyDiscipline({
       return { token: '', until: 0 }
     }
   })
-  const currentDay = d?.date === feeDay(now * 1000)
+  const currentDay = d?.date === today
   const fresh =
     currentDay &&
     !error &&
@@ -94,7 +140,7 @@ export function DailyDiscipline({
     reasons.length && currentDay
       ? `${d.date}:${!!d.loss_reached}:${!!d.profit_reached}:${used != null && used >= 3 ? used : ''}`
       : ''
-  const visible = fresh && !!token && (snooze.token !== token || now >= snooze.until)
+  const visible = !hiddenForToday && fresh && !!token && (snooze.token !== token || now >= snooze.until)
   const anchor =
     snooze.token === token
       ? snooze.until
@@ -116,8 +162,9 @@ export function DailyDiscipline({
   }
   const remind = () => saveSnooze(repeatSeconds)
   const changeInterval = (seconds: number) => {
-    if (!REPEAT_OPTIONS.includes(seconds)) return
+    if (!REPEAT_OPTIONS.includes(seconds) && seconds !== repeatInterval) return
     setRepeatSeconds(seconds)
+    onIntervalChange?.(seconds)
     try {
       localStorage.setItem(preferenceKey, JSON.stringify({ repeatSeconds: seconds }))
     } catch {
@@ -155,7 +202,7 @@ export function DailyDiscipline({
         onChange={(event) => changeInterval(Number(event.target.value))}
         className="h-11 rounded-md border bg-background px-3 text-foreground focus-visible:outline-2 focus-visible:outline-offset-2"
       >
-        {REPEAT_OPTIONS.map((seconds) => (
+        {[...new Set([...REPEAT_OPTIONS, ...(repeatInterval ? [repeatInterval] : [])])].sort((a, b) => a - b).map((seconds) => (
           <option key={seconds} value={seconds}>
             {intervalLabel(seconds)}
           </option>
@@ -170,16 +217,28 @@ export function DailyDiscipline({
         className="space-y-2 rounded-lg border bg-card p-3"
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h3 className="font-semibold">Daily trading limits · Kotak Neo</h3>
+          <h3 className="font-semibold">Daily trading limits · {brokerLabel}</h3>
           <p className="text-xs text-muted-foreground">
             {fresh ? 'Live account · checked each second' : 'Waiting for fresh account data'}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           {intervalControl('Warning repeat interval')}
-          <span className="text-xs text-muted-foreground">
-            Full-screen warning · exits remain available
-          </span>
+          {hiddenForToday ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Warning hidden until midnight IST.</span>
+              <Button className="min-h-11" size="sm" variant="outline" onClick={() => {
+                setHiddenDay('')
+                saveSnooze(0)
+              }}>
+                Show warning again
+              </Button>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Full-screen warning · exits remain available
+            </span>
+          )}
         </div>
         <dl className="grid grid-cols-2 gap-3 text-sm tabular-nums sm:grid-cols-4">
           <div>
@@ -215,8 +274,8 @@ export function DailyDiscipline({
         )}
         <p className="text-xs text-muted-foreground">
           One filled BUY order = one entry, including additions and re-entries. Split fills count
-          once; rejected and unfilled orders do not count. Resets each trading day in IST. Kotak Neo
-          app entries are monitored; its app cannot be blocked here.
+          once; rejected and unfilled orders do not count. Resets each trading day in IST. {brokerLabel}
+          app entries are monitored; external broker apps cannot be blocked here.
         </p>
         {currentDay && d.count_verified === false && (
           <p className="text-xs text-muted-foreground">
@@ -257,13 +316,16 @@ export function DailyDiscipline({
               <Button className="min-h-11" variant="outline" onClick={remind}>
                 Close warning
               </Button>
+              <Button className="min-h-11" variant="outline" onClick={() => setHiddenDay(today)}>
+                Hide for today
+              </Button>
               <Button className="min-h-11" variant="secondary" onClick={goToExits}>
                 Go to open trades
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Returns in {intervalLabel(repeatSeconds)} after closing. Escape also closes this
-              warning. No exit order is placed by this message.
+              Close warning repeats in {intervalLabel(repeatSeconds)}. Hide for today pauses warnings
+              until midnight IST. Escape also closes this warning. No exit order is placed by this message.
             </p>
           </div>
         </aside>

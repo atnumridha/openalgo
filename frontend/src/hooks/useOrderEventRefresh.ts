@@ -82,9 +82,23 @@ export function useOrderEventRefresh(
   useEffect(() => {
     if (!enabled || !socket) return
 
+    let active = true
+    let pending = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const handleEvent = () => {
-      // Delay slightly to allow server to process the event
-      setTimeout(() => refreshFnRef.current(), delay)
+      if (!active || pending) return
+      pending = true
+      if (delay <= 0) {
+        // Refresh on the event; collapse synchronous bursts without a timer wait.
+        try { refreshFnRef.current() }
+        finally { queueMicrotask(() => { pending = false }) }
+      } else {
+        // Bound the wait from the first event; later events cannot postpone it.
+        timer = setTimeout(() => {
+          pending = false
+          if (active) refreshFnRef.current()
+        }, delay)
+      }
     }
 
     const subscribed = eventsRef.current
@@ -94,6 +108,8 @@ export function useOrderEventRefresh(
 
     // Only remove OUR listeners — never disconnect the shared connection.
     return () => {
+      active = false
+      if (timer !== undefined) clearTimeout(timer)
       subscribed.forEach((event) => {
         socket.off(event, handleEvent)
       })

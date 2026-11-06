@@ -710,6 +710,11 @@ def broker_callback(broker, para=None):
             bool(code),
             bool(client),
         )
+        from services.combined_terminal.flattrade_gateway import callback_client
+        try:
+            user_id = callback_client(client)
+        except ValueError:
+            return handle_auth_failure("Flattrade callback account does not match configured client", forward_url="broker.html")
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = "broker.html"
 

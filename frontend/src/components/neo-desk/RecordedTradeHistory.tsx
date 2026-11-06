@@ -1,15 +1,23 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { neoReportsApi } from '@/api/neoReports'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { amount, FeeBreakdown } from './FeeBreakdown'
 import { RecordedTradeReplay } from './RecordedTradeReplay'
 export function RecordedTradeHistory() {
   return import.meta.env.VITE_NEO_DESK_ENABLED === 'true' ? <EnabledHistory /> : null
 }
 function EnabledHistory() {
+  const replayTrigger = useRef<HTMLButtonElement | null>(null)
   const [mode, setMode] = useState('live')
   const [replayId, setReplayId] = useState('')
   const [symbol, setSymbol] = useState(''),
@@ -20,11 +28,10 @@ function EnabledHistory() {
     [busy, setBusy] = useState(false),
     [costPlan, setCostPlan] = useState(() => {
       try {
-        return localStorage.getItem('neo.history.costPlan') === 'trade_free'
-          ? 'trade_free'
-          : 'free_offer'
+        const saved = localStorage.getItem('neo.history.costPlan.v2')
+        return saved && ['account', 'trade_free', 'free_offer'].includes(saved) ? saved : 'account'
       } catch {
-        return 'free_offer'
+        return 'account'
       }
     })
   const q = useQuery({
@@ -100,7 +107,9 @@ function EnabledHistory() {
               className="h-10 rounded border bg-background px-3"
               value={start === end ? start : ''}
               onChange={(e) => {
+                setReplayId('')
                 setStart(e.target.value)
+                setReplayId('')
                 setEnd(e.target.value)
                 setCursor(0)
               }}
@@ -120,6 +129,7 @@ function EnabledHistory() {
               className="h-10 rounded border bg-background px-3"
               value={symbol}
               onChange={(e) => {
+                setReplayId('')
                 setSymbol(e.target.value)
                 setCursor(0)
               }}
@@ -137,6 +147,7 @@ function EnabledHistory() {
               type="date"
               value={start}
               onChange={(e) => {
+                setReplayId('')
                 setStart(e.target.value)
                 setCursor(0)
               }}
@@ -150,6 +161,7 @@ function EnabledHistory() {
               type="date"
               value={end}
               onChange={(e) => {
+                setReplayId('')
                 setEnd(e.target.value)
                 setCursor(0)
               }}
@@ -165,12 +177,13 @@ function EnabledHistory() {
               onChange={(e) => {
                 setCostPlan(e.target.value)
                 try {
-                  localStorage.setItem('neo.history.costPlan', e.target.value)
+                  localStorage.setItem('neo.history.costPlan.v2', e.target.value)
                 } catch {
                   /* Browser storage may be disabled. */
                 }
               }}
             >
+              <option value="account">Account notice · ₹10/order from 22 Oct 2026</option>
               <option value="free_offer">Active free-brokerage offer · estimate</option>
               <option value="trade_free">Trade Free · ₹10 per executed order</option>
             </select>
@@ -234,11 +247,12 @@ function EnabledHistory() {
               {d.coverage.fill_count} fills · {d.coverage.recorded_dates.length} recorded days. Date
               coverage does not prove complete lifetime history or opening inventory.
             </p>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               {[
                 ['Gross P&L before fees · resolved subtotal', d.summary.gross_pnl],
-                ['Actual fees paid', d.summary.actual_fees],
                 ['Estimated charges', d.summary.estimated_fees],
+                ['Estimated net P&L · resolved closes', d.summary.estimated_net_pnl],
+                ['Actual fees paid', d.summary.actual_fees],
                 ['Net P&L after actual fees', d.summary.net_pnl],
               ].map(([label, value]) => (
                 <div key={label!} className="rounded border p-3">
@@ -262,6 +276,29 @@ function EnabledHistory() {
               resolved gross P&L; {d.summary.fees_known_fill_count} / {d.summary.fill_count} fills
               have reported paid charges.
             </p>
+            {d.fee_estimate.calculated_at ? (
+              <p className="text-xs text-muted-foreground">
+                Fee estimates saved in local database · calculated{' '}
+                {new Date(d.fee_estimate.calculated_at).toLocaleString('en-IN', {
+                  timeZone: 'Asia/Kolkata',
+                })}{' '}
+                IST. Recalculated when saved fills or the fee policy change.
+              </p>
+            ) : null}
+            {d.summary.estimated_closed_fees != null ? (
+              <p className="text-xs text-muted-foreground">
+                Estimated net covers {d.summary.estimated_net_known_count ?? 0} resolved closes,
+                after {amount(d.summary.estimated_closed_fees)} allocated charges. Total charges
+                also include recorded open or unresolved fills.
+              </p>
+            ) : null}
+            {d.fee_estimate.unsupported_fill_count ? (
+              <p role="alert" className="text-sm">
+                Estimates cover {d.fee_estimate.estimated_fill_count} of {d.fee_estimate.fill_count}{' '}
+                fills. Charges for {d.fee_estimate.unsupported_fill_count} unsupported instruments
+                remain unavailable; they do not hide supported option estimates.
+              </p>
+            ) : null}
             <p className="text-sm">
               Estimate covers {d.fee_estimate.fill_count ?? d.summary.fill_count} executions in{' '}
               {d.fee_estimate.executed_order_count ?? 'the recorded'} executed orders
@@ -360,7 +397,10 @@ function EnabledHistory() {
                       <td>
                         <Button
                           variant={replayId === row.trade_id ? 'default' : 'outline'}
-                          onClick={() => setReplayId(row.trade_id)}
+                          onClick={(event) => {
+                            replayTrigger.current = event.currentTarget
+                            setReplayId(row.trade_id)
+                          }}
                           aria-label={`Replay recorded trade ${row.symbol} at ${row.entry_time}`}
                         >
                           Replay trade
@@ -374,7 +414,29 @@ function EnabledHistory() {
                 <p className="p-4 text-sm">No matched closes for this selection.</p>
               ) : null}
             </div>
-            {replayId ? <RecordedTradeReplay tradeId={replayId} mode={mode} /> : null}
+            <Dialog
+              open={!!replayId}
+              onOpenChange={(open) => {
+                if (!open) setReplayId('')
+              }}
+            >
+              <DialogContent
+                className="max-h-[90vh] overflow-y-auto sm:max-w-6xl"
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault()
+                  replayTrigger.current?.focus()
+                }}
+              >
+                <DialogHeader>
+                  <DialogTitle>Recorded trade replay</DialogTitle>
+                  <DialogDescription>
+                    Read-only playback from saved candles and recorded fills. No orders are
+                    submitted.
+                  </DialogDescription>
+                </DialogHeader>
+                {replayId ? <RecordedTradeReplay tradeId={replayId} mode={mode} /> : null}
+              </DialogContent>
+            </Dialog>
             <div className="flex items-center gap-3">
               <Button
                 variant="outline"

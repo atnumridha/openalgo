@@ -121,6 +121,9 @@ def test_zero_filled_cancelled_order_cannot_be_replayed(archive):
 def test_actual_protection_is_bound_to_owner_mode_order_and_recorded_time(archive):
     identity = pair()
     stamp = candles(archive)
+    before_protection = trade_replay("owner", identity, fetch=False)
+    assert before_protection["coverage"]["complete"]
+    assert before_protection["trade"]["trail"] == []
 
     def journal(
         c, owner, source, key, payload, mode="live", at="2026-10-14T04:31:20+00:00", kind="insert"
@@ -196,6 +199,11 @@ def test_actual_protection_is_bound_to_owner_mode_order_and_recorded_time(archiv
             "net_floor": None,
         }
     ]
+    with archive.engine.begin() as c:
+        c.execute(text("ALTER TABLE neo_sql_journal RENAME TO unavailable_journal"))
+    assert (
+        trade_replay("owner", identity, fetch=False)["trade"]["trail"] == result["trade"]["trail"]
+    )
 
 
 def test_saved_backtest_metadata_and_deleted_result_remain_owner_bound(archive):
@@ -259,3 +267,165 @@ def test_broker_exchange_and_option_symbol_resolve_to_native_chart_without_rewri
     assert len(result["trade"]["option_bars"]) == 3 and result["coverage"]["complete"]
     assert result["trade"]["symbol"] == "NIFTY26O1922200PE"
     assert NativeAccounting("owner").fills()[0]["exchange"] == "nse_fo"
+
+
+def test_partial_archive_fetches_missing_trade_minutes_and_saves_repaired_replay(
+    archive, monkeypatch
+):
+    from database import auth_db
+    from services import history_service
+
+    identity = pair()
+    stamp = candles(archive, missing=True)
+    monkeypatch.setattr(auth_db, "get_auth_token", lambda owner: "test-session")
+
+    def observed_history(symbol, exchange, interval, start, end, **kwargs):
+        assert (interval, start, end) == ("1m", "2026-10-14", "2026-10-14")
+        bars = (
+            [
+                {
+                    "timestamp": stamp + 60,
+                    "open": 50,
+                    "high": 62,
+                    "low": 49,
+                    "close": 60,
+                    "volume": 100,
+                }
+            ]
+            if symbol == "NIFTY19OCT2622200PE"
+            else []
+        )
+        return True, {"status": "success", "data": bars}, 200
+
+    monkeypatch.setattr(history_service, "get_history", observed_history)
+    result = trade_replay("owner", identity)
+    assert result["coverage"]["complete"]
+    assert [bar["time"] for bar in result["trade"]["option_bars"]] == [
+        stamp,
+        stamp + 60,
+        stamp + 120,
+    ]
+    archive.engine.dispose()
+    assert (
+        trade_replay("owner", identity, fetch=False)["trade"]["option_bars"]
+        == result["trade"]["option_bars"]
+    )
+
+
+def test_incomplete_snapshot_retains_observed_candles_when_archive_is_unavailable(archive):
+    identity = pair()
+    candles(archive, missing=True)
+    saved = trade_replay("owner", identity, fetch=False)
+    with archive.engine.begin() as c:
+        c.execute(text("DELETE FROM neo_chart_candle"))
+    archive.engine.dispose()
+
+    replayed = trade_replay("owner", identity, fetch=False)
+    assert replayed["trade"]["option_bars"] == saved["trade"]["option_bars"]
+    assert not replayed["coverage"]["complete"]
+    assert any("1 option minutes" in note for note in replayed["coverage"]["gaps"])
+
+
+@pytest.mark.parametrize("stored_symbol", ["NIFTY19OCT2622200PE", "NIFTY26O1922200PE"])
+def test_expired_weekly_identity_reads_saved_chart_after_master_contract_removal(
+    archive, monkeypatch, stored_symbol
+):
+    from database import token_db
+
+    monkeypatch.setattr(token_db, "get_oa_symbol", lambda symbol, exchange: None)
+    ingest_fills(
+        "owner",
+        [
+            {
+                **fill("a", "BUY", "2026-10-14T10:00:12+05:30"),
+                "symbol": "NIFTY26O1922200PE",
+                "exchange": "nse_fo",
+            },
+            {
+                **fill("b", "SELL", "2026-10-14T10:02:25+05:30", "60"),
+                "symbol": "NIFTY26O1922200PE",
+                "exchange": "nse_fo",
+            },
+        ],
+    )
+    stamp = candles(archive)
+    if stored_symbol != "NIFTY19OCT2622200PE":
+        archive.save(
+            stored_symbol,
+            "NFO",
+            "1m",
+            archive.read("NIFTY19OCT2622200PE", "NFO", "1m", "2026-10-14", "2026-10-14"),
+        )
+        with archive.engine.begin() as c:
+            c.execute(text("DELETE FROM neo_chart_candle WHERE symbol='NIFTY19OCT2622200PE'"))
+    rows, _ = NativeAccounting("owner")._match(NativeAccounting("owner").fills())
+    result = trade_replay("owner", rows[0]["trade_id"], fetch=False)
+    assert result["coverage"]["complete"]
+    assert [bar["time"] for bar in result["trade"]["option_bars"]] == [
+        stamp,
+        stamp + 60,
+        stamp + 120,
+    ]
+    assert result["trade"]["symbol"] == "NIFTY26O1922200PE"
+    assert NativeAccounting("owner").fills()[0]["exchange"] == "nse_fo"
+
+
+def test_complete_option_snapshot_enriches_index_observations_captured_later(archive):
+    identity = pair()
+    stamp = candles(archive)
+    original = trade_replay("owner", identity, fetch=False)
+    assert original["coverage"]["complete"]
+    assert original["trade"]["index_bars"] == []
+    archive.save(
+        "NIFTY",
+        "NSE_INDEX",
+        "1m",
+        [
+            {
+                "timestamp": stamp + i * 60,
+                "open": 22000,
+                "high": 22010,
+                "low": 21990,
+                "close": 22005,
+                "volume": 0,
+            }
+            for i in range(3)
+        ],
+    )
+    replayed = trade_replay("owner", identity, fetch=False)
+    assert [bar["time"] for bar in replayed["trade"]["index_bars"]] == [
+        stamp,
+        stamp + 60,
+        stamp + 120,
+    ]
+    assert replayed["trade"]["option_bars"] == original["trade"]["option_bars"]
+    assert replayed["trade"]["trail"] == []
+
+
+def test_index_only_replay_survives_candle_restart_without_fabricating_option_data(archive):
+    identity = pair()
+    stamp = int(datetime.fromisoformat("2026-10-14T10:00:00+05:30").timestamp())
+    archive.save(
+        "NIFTY",
+        "NSE_INDEX",
+        "1m",
+        [
+            {
+                "timestamp": stamp + i * 60,
+                "open": 22000,
+                "high": 22010,
+                "low": 21990,
+                "close": 22005,
+                "volume": 0,
+            }
+            for i in range(3)
+        ],
+    )
+    saved = trade_replay("owner", identity, fetch=False)
+    with archive.engine.begin() as c:
+        c.execute(text("DELETE FROM neo_chart_candle"))
+    archive.engine.dispose()
+    replayed = trade_replay("owner", identity, fetch=False)
+    assert replayed["trade"]["index_bars"] == saved["trade"]["index_bars"]
+    assert replayed["trade"]["option_bars"] == []
+    assert not replayed["coverage"]["complete"]

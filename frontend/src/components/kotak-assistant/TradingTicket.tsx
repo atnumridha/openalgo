@@ -491,7 +491,7 @@ export function useTradingTicket({
       ? ticketCosts(
           order,
           desk?.exchange || '',
-          desk?.settings.brokerage ?? 0,
+          desk?.settings.brokerage ?? 10,
           desk?.settings.slippage ?? 0,
           feeDay(clock * 1000)
         )
@@ -860,7 +860,7 @@ export function TradingTicketView({ controller }: { controller: TradingTicketCon
             )}
           </div>
         </details>
-        <TicketCosts estimate={costEstimate} brokerage={desk?.settings.brokerage ?? 0} />
+        <TicketCosts estimate={costEstimate} brokerage={desk?.settings.brokerage ?? 10} />
         <Button
           className="w-full bg-emerald-600 text-white hover:bg-emerald-700"
           size="lg"
@@ -966,7 +966,7 @@ export function ChartBuyControls({
       </div>
       <TicketCosts
         estimate={controller.costEstimate}
-        brokerage={controller.desk?.settings.brokerage ?? 0}
+        brokerage={controller.desk?.settings.brokerage ?? 10}
       />
       <div className="flex items-end gap-2">
         <label className="w-20 shrink-0 text-xs font-medium">

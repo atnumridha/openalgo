@@ -7,7 +7,15 @@
  * - Connection state management
  */
 
-import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import {
   type ConnectionState,
@@ -35,6 +43,8 @@ export interface MarketDataContextValue {
   getCachedData: (symbol: string, exchange: string) => SymbolData | undefined
   connect: () => Promise<void>
   disconnect: () => void
+  /** Retain live updates for a visible tab title, including when the page is hidden. */
+  retainBackgroundUpdates: () => () => void
 }
 
 const MarketDataContext = createContext<MarketDataContextValue | null>(null)
@@ -69,6 +79,16 @@ export function MarketDataProvider({
 
   const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wasConnectedRef = useRef(false)
+  const [backgroundConsumers, setBackgroundConsumers] = useState(0)
+  const retainBackgroundUpdates = useCallback(() => {
+    setBackgroundConsumers((count) => count + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      setBackgroundConsumers((count) => count - 1)
+    }
+  }, [])
 
   // Subscribe to state changes from the manager
   useEffect(() => {
@@ -88,6 +108,10 @@ export function MarketDataProvider({
 
   // Handle page visibility changes - pause when hidden, resume when visible
   useEffect(() => {
+    if (backgroundConsumers > 0) {
+      if (isPaused) managerRef.current.resumeConnection()
+      return
+    }
     if (!pauseWhenHidden) return
 
     const manager = managerRef.current
@@ -117,7 +141,15 @@ export function MarketDataProvider({
         pauseTimeoutRef.current = null
       }
     }
-  }, [isVisible, isConnected, isAuthenticated, isPaused, pauseWhenHidden, pauseDelay])
+  }, [
+    isVisible,
+    isConnected,
+    isAuthenticated,
+    isPaused,
+    pauseWhenHidden,
+    pauseDelay,
+    backgroundConsumers,
+  ])
 
   const value: MarketDataContextValue = {
     manager: managerRef.current,
@@ -133,6 +165,7 @@ export function MarketDataProvider({
     getCachedData: (symbol, exchange) => managerRef.current.getCachedData(symbol, exchange),
     connect: () => managerRef.current.connect(),
     disconnect: () => managerRef.current.disconnect(),
+    retainBackgroundUpdates,
   }
 
   return <MarketDataContext.Provider value={value}>{children}</MarketDataContext.Provider>

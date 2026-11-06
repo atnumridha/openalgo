@@ -427,7 +427,43 @@ async function result<T>(
   if (data.status !== 'success') throw new Error(data.message || 'Request failed')
   return data.data
 }
+export interface EntryDecisionSignal {
+  strategy: 'breakout_retest' | 'daily_sweep' | 'pivot_rejection' | 'pivot_retest'
+  stage: string
+  direction?: SetupDirection | null
+  eligible: boolean
+  reason: string
+  reference?: { price: number; name?: string } | null
+  pattern?: string
+  invalidation?: number
+  index_target?: number | null
+  trigger?: number | null
+  expires?: number | null
+  directions?: Partial<Record<SetupDirection, EntryDecisionSignal>>
+}
+export interface PivotOverlay {
+  underlying: string
+  session_date: string
+  reference_date: string
+  previous: { high: number; low: number; close: number }
+  levels: Record<'P' | 'R1' | 'R2' | 'R3' | 'S1' | 'S2' | 'S3', number>
+}
+export interface EntryDecisions {
+  advisory_only: true
+  generated_at: number
+  symbol: string
+  side: SetupDirection | null
+  candidates: Record<'breakout_retest' | 'daily_sweep' | 'pivot_rejection' | 'pivot_retest', EntryDecisionSignal>
+  pivots?: PivotOverlay | null
+  pivot_evidence?: string
+  plan: (Plan & { source: string }) | { fits: false; reason: string } | null
+  plan_fresh: boolean
+  plan_reason: string
+  evidence: string
+}
 export const kotakAssistantApi = {
+  entryDecisions: (params: Record<string, string | number>) =>
+    result<EntryDecisions>(webClient.get('/kotak-assistant/api/entry-decisions', { params })),
   setupReplay: (params: Record<string, string | number>) =>
     result<SetupResult>(webClient.get('/kotak-assistant/api/setup-replay', { params })),
   cashPlan: (input: CashPlanRequest) =>
